@@ -24,11 +24,58 @@ struct {
   __type(value, __u64);
 } counters SEC(".maps");
 
+struct tcp_flow_key {
+  __u32 src_ip;
+  __u32 dst_ip;
+  __u16 src_port;
+  __u16 dst_port;
+};
+
+struct http_flow_state {
+  __u32 next_seq;
+  __u32 body_seq;
+  struct content_flow_state content;
+};
+
+struct {
+  __uint(type, BPF_MAP_TYPE_LRU_HASH);
+  __uint(max_entries, 1024);
+  __type(key, struct tcp_flow_key);
+  __type(value, struct http_flow_state);
+} http_flows SEC(".maps");
+
 static __always_inline void increment_counter(__u32 key) {
   __u64 *value = bpf_map_lookup_elem(&counters, &key);
 
   if (value)
     (*value)++;
+}
+
+static __always_inline void build_flow_key(struct iphdr *ip,
+                                           struct tcphdr *tcp,
+                                           struct tcp_flow_key *key) {
+  key->src_ip = ip->saddr;
+  key->dst_ip = ip->daddr;
+  key->src_port = bpf_ntohs(tcp->source);
+  key->dst_port = bpf_ntohs(tcp->dest);
+}
+
+static __always_inline int find_http_body_offset(unsigned char *payload,
+                                                 unsigned char *data_end,
+                                                 __u32 *body_offset) {
+  for (int i = 0; i < MAX_SCAN; i++) {
+    unsigned char *p = payload + i;
+
+    if (p + 4 > data_end)
+      return 0;
+
+    if (p[0] == '\r' && p[1] == '\n' && p[2] == '\r' && p[3] == '\n') {
+      *body_offset = i + 4;
+      return 1;
+    }
+  }
+
+  return 0;
 }
 
 SEC("xdp")
@@ -103,29 +150,71 @@ int xdp_router(struct xdp_md *ctx) {
   // -- HTTP --
   __u32 payload_length = data_end - payload;
   unsigned char *p = payload;
+  struct tcp_flow_key key = {};
+  struct http_flow_state *flow;
+  __u32 tcp_seq = bpf_ntohl(tcp->seq);
+  __u32 content_length = 0;
+  int result = CONTENT_NOT_FOUND;
 
   if (p + 4 > (unsigned char *)data_end)
     return XDP_PASS;
 
-  // Check for HTTP GET or POST methods
-  bool is_http = (p[0] == 'G' && p[1] == 'E' && p[2] == 'T' && p[3] == ' ') ||
-                 (p[0] == 'P' && p[1] == 'O' && p[2] == 'S' && p[3] == 'T');
+  build_flow_key(ip, tcp, &key);
 
-  if (!is_http)
-    return XDP_PASS;
+  // New HTTP requests start a bounded per-flow scan; continuation packets use
+  // this state even though they do not start with an HTTP method.
+  bool is_post = p[0] == 'P' && p[1] == 'O' && p[2] == 'S' && p[3] == 'T';
+  if (is_post) {
+    struct http_flow_state initial = {};
+    __u32 body_offset = 0;
+    bool found_body = find_http_body_offset(p, data_end, &body_offset);
 
-  increment_counter(COUNT_HTTP);
+    initial.next_seq = tcp_seq + payload_length;
+    if (found_body)
+      initial.body_seq = tcp_seq + body_offset;
 
-  __u32 content_start = 0;
-  __u32 content_length = 0;
+    bpf_map_update_elem(&http_flows, &key, &initial, BPF_ANY);
+    flow = bpf_map_lookup_elem(&http_flows, &key);
+    if (!flow)
+      return XDP_PASS;
 
-  int result = extract_content(ctx, data, payload, data_end, &content_start,
-                               &content_length);
+    increment_counter(COUNT_HTTP);
 
-  if (result == CONTENT_COMPLETE)
+    if (found_body && body_offset < payload_length) {
+      result = scan_content_stream(ctx, data, p + body_offset,
+                                   payload_length - body_offset,
+                                   &flow->content, &content_length);
+    }
+  } else {
+    flow = bpf_map_lookup_elem(&http_flows, &key);
+    if (!flow)
+      return XDP_PASS;
+
+    increment_counter(COUNT_HTTP);
+
+    if (tcp_seq < flow->next_seq)
+      return XDP_PASS;
+
+    if (tcp_seq > flow->next_seq) {
+      flow->next_seq = tcp_seq + payload_length;
+      increment_counter(COUNT_CONTENT_PARTIAL);
+      return XDP_PASS;
+    }
+
+    result = scan_content_stream(ctx, data, p, payload_length, &flow->content,
+                                 &content_length);
+    flow->next_seq = tcp_seq + payload_length;
+  }
+
+  if (result == CONTENT_COMPLETE) {
     increment_counter(COUNT_CONTENT_FOUND);
-  else if (result == CONTENT_PARTIAL)
+    bpf_map_delete_elem(&http_flows, &key);
+  } else if (result == CONTENT_PARTIAL) {
     increment_counter(COUNT_CONTENT_PARTIAL);
+  }
+
+  if (tcp->fin || tcp->rst)
+    bpf_map_delete_elem(&http_flows, &key);
 
   return XDP_PASS;
 }
