@@ -9,17 +9,7 @@
 #define MAX_SCAN 512
 #define MAX_CONTENT 1500
 
-#define CONTENT_MATCH_NONE 0
-#define CONTENT_MATCH_QUOTE 1
-#define CONTENT_MATCH_C 2
-#define CONTENT_MATCH_CO 3
-#define CONTENT_MATCH_CON 4
-#define CONTENT_MATCH_CONT 5
-#define CONTENT_MATCH_CONTE 6
-#define CONTENT_MATCH_CONTEN 7
-#define CONTENT_MATCH_CONTENT 8
-#define CONTENT_MATCH_KEY_QUOTE 9
-#define CONTENT_MATCH_COLON 10
+#define CONTENT_KEY_LEN 10
 
 enum content_parse_result {
   CONTENT_NOT_FOUND = 0,
@@ -28,8 +18,9 @@ enum content_parse_result {
 };
 
 struct content_flow_state {
-  __u32 match_state;
+  __u32 match_pos;
   __u32 content_length;
+  __u8 waiting_for_value_quote;
   __u8 in_content;
 };
 
@@ -42,86 +33,62 @@ struct content_scan_ctx {
   struct content_flow_state *state;
 };
 
-static __always_inline void content_match_reset(struct content_flow_state *state,
-                                                unsigned char c) {
-  state->match_state = c == '"' ? CONTENT_MATCH_QUOTE : CONTENT_MATCH_NONE;
+static __always_inline unsigned char content_key_char(__u32 pos) {
+  switch (pos) {
+  case 0:
+    return '"';
+  case 1:
+    return 'c';
+  case 2:
+    return 'o';
+  case 3:
+    return 'n';
+  case 4:
+    return 't';
+  case 5:
+    return 'e';
+  case 6:
+    return 'n';
+  case 7:
+    return 't';
+  case 8:
+    return '"';
+  case 9:
+    return ':';
+  default:
+    return 0;
+  }
 }
 
 static __always_inline int content_match_key(struct content_flow_state *state,
                                              unsigned char c) {
-  switch (state->match_state) {
-  case CONTENT_MATCH_NONE:
-    if (c == '"')
-      state->match_state = CONTENT_MATCH_QUOTE;
-    break;
-  case CONTENT_MATCH_QUOTE:
-    if (c == 'c')
-      state->match_state = CONTENT_MATCH_C;
-    else
-      content_match_reset(state, c);
-    break;
-  case CONTENT_MATCH_C:
-    if (c == 'o')
-      state->match_state = CONTENT_MATCH_CO;
-    else
-      content_match_reset(state, c);
-    break;
-  case CONTENT_MATCH_CO:
-    if (c == 'n')
-      state->match_state = CONTENT_MATCH_CON;
-    else
-      content_match_reset(state, c);
-    break;
-  case CONTENT_MATCH_CON:
-    if (c == 't')
-      state->match_state = CONTENT_MATCH_CONT;
-    else
-      content_match_reset(state, c);
-    break;
-  case CONTENT_MATCH_CONT:
-    if (c == 'e')
-      state->match_state = CONTENT_MATCH_CONTE;
-    else
-      content_match_reset(state, c);
-    break;
-  case CONTENT_MATCH_CONTE:
-    if (c == 'n')
-      state->match_state = CONTENT_MATCH_CONTEN;
-    else
-      content_match_reset(state, c);
-    break;
-  case CONTENT_MATCH_CONTEN:
-    if (c == 't')
-      state->match_state = CONTENT_MATCH_CONTENT;
-    else
-      content_match_reset(state, c);
-    break;
-  case CONTENT_MATCH_CONTENT:
-    if (c == '"')
-      state->match_state = CONTENT_MATCH_KEY_QUOTE;
-    else
-      content_match_reset(state, c);
-    break;
-  case CONTENT_MATCH_KEY_QUOTE:
-    if (c == ':')
-      state->match_state = CONTENT_MATCH_COLON;
-    else if (c != ' ')
-      content_match_reset(state, c);
-    break;
-  case CONTENT_MATCH_COLON:
+  if (state->waiting_for_value_quote) {
     if (c == '"') {
       state->in_content = 1;
+      state->waiting_for_value_quote = 0;
       state->content_length = 0;
       return CONTENT_PARTIAL;
     }
+
     if (c != ' ')
-      content_match_reset(state, c);
-    break;
-  default:
-    state->match_state = CONTENT_MATCH_NONE;
-    break;
+      state->waiting_for_value_quote = 0;
+
+    return CONTENT_NOT_FOUND;
   }
 
+  if (state->match_pos >= CONTENT_KEY_LEN)
+    state->match_pos = 0;
+
+  if (c == content_key_char(state->match_pos)) {
+    state->match_pos++;
+    if (state->match_pos == CONTENT_KEY_LEN) {
+      state->match_pos = 0;
+      state->waiting_for_value_quote = 1;
+    }
+    return CONTENT_NOT_FOUND;
+  }
+
+  state->match_pos = c == '"' ? 1 : 0;
   return CONTENT_NOT_FOUND;
 }
 
@@ -132,7 +99,8 @@ static long scan_content_callback(__u32 i, void *data) {
   unsigned char c;
 
   if (i >= ctx->scan_length) {
-    if (state->in_content || state->match_state != CONTENT_MATCH_NONE)
+    if (state->in_content || state->waiting_for_value_quote ||
+        state->match_pos != 0)
       ctx->result = CONTENT_PARTIAL;
     else
       ctx->result = CONTENT_NOT_FOUND;
@@ -142,7 +110,8 @@ static long scan_content_callback(__u32 i, void *data) {
   if (bpf_xdp_load_bytes(ctx->xdp, ctx->payload_offset + i, &c, sizeof(c)) <
       0) {
     ctx->length = i;
-    if (state->in_content || state->match_state != CONTENT_MATCH_NONE)
+    if (state->in_content || state->waiting_for_value_quote ||
+        state->match_pos != 0)
       ctx->result = CONTENT_PARTIAL;
     else
       ctx->result = CONTENT_NOT_FOUND;
@@ -187,7 +156,8 @@ scan_content_stream(struct xdp_md *xdp, unsigned char *data,
   bpf_loop(MAX_CONTENT, scan_content_callback, &ctx, 0);
 
   if (ctx.result != CONTENT_COMPLETE &&
-      (state->in_content || state->match_state != CONTENT_MATCH_NONE))
+      (state->in_content || state->waiting_for_value_quote ||
+       state->match_pos != 0))
     ctx.result = CONTENT_PARTIAL;
 
   *length = ctx.length;
