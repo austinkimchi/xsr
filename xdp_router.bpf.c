@@ -19,7 +19,7 @@
 
 struct {
   __uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
-  __uint(max_entries, 8);
+  __uint(max_entries, COUNT_MAX);
   __type(key, __u32);
   __type(value, __u64);
 } counters SEC(".maps");
@@ -35,6 +35,7 @@ struct http_flow_state {
   __u32 next_seq;
   __u32 body_seq;
   struct content_flow_state content;
+  struct xdp_ngram_state ngram;
 };
 
 struct {
@@ -49,6 +50,15 @@ static __always_inline void increment_counter(__u32 key) {
 
   if (value)
     (*value)++;
+}
+
+static __always_inline void increment_route_counter(__u32 route) {
+  if (route == XDP_NGRAM_ROUTE_CODING)
+    increment_counter(COUNT_ROUTE_CODING);
+  else if (route == XDP_NGRAM_ROUTE_GENERAL)
+    increment_counter(COUNT_ROUTE_GENERAL);
+  else if (route == XDP_NGRAM_ROUTE_REASONING)
+    increment_counter(COUNT_ROUTE_REASONING);
 }
 
 static __always_inline void build_flow_key(struct iphdr *ip, struct tcphdr *tcp,
@@ -171,6 +181,7 @@ int xdp_router(struct xdp_md *ctx) {
     initial.next_seq = tcp_seq + payload_length;
     if (found_body)
       initial.body_seq = tcp_seq + body_offset;
+    xdp_ngram_init(&initial.ngram);
 
     bpf_map_update_elem(&http_flows, &key, &initial, BPF_ANY);
     flow = bpf_map_lookup_elem(&http_flows, &key);
@@ -182,7 +193,7 @@ int xdp_router(struct xdp_md *ctx) {
     if (found_body && body_offset < payload_length) {
       result = scan_content_stream(ctx, data, p + body_offset,
                                    payload_length - body_offset, &flow->content,
-                                   &content_length);
+                                   &flow->ngram, &content_length);
     }
   } else {
     flow = bpf_map_lookup_elem(&http_flows, &key);
@@ -201,12 +212,15 @@ int xdp_router(struct xdp_md *ctx) {
     }
 
     result = scan_content_stream(ctx, data, p, payload_length, &flow->content,
-                                 &content_length);
+                                 &flow->ngram, &content_length);
     flow->next_seq = tcp_seq + payload_length;
   }
 
   if (result == CONTENT_COMPLETE) {
+    __u32 route = xdp_ngram_route_for_scores(&flow->ngram);
+
     increment_counter(COUNT_CONTENT_FOUND);
+    increment_route_counter(route);
     bpf_map_delete_elem(&http_flows, &key);
   } else if (result == CONTENT_PARTIAL) {
     increment_counter(COUNT_CONTENT_PARTIAL);

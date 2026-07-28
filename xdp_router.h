@@ -4,6 +4,14 @@
   Header file for xdp_router.c
 */
 
+#define XDP_NGRAM_FEATURES 4096
+
+struct xdp_ngram_weight {
+  short coding;
+  short general;
+  short reasoning;
+};
+
 enum counter_id {
   COUNT_TOTAL,
   COUNT_IPV4,
@@ -13,6 +21,10 @@ enum counter_id {
   COUNT_NO_PAYLOAD,
   COUNT_CONTENT_FOUND,
   COUNT_CONTENT_PARTIAL,
+  COUNT_ROUTE_CODING,
+  COUNT_ROUTE_GENERAL,
+  COUNT_ROUTE_REASONING,
+  COUNT_MAX,
 };
 
 #endif

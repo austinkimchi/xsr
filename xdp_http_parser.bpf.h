@@ -6,6 +6,8 @@
 
 #include <bpf/bpf_helpers.h>
 
+#include "xdp_ngram_classifier.bpf.h"
+
 #define MAX_SCAN 512
 #define MAX_CONTENT 1500 // Default MTU size, can be adjusted as needed
 
@@ -31,6 +33,7 @@ struct content_scan_ctx {
   __u32 length;
   int result;
   struct content_flow_state *state;
+  struct xdp_ngram_state *ngram;
 };
 
 static __always_inline unsigned char content_key_char(__u32 pos) {
@@ -126,6 +129,8 @@ static long scan_content_callback(__u32 i, void *data) {
     }
 
     state->content_length++;
+    if (ctx->ngram)
+      xdp_ngram_score_char(ctx->ngram, c);
     ctx->length = state->content_length;
     ctx->result = CONTENT_PARTIAL;
     return 0;
@@ -138,7 +143,8 @@ static long scan_content_callback(__u32 i, void *data) {
 static __always_inline int
 scan_content_stream(struct xdp_md *xdp, unsigned char *data,
                     unsigned char *payload, __u32 payload_length,
-                    struct content_flow_state *state, __u32 *length) {
+                    struct content_flow_state *state,
+                    struct xdp_ngram_state *ngram, __u32 *length) {
   __u32 scan_length = payload_length;
 
   if (scan_length > MAX_CONTENT)
@@ -151,6 +157,7 @@ scan_content_stream(struct xdp_md *xdp, unsigned char *data,
       .length = state->content_length,
       .result = CONTENT_NOT_FOUND,
       .state = state,
+      .ngram = ngram,
   };
 
   bpf_loop(MAX_CONTENT, scan_content_callback, &ctx, 0);
