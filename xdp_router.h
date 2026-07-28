@@ -1,8 +1,9 @@
-#ifndef XDP_ROUTER_H
-#define XDP_ROUTER_H
 /*
   Header file for xdp_router.c
 */
+
+#ifndef XDP_ROUTER_H
+#define XDP_ROUTER_H
 
 #define XDP_NGRAM_FEATURES 4096
 
