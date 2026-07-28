@@ -7,9 +7,9 @@
 #include <bpf/bpf_helpers.h>
 
 #define MAX_SCAN 512
-#define MAX_CONTENT 1500
+#define MAX_CONTENT 1500 // Default MTU size, can be adjusted as needed
 
-#define CONTENT_KEY_LEN 10
+#define CONTENT_KEY_LEN 10 // "content":
 
 enum content_parse_result {
   CONTENT_NOT_FOUND = 0,

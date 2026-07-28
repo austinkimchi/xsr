@@ -14,7 +14,7 @@
 #include <bpf/bpf_helpers.h>
 #include <stdbool.h>
 
-#include "xdp_classifier.bpf.h"
+#include "xdp_http_parser.bpf.h"
 #include "xdp_router.h"
 
 struct {
@@ -51,8 +51,7 @@ static __always_inline void increment_counter(__u32 key) {
     (*value)++;
 }
 
-static __always_inline void build_flow_key(struct iphdr *ip,
-                                           struct tcphdr *tcp,
+static __always_inline void build_flow_key(struct iphdr *ip, struct tcphdr *tcp,
                                            struct tcp_flow_key *key) {
   key->src_ip = ip->saddr;
   key->dst_ip = ip->daddr;
@@ -182,8 +181,8 @@ int xdp_router(struct xdp_md *ctx) {
 
     if (found_body && body_offset < payload_length) {
       result = scan_content_stream(ctx, data, p + body_offset,
-                                   payload_length - body_offset,
-                                   &flow->content, &content_length);
+                                   payload_length - body_offset, &flow->content,
+                                   &content_length);
     }
   } else {
     flow = bpf_map_lookup_elem(&http_flows, &key);
