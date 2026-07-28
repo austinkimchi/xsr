@@ -33,7 +33,7 @@ def route_prompt(model, prompt):
 class NgramRoutingTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        model_path = Path(__file__).resolve().parents[2] / "n_gram_classifier" / "xdp_ngram_model.json"
+        model_path = Path(__file__).resolve().parents[1] / "models" / "xdp_ngram_model.json"
         with model_path.open() as file:
             cls.model = json.load(file)
 
@@ -41,14 +41,18 @@ class NgramRoutingTest(unittest.TestCase):
         self.assertEqual(["coding", "general", "reasoning"], self.model["classes"])
         self.assertEqual([3, 3], self.model["ngram_range"])
         self.assertEqual(NGRAM_FEATURES, self.model["n_features"])
+        self.assertEqual("xdp_fnv_v1", self.model["hash"])
         self.assertEqual(3, len(self.model["weights"]))
         self.assertTrue(all(len(weights) == NGRAM_FEATURES for weights in self.model["weights"]))
 
     def test_prompt_routes_are_deterministic(self):
         cases = {
-            "Debug this Python TypeError in my code": "general",
+            "Debug this Python TypeError in my code": "coding",
+            "Write a Python function that parses JSON safely": "coding",
+            "Refactor this Rust code to improve error handling": "coding",
             "Solve this logic puzzle step by step": "reasoning",
             "What is the capital of France?": "general",
+            "Explain renewable energy in simple terms": "general",
         }
 
         for prompt, expected_route in cases.items():

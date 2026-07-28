@@ -167,7 +167,6 @@ out:
 }
 
 int load_ngram_model(struct bpf_object *obj) {
-  const char *model_path = getenv("XDP_NGRAM_MODEL");
   int map_fd = bpf_object__find_map_fd_by_name(obj, XDP_NGRAM_MAP_NAME);
 
   if (map_fd < 0) {
@@ -175,10 +174,8 @@ int load_ngram_model(struct bpf_object *obj) {
     return -1;
   }
 
-  if (model_path && load_ngram_model_from_path(map_fd, model_path) == 0)
-    return 0;
-
-  if (load_ngram_model_from_path(map_fd, "xdp_ngram_model.json") == 0)
+  if (load_ngram_model_from_path(map_fd, "models/xdp_ngram_model_fnv.json") ==
+      0)
     return 0;
 
   fprintf(stderr, "Failed to load n-gram model weights\n");
