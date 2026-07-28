@@ -33,7 +33,7 @@ def route_prompt(model, prompt):
 class NgramRoutingTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        model_path = Path(__file__).resolve().parents[1] / "models" / "xdp_ngram_model.json"
+        model_path = Path(__file__).resolve().parents[1] / "models" / "xdp_ngram_model_fnv.json"
         with model_path.open() as file:
             cls.model = json.load(file)
 
@@ -53,6 +53,10 @@ class NgramRoutingTest(unittest.TestCase):
             "Solve this logic puzzle step by step": "reasoning",
             "What is the capital of France?": "general",
             "Explain renewable energy in simple terms": "general",
+            "Optimize a C implementation of quicksort.": "coding",
+            "Analyze the tradeoffs and choose a strategy for planning a migration with rollback risk.": "reasoning",
+            "Give me a practical checklist for planning a monthly budget." : "general",
+            "Explain sleep hygiene in simple terms for a beginner.": "general"
         }
 
         for prompt, expected_route in cases.items():
