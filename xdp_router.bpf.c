@@ -14,8 +14,10 @@
 #include <bpf/bpf_helpers.h>
 #include <stdbool.h>
 
+#include "xdp_decision.bpf.h"
 #include "xdp_http_parser.bpf.h"
 #include "xdp_router.h"
+#include "xdp_signals.bpf.h"
 
 struct {
   __uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
@@ -228,6 +230,18 @@ int xdp_router(struct xdp_md *ctx) {
 
   if (tcp->fin || tcp->rst)
     bpf_map_delete_elem(&http_flows, &key);
+
+  __u64 signals = 0;
+  __u32 domain = xdp_ngram_route_for_scores(&flow->ngram);
+
+  if (domain == XDP_NGRAM_ROUTE_CODING)
+    signals |= XDP_SIGNAL_DOMAIN_CODING;
+  else if (domain == XDP_NGRAM_ROUTE_GENERAL)
+    signals |= XDP_SIGNAL_DOMAIN_GENERAL;
+  else if (domain == XDP_NGRAM_ROUTE_REASONING)
+    signals |= XDP_SIGNAL_DOMAIN_REASONING;
+
+  __u32 model_id = xdp_decision_eval(signals);
 
   return XDP_PASS;
 }
