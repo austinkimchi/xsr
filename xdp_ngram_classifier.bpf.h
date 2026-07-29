@@ -11,9 +11,9 @@
 #define XDP_NGRAM_SIZE 3
 #define XDP_NGRAM_MASK (XDP_NGRAM_FEATURES - 1)
 
-#define XDP_NGRAM_BIAS_CODING -199
-#define XDP_NGRAM_BIAS_GENERAL 167
-#define XDP_NGRAM_BIAS_REASONING 31
+#define XDP_NGRAM_BIAS_CODING -178
+#define XDP_NGRAM_BIAS_GENERAL 154
+#define XDP_NGRAM_BIAS_REASONING 24
 
 enum xdp_ngram_route {
   XDP_NGRAM_ROUTE_CODING = 0,
@@ -48,8 +48,8 @@ static __always_inline void xdp_ngram_init(struct xdp_ngram_state *state) {
   state->c2 = 0;
 }
 
-static __always_inline int xdp_ngram_is_initialized(
-    struct xdp_ngram_state *state) {
+static __always_inline int
+xdp_ngram_is_initialized(struct xdp_ngram_state *state) {
   return state->coding != 0 || state->general != 0 || state->reasoning != 0 ||
          state->seen != 0;
 }
@@ -60,8 +60,7 @@ static __always_inline unsigned char xdp_ngram_lower(unsigned char c) {
   return c;
 }
 
-static __always_inline __u32 xdp_ngram_hash3(unsigned char c0,
-                                             unsigned char c1,
+static __always_inline __u32 xdp_ngram_hash3(unsigned char c0, unsigned char c1,
                                              unsigned char c2) {
   __u32 hash = 2166136261u;
 
