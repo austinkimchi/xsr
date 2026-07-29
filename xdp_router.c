@@ -17,21 +17,20 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #include "xdp_router.h"
 
-static const char *counter_names[COUNT_MAX] = {
-    [COUNT_TOTAL] = "Total packets",
-    [COUNT_IPV4] = "IPv4 packets",
-    [COUNT_TCP] = "TCP packets",
-    [COUNT_HTTP] = "HTTP packets",
-    [COUNT_FRAGMENT] = "Fragment packets",
-    [COUNT_NO_PAYLOAD] = "No Payload packets",
-    [COUNT_CONTENT_FOUND] = "content packets",
-    [COUNT_CONTENT_PARTIAL] = "partial packets",
-    [COUNT_ROUTE_CODING] = "route coding",
-    [COUNT_ROUTE_GENERAL] = "route general",
-    [COUNT_ROUTE_REASONING] = "route reasoning",
+struct route_counter {
+  __u32 key;
+  const char *route;
+  const char *model;
+};
+
+static const struct route_counter route_counters[] = {
+    {COUNT_ROUTE_CODING, "coding", "coding-model"},
+    {COUNT_ROUTE_GENERAL, "general", "general-model"},
+    {COUNT_ROUTE_REASONING, "reasoning", "reasoning-model"},
 };
 
 __u64 read_percpu_counter(int map_fd, __u32 key, int cpu_count) {
@@ -235,17 +234,41 @@ int main(void) {
 
   printf("XDP attached to interface index %d\n", ifindex);
   printf("Counters map FD: %d\n", map_fd);
+  printf("Waiting for OpenAI prompt routes...\n");
+  fflush(stdout);
+
+  int cpu_count = libbpf_num_possible_cpus();
+  __u64 last_counts[sizeof(route_counters) / sizeof(route_counters[0])] = {};
+
+  if (cpu_count < 0) {
+    fprintf(stderr, "Failed to read possible CPU count\n");
+    return 1;
+  }
+
+  for (size_t i = 0; i < sizeof(route_counters) / sizeof(route_counters[0]);
+       i++) {
+    last_counts[i] =
+        read_percpu_counter(map_fd, route_counters[i].key, cpu_count);
+  }
 
   while (1) {
-    int cpu_count = libbpf_num_possible_cpus();
+    sleep(1);
 
-    for (__u32 key = 0; key < COUNT_MAX; key++) {
-      if (!counter_names[key])
-        continue;
+    for (size_t i = 0; i < sizeof(route_counters) / sizeof(route_counters[0]);
+         i++) {
+      __u64 current =
+          read_percpu_counter(map_fd, route_counters[i].key, cpu_count);
 
-      printf("%s: %llu\n", counter_names[key],
-             (unsigned long long)read_percpu_counter(map_fd, key, cpu_count));
+      for (__u64 count = last_counts[i]; count < current; count++) {
+        printf("prompt routed: domain=%s model=%s total=%llu\n",
+               route_counters[i].route, route_counters[i].model,
+               (unsigned long long)(count + 1));
+      }
+
+      last_counts[i] = current;
     }
+
+    fflush(stdout);
   }
 
   bpf_link__destroy(link);
