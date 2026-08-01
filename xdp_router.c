@@ -33,6 +33,39 @@ static const struct route_counter route_counters[] = {
     {COUNT_ROUTE_MATH, "math", "math-model"},
 };
 
+#ifdef XDP_DEBUG
+static const char *route_name(__u32 route) {
+  switch (route) {
+  case 0:
+    return "coding";
+  case 1:
+    return "general";
+  case 2:
+    return "math";
+  default:
+    return "unknown";
+  }
+}
+
+static int handle_route_event(void *ctx, void *data, size_t data_sz) {
+  const struct xdp_route_event *event = data;
+
+  (void)ctx;
+
+  if (data_sz < sizeof(*event))
+    return 0;
+
+  printf("{\"event\":\"route\",\"domain\":\"%s\",\"route\":%u,"
+         "\"model_id\":%u,\"content_length\":%u,"
+         "\"scores\":{\"coding\":%d,\"general\":%d,\"math\":%d},"
+         "\"xdp_elapsed_ns\":%llu}\n",
+         route_name(event->route), event->route, event->model_id,
+         event->content_length, event->coding_score, event->general_score,
+         event->math_score, (unsigned long long)event->elapsed_ns);
+  return 0;
+}
+#endif
+
 __u64 read_percpu_counter(int map_fd, __u32 key, int cpu_count) {
   __u64 values[cpu_count];
   __u64 total = 0;
@@ -185,6 +218,9 @@ int main(void) {
   struct bpf_object *obj;
   struct bpf_program *prog;
   struct bpf_link *link;
+#ifdef XDP_DEBUG
+  struct ring_buffer *route_events = NULL;
+#endif
 
   int map_fd;
   int ifindex;
@@ -237,6 +273,15 @@ int main(void) {
   printf("Waiting for OpenAI prompt routes...\n");
   fflush(stdout);
 
+#ifdef XDP_DEBUG
+  int event_map_fd = bpf_object__find_map_fd_by_name(obj, "xdp_route_events");
+  if (event_map_fd >= 0) {
+    route_events = ring_buffer__new(event_map_fd, handle_route_event, NULL, NULL);
+    if (!route_events)
+      fprintf(stderr, "Failed to open xdp_route_events ring buffer\n");
+  }
+#endif
+
   int cpu_count = libbpf_num_possible_cpus();
   __u64 last_counts[sizeof(route_counters) / sizeof(route_counters[0])] = {};
 
@@ -252,7 +297,14 @@ int main(void) {
   }
 
   while (1) {
+#ifdef XDP_DEBUG
+    if (route_events)
+      ring_buffer__poll(route_events, 100);
+    else
+      sleep(1);
+#else
     sleep(1);
+#endif
 
     for (size_t i = 0; i < sizeof(route_counters) / sizeof(route_counters[0]);
          i++) {
@@ -271,6 +323,9 @@ int main(void) {
     fflush(stdout);
   }
 
+#ifdef XDP_DEBUG
+  ring_buffer__free(route_events);
+#endif
   bpf_link__destroy(link);
   bpf_object__close(obj);
   return 0;

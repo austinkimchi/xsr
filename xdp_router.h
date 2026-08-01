@@ -13,7 +13,17 @@ struct xdp_ngram_weight {
   short math;
 };
 
+#ifdef XDP_DEBUG
+struct xdp_route_event {
+  __u32 route;
+  __u32 model_id;
+  __u32 content_length;
+  __s32 coding_score;
+  __s32 general_score;
+  __s32 math_score;
+  __u64 elapsed_ns;
 };
+#endif
 
 enum counter_id {
   COUNT_TOTAL,
