@@ -25,7 +25,7 @@
 
 ## Dataset: empero-ai/tasklist-qwen3.5-9B-7500x-unfiltered
 
-- Requested cases: 800/2000 (0 skipped rows)
+- Requested cases: 800 (0 skipped rows)
 - Unique rows: 2000
 
 | Mode   | Accuracy | p99 ms   |  RPS    | CPU %  |
