@@ -10,6 +10,11 @@
 | empero-tasklist | direct-netns | 5.043 | 11.170 | 3382.695 | 15.942 |
 | speed-bench | direct-netns |3.876 | 12.030 | 3444.037 | 15.028 |
 
+#### VLLM SR Control (Default Route)
+| Mode    | p99 ms | RPS      | CPU %  |
+| ---     | ---:   | ---:     | ---:   |
+| vllm-sr | 3.996  | 2934.114 | 27.184 |
+
 ## Dataset: SupraLabs/Prompt-Routing-Dataset
 
 - Requested cases: 800 (0 skipped rows)
