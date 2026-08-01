@@ -13,7 +13,7 @@ client sends HTTPS
 
 ## Current Prototype Implementation
 - HTTP parser that observes content body from requests in eBPF/XDP.
-- Simple n-gram domain classifier in eBPF/XDP to classify packets based on extracted signals. Identifies coding, general, or reasoning prompts.
+- Simple n-gram domain classifier in eBPF/XDP to classify packets based on extracted signals. Identifies coding, general, or math prompts.
 
 ## Project MVP
 - Signal extraction from the network layer
@@ -26,14 +26,18 @@ client sends HTTPS
 .
 ├── models
 │   ├── xdp_ngram_model_fnv.json
-├── README.md
+├── reports
+│   └── xdp_benchmark_final.md
 ├── tests
 │   └── test_ngram_routing.py
+├── README.md
+├── xdp_decision.bpf.h
 ├── xdp_http_parser.bpf.h
 ├── xdp_ngram_classifier.bpf.h
 ├── xdp_router.bpf.c
 ├── xdp_router.c
 └── xdp_router.h
+└── xdp_signals.bpf.h
 ```
 
 ## References
