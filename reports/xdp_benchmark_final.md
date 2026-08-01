@@ -9,8 +9,6 @@
 | supralabs | direct-netns | 4.107 | 10.306 | 3369.013 | 20.333 |
 | empero-tasklist | direct-netns | 5.043 | 11.170 | 3382.695 | 15.942 |
 | speed-bench | direct-netns |3.876 | 12.030 | 3444.037 | 15.028 |
-| routerbench | direct-netns | 4.891 | 8.602 | 4469.215 | 14.790 |
-| synthetic-pld | direct-netns | 4.326 | 9.456 | 3447.153 | 16.211 |
 
 ## Dataset: SupraLabs/Prompt-Routing-Dataset
 
