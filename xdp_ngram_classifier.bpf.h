@@ -11,20 +11,20 @@
 #define XDP_NGRAM_SIZE 3
 #define XDP_NGRAM_MASK (XDP_NGRAM_FEATURES - 1)
 
-#define XDP_NGRAM_BIAS_CODING -178
-#define XDP_NGRAM_BIAS_GENERAL 154
-#define XDP_NGRAM_BIAS_REASONING 24
+#define XDP_NGRAM_BIAS_CODING -158
+#define XDP_NGRAM_BIAS_GENERAL 105
+#define XDP_NGRAM_BIAS_MATH 53
 
 enum xdp_ngram_route {
   XDP_NGRAM_ROUTE_CODING = 0,
   XDP_NGRAM_ROUTE_GENERAL = 1,
-  XDP_NGRAM_ROUTE_REASONING = 2,
+  XDP_NGRAM_ROUTE_MATH = 2,
 };
 
 struct xdp_ngram_state {
   __s32 coding;
   __s32 general;
-  __s32 reasoning;
+  __s32 math;
   __u8 seen;
   unsigned char c0;
   unsigned char c1;
@@ -41,7 +41,7 @@ struct {
 static __always_inline void xdp_ngram_init(struct xdp_ngram_state *state) {
   state->coding = XDP_NGRAM_BIAS_CODING;
   state->general = XDP_NGRAM_BIAS_GENERAL;
-  state->reasoning = XDP_NGRAM_BIAS_REASONING;
+  state->math = XDP_NGRAM_BIAS_MATH;
   state->seen = 0;
   state->c0 = 0;
   state->c1 = 0;
@@ -50,7 +50,7 @@ static __always_inline void xdp_ngram_init(struct xdp_ngram_state *state) {
 
 static __always_inline int
 xdp_ngram_is_initialized(struct xdp_ngram_state *state) {
-  return state->coding != 0 || state->general != 0 || state->reasoning != 0 ||
+  return state->coding != 0 || state->general != 0 || state->math != 0 ||
          state->seen != 0;
 }
 
@@ -98,7 +98,7 @@ static __always_inline void xdp_ngram_score_char(struct xdp_ngram_state *state,
 
   state->coding += weight->coding;
   state->general += weight->general;
-  state->reasoning += weight->reasoning;
+  state->math += weight->math;
 }
 
 static __always_inline __u32
@@ -111,8 +111,8 @@ xdp_ngram_route_for_scores(struct xdp_ngram_state *state) {
     route = XDP_NGRAM_ROUTE_GENERAL;
   }
 
-  if (state->reasoning > best)
-    route = XDP_NGRAM_ROUTE_REASONING;
+  if (state->math > best)
+    route = XDP_NGRAM_ROUTE_MATH;
 
   return route;
 }

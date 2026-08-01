@@ -10,7 +10,9 @@
 struct xdp_ngram_weight {
   short coding;
   short general;
-  short reasoning;
+  short math;
+};
+
 };
 
 enum counter_id {
@@ -24,7 +26,7 @@ enum counter_id {
   COUNT_CONTENT_PARTIAL,
   COUNT_ROUTE_CODING,
   COUNT_ROUTE_GENERAL,
-  COUNT_ROUTE_REASONING,
+  COUNT_ROUTE_MATH,
   COUNT_MAX,
 };
 

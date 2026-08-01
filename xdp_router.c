@@ -30,7 +30,7 @@ struct route_counter {
 static const struct route_counter route_counters[] = {
     {COUNT_ROUTE_CODING, "coding", "coding-model"},
     {COUNT_ROUTE_GENERAL, "general", "general-model"},
-    {COUNT_ROUTE_REASONING, "reasoning", "reasoning-model"},
+    {COUNT_ROUTE_MATH, "math", "math-model"},
 };
 
 __u64 read_percpu_counter(int map_fd, __u32 key, int cpu_count) {
@@ -147,7 +147,7 @@ int load_ngram_model_from_path(int map_fd, const char *path) {
       else if (class_id == 1)
         weights[feature].general = (short)value;
       else
-        weights[feature].reasoning = (short)value;
+        weights[feature].math = (short)value;
     }
   }
 
