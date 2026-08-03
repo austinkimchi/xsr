@@ -1264,22 +1264,36 @@ def find_executable(name: str) -> str | None:
 def run_vllm_sr_mode(args: argparse.Namespace, cases: list[PromptCase]) -> dict[str, Any]:
   if args.vllm_sr_eval_url:
     url = normalize_vllm_sr_eval_url(args.vllm_sr_eval_url)
+    runner = lambda: run_vllm_sr_eval_http_mode(cases, url, args.concurrency)
   else:
-    if not find_executable("vllm-sr"):
-      return skipped("vllm-sr", "vllm-sr CLI is not installed")
-    port = next((candidate for candidate in (8180, 8080) if socket_open("127.0.0.1", candidate)), None)
-    if port is None:
-      return skipped("vllm-sr", "no running vLLM SR eval endpoint; pass --vllm-sr-eval-url")
-    url = f"http://127.0.0.1:{port}/api/v1/eval"
+    if args.vllm_sr_url:
+      url = normalize_vllm_sr_chat_url(args.vllm_sr_url)
+    else:
+      if not find_executable("vllm-sr"):
+        return skipped("vllm-sr", "vllm-sr CLI is not installed")
+      port = next((candidate for candidate in (8180, 8080) if socket_open("127.0.0.1", candidate)), None)
+      if port is None:
+        return skipped("vllm-sr", "no running vLLM SR chat endpoint; pass --vllm-sr-url")
+      url = f"http://127.0.0.1:{port}/v1/chat/completions"
+    runner = lambda: run_http_mode("vllm-sr", cases, url, args.concurrency, True)
   firewall_rule_added = False
   try:
     if args.manage_firewall and os.geteuid() == 0:
       add_port_allow_rule(args.mock_port)
       firewall_rule_added = True
-    return run_vllm_sr_eval_http_mode(cases, url, args.concurrency)
+    return runner()
   finally:
     if firewall_rule_added:
       remove_port_allow_rule(args.mock_port)
+
+
+def normalize_vllm_sr_chat_url(value: str) -> str:
+  url = value.strip().rstrip("/")
+  if url.endswith("/v1/chat/completions"):
+    return url
+  if url.endswith("/v1"):
+    return f"{url}/chat/completions"
+  return f"{url}/v1/chat/completions"
 
 
 def normalize_vllm_sr_eval_url(value: str) -> str:
@@ -1494,8 +1508,14 @@ def parse_args() -> argparse.Namespace:
   parser.add_argument("--xdp-event-timeout", type=float, default=10.0)
   parser.add_argument("--xdp-accuracy-limit", type=int, default=200)
   parser.add_argument("--manage-firewall", action=argparse.BooleanOptionalAction, default=True)
-  parser.add_argument("--vllm-sr-url")
-  parser.add_argument("--vllm-sr-eval-url")
+  parser.add_argument(
+      "--vllm-sr-url",
+      help="vLLM SR OpenAI-compatible chat endpoint base URL or /v1/chat/completions URL",
+  )
+  parser.add_argument(
+      "--vllm-sr-eval-url",
+      help="legacy vLLM SR /api/v1/eval endpoint; use only for eval-mode comparison",
+  )
   args = parser.parse_args()
   if "--xdp-url" not in sys.argv and args.mock_port != 18081:
     parsed = urllib.parse.urlparse(args.xdp_url)
