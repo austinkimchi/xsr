@@ -27,6 +27,7 @@ from typing import Any
 
 
 ROOT = Path(__file__).resolve().parents[1]
+BENCHMARK_SCRIPT = Path(__file__).resolve()
 DEFAULT_DATASET = "supralabs"
 DEFAULT_DATASETS = (
     "supralabs",
@@ -1042,7 +1043,7 @@ def run_netns_batch_mode(
             args.xdp_netns,
             sys.executable,
             "-u",
-            str(ROOT / "scripts" / "benchmark_routing.py"),
+            str(BENCHMARK_SCRIPT),
             "--http-timeout",
             str(args.http_timeout),
             "--concurrency",
@@ -1125,7 +1126,7 @@ def run_xdp_mode(args: argparse.Namespace, cases: list[PromptCase]) -> dict[str,
             args.xdp_netns,
             sys.executable,
             "-u",
-            str(ROOT / "scripts" / "benchmark_routing.py"),
+            str(BENCHMARK_SCRIPT),
             "--http-timeout",
             str(args.http_timeout),
             "--client-worker",
@@ -1171,7 +1172,7 @@ def run_xdp_mode(args: argparse.Namespace, cases: list[PromptCase]) -> dict[str,
             args.xdp_netns,
             sys.executable,
             "-u",
-            str(ROOT / "scripts" / "benchmark_routing.py"),
+            str(BENCHMARK_SCRIPT),
             "--http-timeout",
             str(args.http_timeout),
             "--concurrency",
