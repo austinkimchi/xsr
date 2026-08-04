@@ -1,4 +1,28 @@
 scripts/*
+!scripts/distill_mmbert32k_student.py
+!scripts/validate_supralabs_primary_domain_routing.py
+
+# Local caches and Python build output
+.cache/
+__pycache__/
+*.py[cod]
+__*
+
+# Build outputs
 xdp_router
 xdp_router.bpf.o
-__*
+
+# vLLM-SR runtime/container state. Keep checked-in config YAMLs outside these dirs.
+.vllm-sr/
+tests/.vllm-sr/
+reports/.vllm-sr/
+tests/vllm-sr-bert-stack/.vllm-sr/
+tests/vllm-sr-bert-stack/models
+
+# Downloaded Hugging Face/model artifacts. Regenerate with helper scripts.
+tests/models/
+reports/models/
+
+# Heavy generated benchmark/report outputs.
+reports/bert_domain_comparison/
+reports/vllm_sr_bert_domain_smoke/
