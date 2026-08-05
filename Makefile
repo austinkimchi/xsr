@@ -1,6 +1,7 @@
 CC ?= gcc
 BPF_CLANG ?= clang
 PKG_CONFIG ?= pkg-config
+PYTHON ?= python3
 
 ARCH := $(shell uname -m)
 BPF_CFLAGS := -O2 -g -target bpf \
@@ -15,6 +16,7 @@ XDP_HOST_IF ?= veth0
 XDP_PEER_IF ?= veth1
 XDP_HOST_ADDR ?= 10.10.0.1/24
 XDP_PEER_ADDR ?= 10.10.0.2/24
+KEYWORD_POLICY ?= config/vllm_sr_keyword_config.yaml
 
 .DEFAULT_GOAL := all
 
@@ -27,11 +29,14 @@ dev: clean all
 xdp_router: xdp_router.c xdp_router.h
 	$(CC) $(USER_CFLAGS) $< -o $@ $(LIBBPF_FLAGS)
 
-xdp_router.bpf.o: xdp_router.bpf.c xdp_router.h xdp_http_parser.bpf.h xdp_ngram_classifier.bpf.h
+xdp_keyword_policy.generated.h: $(KEYWORD_POLICY) scripts/generate_keyword_header.py
+	$(PYTHON) scripts/generate_keyword_header.py $(KEYWORD_POLICY) $@
+
+xdp_router.bpf.o: xdp_router.bpf.c xdp_router.h xdp_http_parser.bpf.h xdp_keyword_classifier.bpf.h xdp_keyword_policy.generated.h
 	$(BPF_CLANG) $(BPF_CFLAGS) -c $< -o $@
 
 clean:
-	rm -f xdp_router xdp_router.bpf.o
+	rm -f xdp_router xdp_router.bpf.o xdp_keyword_policy.generated.h
 
 setup:
 	@if ! ip netns list | awk '{print $$1}' | grep -Fxq "$(XDP_NETNS)"; then \
