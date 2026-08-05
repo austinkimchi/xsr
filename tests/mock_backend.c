@@ -1,6 +1,6 @@
 /*
  * High-performance multi-threaded C mock HTTP backend server.
- * Capable of 100,000+ RPS without Python GIL bottlenecks.
+ * Stream-buffer enabled to support pipelined HTTP keep-alive requests cleanly.
  */
 
 #include <arpa/inet.h>
@@ -38,12 +38,12 @@ static const char HTTP_RESPONSE_CLOSE[] =
 static int server_fd = -1;
 static volatile int running = 1;
 
-static int contains_close_token(const char *value) {
+static int contains_close_token(const char *value, size_t len) {
   const char needle[] = "close";
   size_t pos = 0;
 
-  for (; *value; value++) {
-    char c = *value;
+  for (size_t i = 0; i < len; i++) {
+    char c = value[i];
     if (c >= 'A' && c <= 'Z')
       c = (char)(c + ('a' - 'A'));
 
@@ -52,7 +52,7 @@ static int contains_close_token(const char *value) {
       if (pos == sizeof(needle) - 1)
         return 1;
     } else {
-      pos = c == needle[0] ? 1 : 0;
+      pos = (c == needle[0]) ? 1 : 0;
     }
   }
   return 0;
@@ -81,26 +81,25 @@ static void *worker_thread(void *arg) {
 
     int flag = 1;
     setsockopt(client_fd, IPPROTO_TCP, TCP_NODELAY, &flag, sizeof(flag));
-    struct timeval read_timeout = {
-        .tv_sec = 0,
-        .tv_usec = 100000,
-    };
-    setsockopt(client_fd, SOL_SOCKET, SO_RCVTIMEO, &read_timeout,
-               sizeof(read_timeout));
+
+    size_t buf_used = 0;
 
     while (running) {
-      size_t used = 0;
       char *headers_end = NULL;
 
-      while (running && used < sizeof(buf) - 1) {
-        ssize_t n = read(client_fd, buf + used, sizeof(buf) - 1 - used);
-        if (n <= 0)
-          goto close_client;
-        used += (size_t)n;
-        buf[used] = '\0';
+      while (running) {
+        buf[buf_used] = '\0';
         headers_end = strstr(buf, "\r\n\r\n");
         if (headers_end)
           break;
+
+        if (buf_used >= sizeof(buf) - 1)
+          break;
+
+        ssize_t n = read(client_fd, buf + buf_used, sizeof(buf) - 1 - buf_used);
+        if (n <= 0)
+          goto close_client;
+        buf_used += (size_t)n;
       }
 
       if (!headers_end)
@@ -110,36 +109,54 @@ static void *worker_thread(void *arg) {
       size_t content_length = 0;
       int keep_alive = 1;
 
-      char *line = buf;
+      // Parse Content-Length and Connection headers without mutating buf
+      const char *line = buf;
       while (line < headers_end) {
-        char *next = strstr(line, "\r\n");
+        const char *next = strstr(line, "\r\n");
         if (!next || next > headers_end)
           break;
-        *next = '\0';
-        if (strncasecmp(line, "Content-Length:", 15) == 0) {
+        size_t line_len = next - line;
+        if (line_len >= 15 && strncasecmp(line, "Content-Length:", 15) == 0) {
           content_length = (size_t)strtoull(line + 15, NULL, 10);
-        } else if (strncasecmp(line, "Connection:", 11) == 0 &&
-                   contains_close_token(line + 11)) {
-          keep_alive = 0;
+        } else if (line_len >= 11 && strncasecmp(line, "Connection:", 11) == 0) {
+          if (contains_close_token(line + 11, line_len - 11)) {
+            keep_alive = 0;
+          }
         }
         line = next + 2;
       }
 
-      while (running && used < header_len + content_length) {
-        char drain[8192];
-        size_t remaining = header_len + content_length - used;
-        size_t want = remaining < sizeof(drain) ? remaining : sizeof(drain);
-        ssize_t n = read(client_fd, drain, want);
-        if (n <= 0)
+      size_t total_req_len = header_len + content_length;
+
+      // Read remaining body bytes if payload is larger than what we have read so far
+      while (running && buf_used < total_req_len) {
+        size_t want = sizeof(buf) - 1 - buf_used;
+        if (want == 0)
           break;
-        used += (size_t)n;
+        ssize_t n = read(client_fd, buf + buf_used, want);
+        if (n <= 0)
+          goto close_client;
+        buf_used += (size_t)n;
       }
 
+      if (buf_used < total_req_len)
+        goto close_client;
+
+      // Send HTTP response
       const char *response = keep_alive ? HTTP_RESPONSE : HTTP_RESPONSE_CLOSE;
       size_t response_len =
           keep_alive ? sizeof(HTTP_RESPONSE) - 1 : sizeof(HTTP_RESPONSE_CLOSE) - 1;
       ssize_t w = write(client_fd, response, response_len);
-      (void)w;
+      if (w <= 0)
+        goto close_client;
+
+      // Shift unconsumed bytes (pipelined requests) to the start of buf
+      size_t leftover = buf_used - total_req_len;
+      if (leftover > 0) {
+        memmove(buf, buf + total_req_len, leftover);
+      }
+      buf_used = leftover;
+
       if (!keep_alive)
         break;
     }

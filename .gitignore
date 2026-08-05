@@ -12,8 +12,10 @@ __*
 # Build outputs
 xdp_router
 mock_backend
+tests/mock_backend
 xdp_router.bpf.o
 xdp_keyword_policy.generated.h
+tests/dataset_prompts.jsonl
 
 # vLLM-SR runtime/container state. Keep checked-in config YAMLs outside these dirs.
 .vllm-sr/
