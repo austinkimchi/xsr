@@ -16,18 +16,25 @@ XDP_HOST_IF ?= veth0
 XDP_PEER_IF ?= veth1
 XDP_HOST_ADDR ?= 10.10.0.1/24
 XDP_PEER_ADDR ?= 10.10.0.2/24
-KEYWORD_POLICY ?= config/vllm_sr_keyword_config.yaml
+KEYWORD_POLICY ?= config/policy_literal.yaml
 
 .DEFAULT_GOAL := all
 
-all: xdp_router xdp_router.bpf.o
+all: xdp_router xdp_router.bpf.o tests/mock_backend
 
 dev: USER_CFLAGS += $(DEV_DEFS)
 dev: BPF_CFLAGS += $(DEV_DEFS)
 dev: clean all
 
+prod: USER_CFLAGS += -O3
+prod: BPF_CFLAGS += -O2
+prod: clean all
+
 xdp_router: xdp_router.c xdp_router.h
 	$(CC) $(USER_CFLAGS) $< -o $@ $(LIBBPF_FLAGS)
+
+tests/mock_backend: tests/mock_backend.c
+	$(CC) -O3 $< -o $@ -lpthread
 
 xdp_keyword_policy.generated.h: $(KEYWORD_POLICY) scripts/generate_keyword_header.py
 	$(PYTHON) scripts/generate_keyword_header.py $(KEYWORD_POLICY) $@
@@ -36,7 +43,7 @@ xdp_router.bpf.o: xdp_router.bpf.c xdp_router.h xdp_http_parser.bpf.h xdp_keywor
 	$(BPF_CLANG) $(BPF_CFLAGS) -c $< -o $@
 
 clean:
-	rm -f xdp_router xdp_router.bpf.o xdp_keyword_policy.generated.h
+	rm -f xdp_router xdp_router.bpf.o xdp_keyword_policy.generated.h tests/mock_backend
 
 setup:
 	@if ! ip netns list | awk '{print $$1}' | grep -Fxq "$(XDP_NETNS)"; then \
