@@ -1,4 +1,5 @@
 scripts/*
+!scripts/generate_keyword_header.py
 !scripts/distill_mmbert32k_student.py
 !scripts/validate_supralabs_primary_domain_routing.py
 
@@ -10,10 +11,13 @@ __*
 
 # Build outputs
 xdp_router
+mock_backend
 xdp_router.bpf.o
+xdp_keyword_policy.generated.h
 
 # vLLM-SR runtime/container state. Keep checked-in config YAMLs outside these dirs.
 .vllm-sr/
+config/.vllm-sr/
 tests/.vllm-sr/
 reports/.vllm-sr/
 tests/vllm-sr-bert-stack/.vllm-sr/
@@ -22,7 +26,10 @@ tests/vllm-sr-bert-stack/models
 # Downloaded Hugging Face/model artifacts. Regenerate with helper scripts.
 tests/models/
 reports/models/
+config/models/
 
 # Heavy generated benchmark/report outputs.
 reports/bert_domain_comparison/
 reports/vllm_sr_bert_domain_smoke/
+reports/keyword-routing*/
+!reports/wrk-keyword-routing*
