@@ -1,37 +1,24 @@
-scripts/*
-!scripts/generate_keyword_header.py
-!scripts/distill_mmbert32k_student.py
-!scripts/validate_supralabs_primary_domain_routing.py
-
-# Local caches and Python build output
-.cache/
+# Python & Bytecode Caches
 __pycache__/
 *.py[cod]
-__*
+.cache/
 
-# Build outputs
+# Compiled C / BPF Binaries & Generated Headers
 xdp_router
 mock_backend
 tests/mock_backend
-xdp_router.bpf.o
-xdp_keyword_policy.generated.h
-tests/dataset_prompts.jsonl
+*.bpf.o
+*.generated.h
 
-# vLLM-SR runtime/container state. Keep checked-in config YAMLs outside these dirs.
-.vllm-sr/
-config/.vllm-sr/
-tests/.vllm-sr/
-reports/.vllm-sr/
-tests/vllm-sr-bert-stack/.vllm-sr/
-tests/vllm-sr-bert-stack/models
+# Generated Datasets
+*.jsonl
 
-# Downloaded Hugging Face/model artifacts. Regenerate with helper scripts.
-tests/models/
-reports/models/
-config/models/
+# vLLM-SR Runtime State & Model Artifacts
+**/.vllm-sr/
+**/models/
+tests/vllm-sr-bert-stack/
 
-# Heavy generated benchmark/report outputs.
-reports/bert_domain_comparison/
-reports/vllm_sr_bert_domain_smoke/
-reports/keyword-routing*/
-!reports/wrk-keyword-routing*
+# Generated Benchmark Reports (Keep wrk-keyword-routing)
+reports/
+!reports/wrk-keyword-routing/
+!reports/wrk-keyword-routing/**
