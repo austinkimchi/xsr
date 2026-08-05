@@ -8,15 +8,12 @@
 #define BPF_OBJECT_FILE "xdp_router.bpf.o"
 #define XDP_PROGRAM_NAME "xdp_router"
 #define XDP_MAP_NAME "counters"
-#define XDP_NGRAM_MAP_NAME "xdp_ngram_weights"
 
 #include <bpf/bpf.h>
 #include <bpf/libbpf.h>
-#include <errno.h>
 #include <net/if.h> // if_nametoindex
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
 #include <unistd.h>
 
 #include "xdp_router.h"
@@ -29,7 +26,7 @@ struct route_counter {
 
 static const struct route_counter route_counters[] = {
     {COUNT_ROUTE_CODING, "coding", "coding-model"},
-    {COUNT_ROUTE_GENERAL, "general", "general-model"},
+    {COUNT_ROUTE_OTHERS, "others", "default-route"},
     {COUNT_ROUTE_MATH, "math", "math-model"},
 };
 
@@ -39,7 +36,7 @@ static const char *route_name(__u32 route) {
   case 0:
     return "coding";
   case 1:
-    return "general";
+    return "others";
   case 2:
     return "math";
   default:
@@ -55,13 +52,14 @@ static int handle_route_event(void *ctx, void *data, size_t data_sz) {
   if (data_sz < sizeof(*event))
     return 0;
 
-  printf("{\"event\":\"route\",\"domain\":\"%s\",\"route\":%u,"
+  printf("{\"event\":\"route\",\"route_name\":\"%s\",\"route\":%u,"
          "\"model_id\":%u,\"content_length\":%u,"
-         "\"scores\":{\"coding\":%d,\"general\":%d,\"math\":%d},"
+         "\"matched_keywords\":{\"coding\":%s,\"math\":%s},"
          "\"xdp_elapsed_ns\":%llu}\n",
          route_name(event->route), event->route, event->model_id,
-         event->content_length, event->coding_score, event->general_score,
-         event->math_score, (unsigned long long)event->elapsed_ns);
+         event->content_length, event->matched_coding ? "true" : "false",
+         event->matched_math ? "true" : "false",
+         (unsigned long long)event->elapsed_ns);
   return 0;
 }
 #endif
@@ -77,141 +75,6 @@ __u64 read_percpu_counter(int map_fd, __u32 key, int cpu_count) {
     total += values[cpu];
 
   return total;
-}
-
-int read_file(const char *path, char **out, size_t *out_size) {
-  FILE *file = fopen(path, "rb");
-  char *buffer;
-  long size;
-
-  if (!file)
-    return -1;
-
-  if (fseek(file, 0, SEEK_END) != 0) {
-    fclose(file);
-    return -1;
-  }
-
-  size = ftell(file);
-  if (size < 0) {
-    fclose(file);
-    return -1;
-  }
-
-  if (fseek(file, 0, SEEK_SET) != 0) {
-    fclose(file);
-    return -1;
-  }
-
-  buffer = calloc((size_t)size + 1, 1);
-  if (!buffer) {
-    fclose(file);
-    return -1;
-  }
-
-  if (fread(buffer, 1, (size_t)size, file) != (size_t)size) {
-    free(buffer);
-    fclose(file);
-    return -1;
-  }
-
-  fclose(file);
-  *out = buffer;
-  *out_size = (size_t)size;
-  return 0;
-}
-
-int parse_next_int(char **cursor, long *value) {
-  char *p = *cursor;
-  char *end;
-
-  while (*p && *p != '-' && (*p < '0' || *p > '9'))
-    p++;
-
-  if (!*p)
-    return -1;
-
-  errno = 0;
-  *value = strtol(p, &end, 10);
-  if (errno != 0 || end == p)
-    return -1;
-
-  *cursor = end;
-  return 0;
-}
-
-int load_ngram_model_from_path(int map_fd, const char *path) {
-  char *json;
-  char *cursor;
-  size_t json_size;
-  long value;
-  struct xdp_ngram_weight *weights;
-  int result = -1;
-
-  if (read_file(path, &json, &json_size) != 0)
-    return -1;
-
-  weights = calloc(XDP_NGRAM_FEATURES, sizeof(*weights));
-  if (!weights) {
-    free(json);
-    return -1;
-  }
-
-  cursor = strstr(json, "\"bias\"");
-  if (!cursor)
-    goto out;
-
-  for (int i = 0; i < 3; i++) {
-    if (parse_next_int(&cursor, &value) != 0)
-      goto out;
-  }
-
-  cursor = strstr(json, "\"weights\"");
-  if (!cursor)
-    goto out;
-
-  for (int class_id = 0; class_id < 3; class_id++) {
-    for (__u32 feature = 0; feature < XDP_NGRAM_FEATURES; feature++) {
-      if (parse_next_int(&cursor, &value) != 0)
-        goto out;
-
-      if (class_id == 0)
-        weights[feature].coding = (short)value;
-      else if (class_id == 1)
-        weights[feature].general = (short)value;
-      else
-        weights[feature].math = (short)value;
-    }
-  }
-
-  for (__u32 feature = 0; feature < XDP_NGRAM_FEATURES; feature++) {
-    if (bpf_map_update_elem(map_fd, &feature, &weights[feature], BPF_ANY) != 0)
-      goto out;
-  }
-
-  printf("Loaded n-gram weights from %s\n", path);
-  result = 0;
-
-out:
-  free(weights);
-  free(json);
-  return result;
-}
-
-int load_ngram_model(struct bpf_object *obj) {
-  int map_fd = bpf_object__find_map_fd_by_name(obj, XDP_NGRAM_MAP_NAME);
-
-  if (map_fd < 0) {
-    fprintf(stderr, "Failed to find map: %s\n", XDP_NGRAM_MAP_NAME);
-    return -1;
-  }
-
-  if (load_ngram_model_from_path(map_fd, "models/xdp_ngram_model_fnv.json") ==
-      0)
-    return 0;
-
-  fprintf(stderr, "Failed to load n-gram model weights\n");
-  return -1;
 }
 
 int main(void) {
@@ -242,9 +105,6 @@ int main(void) {
     fprintf(stderr, "Failed to load BPF object file: %s\n", BPF_OBJECT_FILE);
     return 1;
   }
-
-  if (load_ngram_model(obj) != 0)
-    return 1;
 
   // Find XDP program by name
   prog = bpf_object__find_program_by_name(obj, XDP_PROGRAM_NAME);
@@ -312,7 +172,7 @@ int main(void) {
           read_percpu_counter(map_fd, route_counters[i].key, cpu_count);
 
       for (__u64 count = last_counts[i]; count < current; count++) {
-        printf("prompt routed: domain=%s model=%s total=%llu\n",
+        printf("prompt routed: route=%s model=%s total=%llu\n",
                route_counters[i].route, route_counters[i].model,
                (unsigned long long)(count + 1));
       }

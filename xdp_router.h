@@ -5,22 +5,13 @@
 #ifndef XDP_ROUTER_H
 #define XDP_ROUTER_H
 
-#define XDP_NGRAM_FEATURES 4096
-
-struct xdp_ngram_weight {
-  short coding;
-  short general;
-  short math;
-};
-
 #ifdef XDP_DEBUG
 struct xdp_route_event {
   __u32 route;
   __u32 model_id;
   __u32 content_length;
-  __s32 coding_score;
-  __s32 general_score;
-  __s32 math_score;
+  __u8 matched_coding;
+  __u8 matched_math;
   __u64 elapsed_ns;
 };
 #endif
@@ -35,7 +26,7 @@ enum counter_id {
   COUNT_CONTENT_FOUND,
   COUNT_CONTENT_PARTIAL,
   COUNT_ROUTE_CODING,
-  COUNT_ROUTE_GENERAL,
+  COUNT_ROUTE_OTHERS,
   COUNT_ROUTE_MATH,
   COUNT_MAX,
 };

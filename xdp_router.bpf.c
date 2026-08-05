@@ -44,7 +44,7 @@ struct http_flow_state {
   __u32 next_seq;
   __u32 body_seq;
   struct content_flow_state content;
-  struct xdp_ngram_state ngram;
+  struct xdp_keyword_state keyword;
 };
 
 struct {
@@ -62,26 +62,25 @@ static __always_inline void increment_counter(__u32 key) {
 }
 
 static __always_inline void increment_route_counter(__u32 route) {
-  if (route == XDP_NGRAM_ROUTE_CODING)
+  if (route == XDP_KEYWORD_ROUTE_CODING)
     increment_counter(COUNT_ROUTE_CODING);
-  else if (route == XDP_NGRAM_ROUTE_GENERAL)
-    increment_counter(COUNT_ROUTE_GENERAL);
-  else if (route == XDP_NGRAM_ROUTE_MATH)
+  else if (route == XDP_KEYWORD_ROUTE_GENERAL)
+    increment_counter(COUNT_ROUTE_OTHERS);
+  else if (route == XDP_KEYWORD_ROUTE_MATH)
     increment_counter(COUNT_ROUTE_MATH);
 }
 
 #ifdef XDP_DEBUG
 static __always_inline void emit_route_event(__u32 route, __u32 model_id,
                                              __u32 content_length,
-                                             struct xdp_ngram_state *ngram,
+                                             struct xdp_keyword_state *keyword,
                                              __u64 elapsed_ns) {
   struct xdp_route_event event = {
       .route = route,
       .model_id = model_id,
       .content_length = content_length,
-      .coding_score = ngram->coding,
-      .general_score = ngram->general,
-      .math_score = ngram->math,
+      .matched_coding = keyword->matched_coding,
+      .matched_math = keyword->matched_math,
       .elapsed_ns = elapsed_ns,
   };
 
@@ -212,7 +211,7 @@ int xdp_router(struct xdp_md *ctx) {
     initial.next_seq = tcp_seq + payload_length;
     if (found_body)
       initial.body_seq = tcp_seq + body_offset;
-    xdp_ngram_init(&initial.ngram);
+    xdp_keyword_init(&initial.keyword);
 
     bpf_map_update_elem(&http_flows, &key, &initial, BPF_ANY);
     flow = bpf_map_lookup_elem(&http_flows, &key);
@@ -224,7 +223,7 @@ int xdp_router(struct xdp_md *ctx) {
     if (found_body && body_offset < payload_length) {
       result = scan_content_stream(ctx, data, p + body_offset,
                                    payload_length - body_offset, &flow->content,
-                                   &flow->ngram, &content_length);
+                                   &flow->keyword, &content_length);
     }
   } else {
     flow = bpf_map_lookup_elem(&http_flows, &key);
@@ -243,19 +242,19 @@ int xdp_router(struct xdp_md *ctx) {
     }
 
     result = scan_content_stream(ctx, data, p, payload_length, &flow->content,
-                                 &flow->ngram, &content_length);
+                                 &flow->keyword, &content_length);
     flow->next_seq = tcp_seq + payload_length;
   }
 
   if (result == CONTENT_COMPLETE) {
-    __u32 route = xdp_ngram_route_for_scores(&flow->ngram);
+    __u32 route = xdp_keyword_route_for_matches(&flow->keyword);
     __u64 signals = 0;
 
-    if (route == XDP_NGRAM_ROUTE_CODING)
+    if (route == XDP_KEYWORD_ROUTE_CODING)
       signals |= XDP_SIGNAL_DOMAIN_CODING;
-    else if (route == XDP_NGRAM_ROUTE_GENERAL)
-      signals |= XDP_SIGNAL_DOMAIN_GENERAL;
-    else if (route == XDP_NGRAM_ROUTE_MATH)
+    else if (route == XDP_KEYWORD_ROUTE_GENERAL)
+      signals |= XDP_SIGNAL_DOMAIN_OTHERS;
+    else if (route == XDP_KEYWORD_ROUTE_MATH)
       signals |= XDP_SIGNAL_DOMAIN_MATH;
 
     __u32 model_id = xdp_decision_eval(signals);
@@ -265,7 +264,7 @@ int xdp_router(struct xdp_md *ctx) {
 #ifdef XDP_PROFILE
     elapsed_ns = bpf_ktime_get_ns() - start_ns;
 #endif
-    emit_route_event(route, model_id, content_length, &flow->ngram,
+    emit_route_event(route, model_id, content_length, &flow->keyword,
                      elapsed_ns);
 #endif
 
