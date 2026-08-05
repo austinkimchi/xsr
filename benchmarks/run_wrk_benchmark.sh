@@ -51,13 +51,13 @@ pkill -9 xdp_router >/dev/null 2>&1 || true
 make setup >/dev/null 2>&1 || true
 
 # Generate prompt dataset if missing
-if [ ! -f "tests/dataset_prompts.jsonl" ]; then
+if [ ! -f "benchmarks/dataset_prompts.jsonl" ]; then
     echo "Generating dataset_prompts.jsonl..."
-    python3 tests/export_dataset_prompts.py
+    python3 benchmarks/export_dataset_prompts.py
 fi
 
 # Build mock backend and xdp_router if missing
-if [ ! -f "tests/mock_backend" ] || [ ! -f "xdp_router" ]; then
+if [ ! -f "benchmarks/mock_backend" ] || [ ! -f "xdp_router" ]; then
     echo "Building XDP router and mock backend..."
     make dev KEYWORD_POLICY=config/policy_literal.yaml
 fi
@@ -72,11 +72,11 @@ iptables -I INPUT 1 -p tcp --dport "${VLLM_BACKEND_PORT}" -j ACCEPT >/dev/null 2
 
 # Start mock HTTP backends for both XDP (18081) and vLLM-SR (18391)
 echo "Starting mock HTTP backend for XDP on port ${XDP_PORT}..."
-./tests/mock_backend "${XDP_PORT}" > /dev/null 2>&1 &
+./benchmarks/mock_backend "${XDP_PORT}" > /dev/null 2>&1 &
 XDP_MOCK_PID=$!
 
 echo "Starting mock HTTP backend for vLLM-SR on port ${VLLM_BACKEND_PORT}..."
-./tests/mock_backend "${VLLM_BACKEND_PORT}" > /dev/null 2>&1 &
+./benchmarks/mock_backend "${VLLM_BACKEND_PORT}" > /dev/null 2>&1 &
 VLLM_MOCK_PID=$!
 
 # Start xdp_router in background
@@ -119,13 +119,13 @@ run_benchmark() {
     echo ""
     echo "## [1/2] XDP Route (via netns)"
     echo "\`\`\`"
-    ip netns exec "${NETNS}" "$WRK_BIN" -t"$THREADS" -c"$CONCURRENCY" -d"$DURATION" $RATE_ARG -s tests/prompts.lua "$XDP_URL"
+    ip netns exec "${NETNS}" "$WRK_BIN" -t"$THREADS" -c"$CONCURRENCY" -d"$DURATION" $RATE_ARG -s benchmarks/prompts.lua "$XDP_URL"
     echo "\`\`\`"
     echo ""
     echo "## [2/2] vLLM-SR Route"
     echo "\`\`\`"
     if socket_check=$(curl -s -m 1 "$VLLM_URL" 2>&1); [[ ! "$socket_check" =~ "Failed to connect" ]]; then
-        "$WRK_BIN" -t"$THREADS" -c"$CONCURRENCY" -d"$DURATION" $RATE_ARG -s tests/prompts.lua "$VLLM_URL"
+        "$WRK_BIN" -t"$THREADS" -c"$CONCURRENCY" -d"$DURATION" $RATE_ARG -s benchmarks/prompts.lua "$VLLM_URL"
     else
         echo "vLLM-SR endpoint ($VLLM_URL) unreachable, skipping vLLM-SR run."
     fi

@@ -6,6 +6,7 @@ __pycache__/
 # Compiled C / BPF Binaries & Generated Headers
 xdp_router
 mock_backend
+benchmarks/mock_backend
 tests/mock_backend
 *.bpf.o
 *.generated.h

@@ -9,13 +9,13 @@ from pathlib import Path
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "tests"))
+sys.path.insert(0, str(ROOT / "benchmarks"))
 
 from benchmark_keyword_routing import parse_args, load_cases, chat_body
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Export dataset prompts to JSONL")
-    parser.add_argument("--output", type=Path, default=ROOT / "tests" / "dataset_prompts.jsonl")
+    parser.add_argument("--output", type=Path, default=ROOT / "benchmarks" / "dataset_prompts.jsonl")
     parser.add_argument("--config", type=Path, default=ROOT / "config" / "policy_literal.yaml")
     parser.add_argument("--per-route", type=int, default=50)
     args = parser.parse_args()

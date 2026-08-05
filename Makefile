@@ -20,7 +20,7 @@ KEYWORD_POLICY ?= config/policy_literal.yaml
 
 .DEFAULT_GOAL := all
 
-all: xdp_router xdp_router.bpf.o tests/mock_backend
+all: xdp_router xdp_router.bpf.o benchmarks/mock_backend
 
 dev: USER_CFLAGS += $(DEV_DEFS)
 dev: BPF_CFLAGS += $(DEV_DEFS)
@@ -33,7 +33,7 @@ prod: clean all
 xdp_router: xdp_router.c xdp_router.h
 	$(CC) $(USER_CFLAGS) $< -o $@ $(LIBBPF_FLAGS)
 
-tests/mock_backend: tests/mock_backend.c
+benchmarks/mock_backend: benchmarks/mock_backend.c
 	$(CC) -O3 $< -o $@ -lpthread
 
 xdp_keyword_policy.generated.h: $(KEYWORD_POLICY) scripts/generate_keyword_header.py
@@ -43,7 +43,7 @@ xdp_router.bpf.o: xdp_router.bpf.c xdp_router.h xdp_http_parser.bpf.h xdp_keywor
 	$(BPF_CLANG) $(BPF_CFLAGS) -c $< -o $@
 
 clean:
-	rm -f xdp_router xdp_router.bpf.o xdp_keyword_policy.generated.h tests/mock_backend
+	rm -f xdp_router xdp_router.bpf.o xdp_keyword_policy.generated.h benchmarks/mock_backend
 
 setup:
 	@if ! ip netns list | awk '{print $$1}' | grep -Fxq "$(XDP_NETNS)"; then \
