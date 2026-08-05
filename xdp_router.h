@@ -10,6 +10,7 @@ struct xdp_route_event {
   __u32 route;
   __u32 model_id;
   __u32 content_length;
+  __u16 src_port;
   __u8 matched_coding;
   __u8 matched_math;
   __u64 elapsed_ns;

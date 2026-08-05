@@ -9,7 +9,7 @@
 #include "xdp_keyword_classifier.bpf.h"
 
 #define MAX_SCAN 512
-#define MAX_CONTENT 1500 // Default MTU size, can be adjusted as needed
+#define MAX_CONTENT 1500
 
 #define CONTENT_KEY_LEN 10 // "content":
 
@@ -24,6 +24,7 @@ struct content_flow_state {
   __u32 content_length;
   __u8 waiting_for_value_quote;
   __u8 in_content;
+  __u8 escaped;
 };
 
 struct content_scan_ctx {
@@ -122,7 +123,11 @@ static long scan_content_callback(__u32 i, void *data) {
   }
 
   if (state->in_content) {
-    if (c == '"') {
+    if (state->escaped) {
+      state->escaped = 0;
+    } else if (c == '\\') {
+      state->escaped = 1;
+    } else if (c == '"') {
       ctx->length = state->content_length;
       ctx->result = CONTENT_COMPLETE;
       return 1;

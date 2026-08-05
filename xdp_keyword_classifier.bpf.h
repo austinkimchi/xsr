@@ -12,14 +12,18 @@ enum xdp_keyword_route {
   XDP_KEYWORD_ROUTE_MATH = 2,
 };
 
-#include "xdp_keyword_policy.generated.h"
+#ifndef MAX_KEYWORDS
+#define MAX_KEYWORDS 32
+#endif
 
 struct xdp_keyword_state {
   __u64 signals;
   __u8 matched_coding;
   __u8 matched_math;
-  __u8 pos[XDP_KEYWORD_COUNT];
+  __u8 pos[MAX_KEYWORDS];
 };
+
+#include "xdp_keyword_policy.generated.h"
 
 static __always_inline unsigned char xdp_keyword_lower(unsigned char c) {
 #if XDP_KEYWORD_POLICY_CASE_SENSITIVE
@@ -47,26 +51,7 @@ static __always_inline void xdp_keyword_init(struct xdp_keyword_state *state) {
   XDP_KEYWORD_CLEAR_ALL(state);
 }
 
-static __always_inline void xdp_keyword_score_one(struct xdp_keyword_state *state,
-                                                  __u32 id, unsigned char c) {
-  __u8 pos = state->pos[id];
-  __u8 len = xdp_keyword_len(id);
 
-  if (!len)
-    return;
-
-  if (c == xdp_keyword_char(id, pos)) {
-    pos++;
-    if (pos == len) {
-      xdp_keyword_mark(state, id);
-      pos = 0;
-    }
-  } else {
-    pos = c == xdp_keyword_char(id, 0) ? 1 : 0;
-  }
-
-  state->pos[id] = pos;
-}
 
 static __always_inline void xdp_keyword_score_char(struct xdp_keyword_state *state,
                                                    unsigned char c) {

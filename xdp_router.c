@@ -52,11 +52,11 @@ static int handle_route_event(void *ctx, void *data, size_t data_sz) {
   if (data_sz < sizeof(*event))
     return 0;
 
-  printf("{\"event\":\"route\",\"route_name\":\"%s\",\"route\":%u,"
+  printf("{\"event\":\"route\",\"src_port\":%u,\"route_name\":\"%s\",\"route\":%u,"
          "\"model_id\":%u,\"content_length\":%u,"
          "\"matched_keywords\":{\"coding\":%s,\"math\":%s},"
          "\"xdp_elapsed_ns\":%llu}\n",
-         route_name(event->route), event->route, event->model_id,
+         event->src_port, route_name(event->route), event->route, event->model_id,
          event->content_length, event->matched_coding ? "true" : "false",
          event->matched_math ? "true" : "false",
          (unsigned long long)event->elapsed_ns);
@@ -113,8 +113,13 @@ int main(void) {
     return 1;
   }
 
-  // Attach XDP program to the network interface
-  link = bpf_program__attach_xdp(prog, ifindex);
+  // Attach XDP program to the network interface with retry loop
+  for (int retry = 0; retry < 5; retry++) {
+    link = bpf_program__attach_xdp(prog, ifindex);
+    if (!libbpf_get_error(link))
+      break;
+    usleep(200000);
+  }
   if (libbpf_get_error(link)) { // Attaching the program could fail
     fprintf(stderr, "Failed to attach XDP program to interface index: %d\n",
             ifindex);

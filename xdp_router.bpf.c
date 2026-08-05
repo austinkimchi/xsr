@@ -73,12 +73,14 @@ static __always_inline void increment_route_counter(__u32 route) {
 #ifdef XDP_DEBUG
 static __always_inline void emit_route_event(__u32 route, __u32 model_id,
                                              __u32 content_length,
+                                             __u16 src_port,
                                              struct xdp_keyword_state *keyword,
                                              __u64 elapsed_ns) {
   struct xdp_route_event event = {
       .route = route,
       .model_id = model_id,
       .content_length = content_length,
+      .src_port = src_port,
       .matched_coding = keyword->matched_coding,
       .matched_math = keyword->matched_math,
       .elapsed_ns = elapsed_ns,
@@ -195,35 +197,41 @@ int xdp_router(struct xdp_md *ctx) {
   __u32 content_length = 0;
   int result = CONTENT_NOT_FOUND;
 
-  if (p + 4 > (unsigned char *)data_end)
+  // Filter only destination port 18081 (HTTP request stream)
+  if (bpf_ntohs(tcp->dest) != 18081)
     return XDP_PASS;
 
   build_flow_key(ip, tcp, &key);
 
-  // New HTTP requests start a bounded per-flow scan; continuation packets use
-  // this state even though they do not start with an HTTP method.
+  if (p + 4 > (unsigned char *)data_end)
+    return XDP_PASS;
+
   bool is_post = p[0] == 'P' && p[1] == 'O' && p[2] == 'S' && p[3] == 'T';
+  struct content_flow_state stack_content = {};
+  struct xdp_keyword_state stack_keyword = {};
+
   if (is_post) {
-    struct http_flow_state initial = {};
     __u32 body_offset = 0;
     bool found_body = find_http_body_offset(p, data_end, &body_offset);
 
-    initial.next_seq = tcp_seq + payload_length;
-    if (found_body)
-      initial.body_seq = tcp_seq + body_offset;
-    xdp_keyword_init(&initial.keyword);
-
-    bpf_map_update_elem(&http_flows, &key, &initial, BPF_ANY);
-    flow = bpf_map_lookup_elem(&http_flows, &key);
-    if (!flow)
-      return XDP_PASS;
-
-    increment_counter(COUNT_HTTP);
-
+    xdp_keyword_init(&stack_keyword);
     if (found_body && body_offset < payload_length) {
       result = scan_content_stream(ctx, data, p + body_offset,
-                                   payload_length - body_offset, &flow->content,
-                                   &flow->keyword, &content_length);
+                                   payload_length - body_offset, &stack_content,
+                                   &stack_keyword, &content_length);
+    } else {
+      result = CONTENT_PARTIAL;
+    }
+
+    if (result == CONTENT_PARTIAL) {
+      struct http_flow_state new_flow = {
+          .next_seq = tcp_seq + payload_length,
+          .body_seq = found_body ? tcp_seq + body_offset : 0,
+          .content = stack_content,
+          .keyword = stack_keyword,
+      };
+
+      bpf_map_update_elem(&http_flows, &key, &new_flow, BPF_ANY);
     }
   } else {
     flow = bpf_map_lookup_elem(&http_flows, &key);
@@ -247,7 +255,8 @@ int xdp_router(struct xdp_md *ctx) {
   }
 
   if (result == CONTENT_COMPLETE) {
-    __u32 route = xdp_keyword_route_for_matches(&flow->keyword);
+    struct xdp_keyword_state *kw = is_post ? &stack_keyword : &flow->keyword;
+    __u32 route = xdp_keyword_route_for_matches(kw);
     __u64 signals = 0;
 
     if (route == XDP_KEYWORD_ROUTE_CODING)
@@ -264,13 +273,14 @@ int xdp_router(struct xdp_md *ctx) {
 #ifdef XDP_PROFILE
     elapsed_ns = bpf_ktime_get_ns() - start_ns;
 #endif
-    emit_route_event(route, model_id, content_length, &flow->keyword,
+    emit_route_event(route, model_id, content_length, key.src_port, kw,
                      elapsed_ns);
 #endif
 
     increment_counter(COUNT_CONTENT_FOUND);
     increment_route_counter(route);
-    bpf_map_delete_elem(&http_flows, &key);
+    if (!is_post && flow)
+      bpf_map_delete_elem(&http_flows, &key);
   } else if (result == CONTENT_PARTIAL) {
     increment_counter(COUNT_CONTENT_PARTIAL);
   }
