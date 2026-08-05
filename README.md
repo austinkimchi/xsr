@@ -45,7 +45,7 @@ sudo benchmarks/run_wrk_benchmark.sh
 sudo CONCURRENCY=8 DURATION=20s benchmarks/run_wrk_benchmark.sh
 ```
 
-Benchmark reports are saved automatically to `reports/wrk-keyword-routing/latest.md`.
+Benchmark results are saved automatically to `results/wrk-keyword-routing/latest.md`.
 
 ## File Structure
 ```
@@ -71,7 +71,7 @@ Benchmark reports are saved automatically to `reports/wrk-keyword-routing/latest
 │   ├── policy_ngram.yaml
 │   └── policy_regex.yaml
 ├── models/
-├── reports/
+├── results/
 │   └── wrk-keyword-routing/
 ├── scripts/
 │   └── generate_keyword_header.py

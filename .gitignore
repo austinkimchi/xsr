@@ -19,7 +19,7 @@ tests/mock_backend
 **/models/
 tests/vllm-sr-bert-stack/
 
-# Generated Benchmark Reports (Keep wrk-keyword-routing)
-reports/
-!reports/wrk-keyword-routing/
-!reports/wrk-keyword-routing/**
+# Generated Benchmark Results (Keep wrk-keyword-routing)
+results/
+!results/wrk-keyword-routing/
+!results/wrk-keyword-routing/**

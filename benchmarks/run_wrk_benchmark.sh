@@ -15,7 +15,7 @@ IFNAME="${IFNAME:-veth0}"
 NETNS="${NETNS:-ns1}"
 XDP_URL="${XDP_URL:-http://10.10.0.1:${XDP_PORT}/v1/chat/completions}"
 VLLM_URL="${VLLM_URL:-http://127.0.0.1:8899/v1/chat/completions}"
-REPORT_DIR="${ROOT_DIR}/reports/wrk-keyword-routing"
+REPORT_DIR="${ROOT_DIR}/results/wrk-keyword-routing"
 TIMESTAMP="$(date +%Y%m%d_%H%M%S)"
 REPORT_FILE="${REPORT_DIR}/wrk_benchmark_${TIMESTAMP}.md"
 LATEST_FILE="${REPORT_DIR}/latest.md"
@@ -103,7 +103,7 @@ trap cleanup EXIT
 sleep 1.5
 
 run_benchmark() {
-    echo "# High-Performance ${WRK_BIN} Benchmark Report"
+    echo "# High-Performance ${WRK_BIN} Benchmark Results"
     echo ""
     echo "- Timestamp: \`$(date)\`"
     echo "- Tool: \`${WRK_BIN}\`"
@@ -141,7 +141,7 @@ fi
 
 echo ""
 echo "================================================================="
-echo " Benchmark complete! Report saved to:"
+echo " Benchmark complete! Results saved to:"
 echo "   - ${REPORT_FILE}"
 echo "   - ${LATEST_FILE}"
 echo "================================================================="
