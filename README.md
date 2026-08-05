@@ -21,22 +21,62 @@ client sends HTTPS
 - Support VSR Decisions (AND OR NOT operators)
 - Forward to final models
 
+## Environment Setup & Benchmarking
+
+### 1. Network Namespace & Interface Setup
+Set up the network namespace (`ns1`) and virtual Ethernet pair (`veth0` / `veth1`):
+```bash
+sudo make setup
+```
+
+### 2. Build eBPF Router with Keyword Policy
+Compile the XDP router binary, BPF object, and mock backend for a specific keyword policy (e.g. `policy_literal.yaml`):
+```bash
+sudo make KEYWORD_POLICY=config/policy_literal.yaml dev
+```
+
+### 3. Run High-Performance Load Benchmark
+Execute the high-throughput `wrk` / `wrk2` load benchmark with dataset prompts:
+```bash
+# Default run (Concurrency = 4, Duration = 15s)
+sudo benchmarks/run_wrk_benchmark.sh
+
+# Custom run (e.g. Concurrency = 8, Duration = 20s)
+sudo CONCURRENCY=8 DURATION=20s benchmarks/run_wrk_benchmark.sh
+```
+
+Benchmark reports are saved automatically to `reports/wrk-keyword-routing/latest.md`.
+
 ## File Structure
 ```
 .
-├── models
-│   ├── xdp_ngram_model_fnv.json
-├── reports
-│   └── xdp_benchmark_final.md
-├── tests
-│   └── test_ngram_routing.py
+├── benchmarks/
+│   ├── benchmark_keyword_routing.py
+│   ├── export_dataset_prompts.py
+│   ├── mock_backend.c
+│   ├── prompts.lua
+│   ├── run_all_keyword_benchmarks.sh
+│   └── run_wrk_benchmark.sh
+├── config/
+│   ├── policy_bm25.yaml
+│   ├── policy_exact.yaml
+│   ├── policy_literal.yaml
+│   ├── policy_ngram.yaml
+│   └── policy_regex.yaml
+├── models/
+├── reports/
+│   └── wrk-keyword-routing/
+├── scripts/
+│   └── generate_keyword_header.py
+├── Makefile
 ├── README.md
 ├── xdp_decision.bpf.h
 ├── xdp_http_parser.bpf.h
-├── xdp_ngram_classifier.bpf.h
+├── xdp_keyword_classifier.bpf.h
+├── xdp_keyword_policy.generated.h
 ├── xdp_router.bpf.c
 ├── xdp_router.c
-└── xdp_router.h
+├── xdp_router.h
 └── xdp_signals.bpf.h
 ```
 
