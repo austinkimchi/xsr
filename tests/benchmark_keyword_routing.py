@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
 import contextlib
 import dataclasses
 import http.client
@@ -30,8 +31,8 @@ sys.path.insert(0, str(ROOT / "scripts"))
 from generate_keyword_header import load_policy, validate_policy  # noqa: E402
 
 
-DEFAULT_CONFIG = ROOT / "config" / "vllm_sr_keyword_config.yaml"
-DEFAULT_REPORT_DIR = ROOT / "reports" / "keyword-routing"
+DEFAULT_CONFIG = ROOT / "config" / "policy_literal.yaml"
+DEFAULT_REPORT_DIR = ROOT / "reports"
 DEFAULT_CACHE_DIR = Path.home() / ".cache" / "xdp-keyword-routing"
 DEFAULT_XDP_URL = "http://10.10.0.1:18081/v1/chat/completions"
 DEFAULT_VLLM_SR_URL = "http://127.0.0.1:8899/v1/chat/completions"
@@ -85,6 +86,7 @@ class Result:
     route: str | None
     matched_keyword: str | None
     xdp_elapsed_ns: int | None = None
+    src_port: int | None = None
     error: str | None = None
 
 
@@ -114,14 +116,37 @@ class ThreadingHTTPServer(http.server.ThreadingHTTPServer):
 
 @contextlib.contextmanager
 def mock_backend(port: int):
-    server = ThreadingHTTPServer(("0.0.0.0", port), MockBackend)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    try:
-        yield
-    finally:
-        server.shutdown()
-        server.server_close()
+    c_binary = ROOT / "tests" / "mock_backend"
+    if c_binary.exists() and os.access(c_binary, os.X_OK):
+        proc = subprocess.Popen(
+            [str(c_binary), str(port)],
+            cwd=ROOT,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        time.sleep(0.1)
+        if proc.poll() is not None:
+            stderr = proc.stderr.read().strip() if proc.stderr else ""
+            raise RuntimeError(f"mock backend failed to start on port {port}: {stderr or 'unknown error'}")
+        try:
+            yield
+        finally:
+            proc.terminate()
+            with contextlib.suppress(subprocess.TimeoutExpired):
+                proc.wait(timeout=2)
+            if proc.poll() is None:
+                proc.kill()
+                proc.wait(timeout=2)
+    else:
+        server = ThreadingHTTPServer(("0.0.0.0", port), MockBackend)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            yield
+        finally:
+            server.shutdown()
+            server.server_close()
 
 
 def chat_url(url: str) -> str:
@@ -174,8 +199,12 @@ def send_case(url: str, case: Case, timeout_s: float) -> Result:
     if parsed.query:
         path = f"{path}?{parsed.query}"
     start = time.perf_counter_ns()
+    src_port: int | None = None
     try:
         conn = http.client.HTTPConnection(parsed.hostname, parsed.port, timeout=timeout_s)
+        conn.connect()
+        if conn.sock:
+            src_port = conn.sock.getsockname()[1]
         conn.request(
             "POST",
             path,
@@ -193,6 +222,7 @@ def send_case(url: str, case: Case, timeout_s: float) -> Result:
             elapsed_ms,
             route_from_headers(headers),
             case.matched_keyword,
+            src_port=src_port,
         )
     except Exception as exc:
         elapsed_ms = (time.perf_counter_ns() - start) / 1_000_000
@@ -203,6 +233,7 @@ def send_case(url: str, case: Case, timeout_s: float) -> Result:
             elapsed_ms,
             None,
             case.matched_keyword,
+            src_port=src_port,
             error=str(exc),
         )
     finally:
@@ -210,16 +241,81 @@ def send_case(url: str, case: Case, timeout_s: float) -> Result:
             conn.close()  # type: ignore[name-defined]
 
 
-def run_client_worker(url: str, timeout_s: float) -> int:
-    for line in sys.stdin:
-        item = json.loads(line)
-        case = Case(
-            item["prompt"],
-            item["expected_route"],
-            item.get("matched_keyword"),
-            item.get("source_index", 0),
+_thread_local = threading.local()
+
+
+def get_thread_connection(hostname: str, port: int, timeout_s: float) -> http.client.HTTPConnection:
+    conn = getattr(_thread_local, "conn", None)
+    if conn is None:
+        conn = http.client.HTTPConnection(hostname, port, timeout=timeout_s)
+        conn.connect()
+        _thread_local.conn = conn
+    return conn
+
+
+def send_case_persistent(url: str, case: Case, timeout_s: float) -> Result:
+    parsed = urllib.parse.urlparse(chat_url(url))
+    path = parsed.path or "/"
+    if parsed.query:
+        path = f"{path}?{parsed.query}"
+    start = time.perf_counter_ns()
+    src_port: int | None = None
+    try:
+        conn = get_thread_connection(parsed.hostname, parsed.port or 80, timeout_s)
+        if conn.sock:
+            src_port = conn.sock.getsockname()[1]
+        conn.request(
+            "POST",
+            path,
+            body=chat_body(case.prompt),
+            headers={"Content-Type": "application/json", "Connection": "keep-alive"},
         )
-        print(json.dumps(dataclasses.asdict(send_case(url, case, timeout_s))), flush=True)
+        response = conn.getresponse()
+        response.read()
+        elapsed_ms = (time.perf_counter_ns() - start) / 1_000_000
+        headers = {key.lower(): value for key, value in response.getheaders()}
+        return Result(
+            case.prompt,
+            case.expected_route,
+            response.status,
+            elapsed_ms,
+            route_from_headers(headers),
+            case.matched_keyword,
+            src_port=src_port,
+        )
+    except Exception:
+        with contextlib.suppress(Exception):
+            if hasattr(_thread_local, "conn"):
+                _thread_local.conn.close()
+                delattr(_thread_local, "conn")
+        return send_case(url, case, timeout_s)
+
+
+def send_cases_concurrently(url: str, cases: list[Case], timeout_s: float, concurrency: int) -> list[Result]:
+    if concurrency <= 1:
+        return [send_case(url, case, timeout_s) for case in cases]
+    with concurrent.futures.ThreadPoolExecutor(max_workers=concurrency) as executor:
+        futures = [executor.submit(send_case_persistent, url, case, timeout_s) for case in cases]
+        return [future.result() for future in futures]
+
+
+def run_client_worker(url: str, timeout_s: float, concurrency: int = 1) -> int:
+    cases = []
+    for line in sys.stdin:
+        if not line.strip():
+            continue
+        item = json.loads(line)
+        cases.append(
+            Case(
+                item["prompt"],
+                item["expected_route"],
+                item.get("matched_keyword"),
+                item.get("source_index", 0),
+            )
+        )
+    results = send_cases_concurrently(url, cases, timeout_s, concurrency)
+    for result in results:
+        print(json.dumps(dataclasses.asdict(result), separators=(",", ":")), flush=True)
     return 0
 
 
@@ -479,7 +575,7 @@ def run_vllm(args: argparse.Namespace, cases: list[Case]) -> dict[str, Any]:
         return {"mode": "vllm-sr", "status": "skipped", "reason": "vLLM-SR endpoint is not reachable"}
     cpu_start = read_cpu()
     start = time.perf_counter()
-    results = [send_case(args.vllm_sr_url, case, args.timeout_s) for case in cases]
+    results = send_cases_concurrently(args.vllm_sr_url, cases, args.timeout_s, args.concurrency)
     wall_s = time.perf_counter() - start
     return summarize(
         "vllm-sr",
@@ -512,6 +608,7 @@ def ensure_xdp(args: argparse.Namespace) -> str | None:
     if not args.no_build:
         checked(["make", "dev"])
     subprocess.run(["ip", "link", "set", "dev", args.xdp_ifname, "xdp", "off"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    time.sleep(0.5)
     return None
 
 
@@ -540,11 +637,22 @@ def wait_for_attach(router: subprocess.Popen[str], out: queue.Queue[str]) -> boo
         if router.poll() is not None:
             return False
         try:
-            if "XDP attached" in out.get(timeout=0.2):
+            line = out.get(timeout=0.1)
+            if "XDP attached" in line:
                 return True
         except queue.Empty:
             pass
     return False
+
+
+def drain_output(out: queue.Queue[str], limit: int = 20) -> list[str]:
+    lines: list[str] = []
+    while len(lines) < limit:
+        try:
+            lines.append(out.get_nowait())
+        except queue.Empty:
+            break
+    return lines
 
 
 def route_events(out: queue.Queue[str], wanted: int, timeout_s: float) -> list[dict[str, Any]]:
@@ -576,6 +684,8 @@ def netns_requests(args: argparse.Namespace, cases: list[Case]) -> list[Result]:
             str(Path(__file__).resolve()),
             "--client-worker",
             chat_url(args.xdp_url),
+            "--concurrency",
+            str(args.concurrency),
             "--timeout-s",
             str(args.timeout_s),
         ],
@@ -594,6 +704,9 @@ def netns_requests(args: argparse.Namespace, cases: list[Case]) -> list[Result]:
         stderr = worker.stderr.read() if worker.stderr else ""
         if worker.wait(timeout=5) != 0:
             raise RuntimeError(stderr.strip())
+        if len(results) != len(cases):
+            detail = stderr.strip() or f"got {len(results)} results for {len(cases)} cases"
+            raise RuntimeError(f"netns client returned incomplete results: {detail}")
         return results
     finally:
         if worker.poll() is None:
@@ -641,7 +754,11 @@ def run_xdp(args: argparse.Namespace, cases: list[Case]) -> dict[str, Any]:
         router = subprocess.Popen([str(ROOT / "xdp_router")], cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
         threading.Thread(target=read_router, args=(router, out), daemon=True).start()
         if not wait_for_attach(router, out):
-            return {"mode": "xdp", "status": "skipped", "reason": "xdp_router did not attach"}
+            logs = drain_output(out)
+            reason = "xdp_router did not attach"
+            if logs:
+                reason = f"{reason}: {'; '.join(logs[-5:])}"
+            return {"mode": "xdp", "status": "skipped", "reason": reason}
 
         cpu_start = read_cpu()
         start = time.perf_counter()
@@ -649,13 +766,28 @@ def run_xdp(args: argparse.Namespace, cases: list[Case]) -> dict[str, Any]:
         wall_s = time.perf_counter() - start
         host_cpu = cpu_delta(cpu_start, read_cpu())
         events = route_events(out, len(results), args.event_timeout_s)
-        for result, event in zip(results, events):
-            result.route = canonical_route(event.get("route_name"))
-            result.xdp_elapsed_ns = event.get("xdp_elapsed_ns")
+        events_by_port: dict[int, list[dict[str, Any]]] = {}
+        for event in events:
+            if "src_port" in event:
+                port = int(event["src_port"])
+                events_by_port.setdefault(port, []).append(event)
+
+        for index, result in enumerate(results):
+            event = None
+            if result.src_port and events_by_port.get(result.src_port):
+                event = events_by_port[result.src_port].pop(0)
+            elif not result.src_port and index < len(events):
+                event = events[index]
+            if event:
+                result.route = canonical_route(event.get("route_name"))
+                result.xdp_elapsed_ns = event.get("xdp_elapsed_ns")
 
         summary = summarize("xdp", results, wall_s, host_cpu, sampled_cpu(pid=router.pid))
         summary["route_events"] = len(events)
         summary["missing_route_events"] = max(0, len(results) - len(events))
+        if len(events) < len(results):
+            summary["status"] = "incomplete"
+            summary["reason"] = f"received {len(events)} XDP route events for {len(results)} client responses"
         return summary
     finally:
         if router:
@@ -703,15 +835,33 @@ def fmt(value: Any, digits: int = 3) -> str:
     return f"{value:.{digits}f}" if isinstance(value, float) else str(value)
 
 
-def write_reports(report: dict[str, Any], report_dir: Path) -> None:
+def get_report_filename(config_path: Path, report_name_arg: str | None = None) -> tuple[str, str]:
+    if report_name_arg:
+        stem = Path(report_name_arg).stem
+        md_name = report_name_arg if report_name_arg.endswith(".md") else f"{report_name_arg}.md"
+        json_name = f"{stem}.json"
+        return md_name, json_name
+
+    stem = config_path.stem
+    if stem.startswith("policy_"):
+        method = stem.removeprefix("policy_")
+        return f"keyword_{method}.md", f"keyword_{method}.json"
+
+    return "keyword_routing_benchmark.md", "keyword_routing_benchmark.json"
+
+
+def write_reports(report: dict[str, Any], report_dir: Path, report_name: str = "keyword_routing_benchmark.md") -> None:
     report_dir.mkdir(parents=True, exist_ok=True)
-    (report_dir / "keyword_routing_benchmark.json").write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
+    stem = Path(report_name).stem
+    json_name = f"{stem}.json"
+    (report_dir / json_name).write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
 
     dataset = report["dataset"]
     selected = dataset["selected_counts"]
     control_results = [r for r in report["results"] if r.get("mode") in {"direct-netns", "direct"}]
     test_results = [r for r in report["results"] if r.get("mode") not in {"direct-netns", "direct"}]
 
+    concurrency = report.get("concurrency", 1)
     lines = [
         "# Keyword Routing Benchmark",
         "",
@@ -720,6 +870,7 @@ def write_reports(report: dict[str, Any], report_dir: Path) -> None:
         f"- Selected prompts: coding={selected['coding']}, math={selected['math']}, others={selected['others']}",
         f"- Filtered rows: embedded_quote={selected['embedded_quote']}, duplicate_prompt={selected['duplicate_prompt']}, missing_prompt={selected['missing_prompt']}",
         f"- Policy: case_sensitive={report['policy']['case_sensitive']}; keywords={report['policy']['keyword_count']}",
+        f"- Concurrency: {concurrency}",
         "",
     ]
 
@@ -732,7 +883,7 @@ def write_reports(report: dict[str, Any], report_dir: Path) -> None:
         ]
         for result in control_results:
             if result.get("status") != "ok":
-                lines.append(f"| {result['mode']} | 0 | n/a | n/a | n/a | n/a | n/a |")
+                lines.append(f"| {result['mode']} ({result.get('reason', 'skipped')}) | 0 | n/a | n/a | n/a | n/a | n/a |")
                 continue
             latency = result["latency_ms"]
             lines.append(
@@ -750,7 +901,7 @@ def write_reports(report: dict[str, Any], report_dir: Path) -> None:
     ]
     for result in test_results:
         if result.get("status") != "ok":
-            lines.append(f"| {result['mode']} | 0 | n/a | n/a | n/a | n/a | n/a | n/a |")
+            lines.append(f"| {result['mode']} ({result.get('reason', result.get('status', 'skipped'))}) | {result.get('requests', 0)} | n/a | n/a | n/a | n/a | n/a | n/a |")
             continue
         latency = result["latency_ms"]
         lines.append(
@@ -795,18 +946,20 @@ def write_reports(report: dict[str, Any], report_dir: Path) -> None:
         "Note: Sampled CPU % for XDP measures the userspace logger process (xdp_router) handling XDP_DEBUG ring-buffer polling. In production without debug logging, the CPU usage is negligible.",
     ]
 
-    (report_dir / "keyword_routing_benchmark.md").write_text("\n".join(lines) + "\n")
+    (report_dir / report_name).write_text("\n".join(lines) + "\n")
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--client-worker")
+    parser.add_argument("-c", "--concurrency", type=int, default=1, help="Number of concurrent client workers / connections")
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
     parser.add_argument("--dataset", choices=sorted(DATASETS), default="supralabs")
     parser.add_argument("--scan-limit", type=int, default=2000)
     parser.add_argument("--per-route", type=int, default=50)
     parser.add_argument("--cache-dir", type=Path, default=DEFAULT_CACHE_DIR)
     parser.add_argument("--report-dir", type=Path, default=DEFAULT_REPORT_DIR)
+    parser.add_argument("--report-name", default=None, help="Markdown report filename (e.g. keyword_literal.md)")
     parser.add_argument("--modes", default="direct-netns,xdp,vllm-sr")
     parser.add_argument("--timeout-s", type=float, default=10.0)
     parser.add_argument("--event-timeout-s", type=float, default=10.0)
@@ -826,7 +979,7 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
     if args.client_worker:
-        return run_client_worker(args.client_worker, args.timeout_s)
+        return run_client_worker(args.client_worker, args.timeout_s, args.concurrency)
 
     cases, dataset, policy = load_cases(args)
     modes = [mode.strip() for mode in args.modes.split(",") if mode.strip()]
@@ -851,6 +1004,7 @@ def main() -> int:
     report = {
         "command": sys.argv,
         "config": str(args.config),
+        "concurrency": args.concurrency,
         "machine": {
             "platform": platform.platform(),
             "kernel": platform.release(),
@@ -862,7 +1016,8 @@ def main() -> int:
         "results": results,
         "comparison": comparison(results),
     }
-    write_reports(report, args.report_dir)
+    md_name, _ = get_report_filename(args.config, args.report_name)
+    write_reports(report, args.report_dir, md_name)
     print(json.dumps(report, indent=2, sort_keys=True))
     return 0
 
