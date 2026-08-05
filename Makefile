@@ -6,6 +6,7 @@ PYTHON ?= python3
 ARCH := $(shell uname -m)
 BPF_CFLAGS := -O2 -g -target bpf \
 	-D__TARGET_ARCH_x86 \
+	-I. -Ibpf \
 	-I/usr/include/$(ARCH)-linux-gnu
 
 USER_CFLAGS := -Wall -O2
@@ -36,14 +37,14 @@ xdp_router: xdp_router.c xdp_router.h
 benchmarks/mock_backend: benchmarks/mock_backend.c
 	$(CC) -O3 $< -o $@ -lpthread
 
-xdp_keyword_policy.generated.h: $(KEYWORD_POLICY) scripts/generate_keyword_header.py
+bpf/xdp_keyword_policy.generated.h: $(KEYWORD_POLICY) scripts/generate_keyword_header.py
 	$(PYTHON) scripts/generate_keyword_header.py $(KEYWORD_POLICY) $@
 
-xdp_router.bpf.o: xdp_router.bpf.c xdp_router.h xdp_http_parser.bpf.h xdp_keyword_classifier.bpf.h xdp_keyword_policy.generated.h
+xdp_router.bpf.o: bpf/xdp_router.bpf.c xdp_router.h bpf/xdp_http_parser.bpf.h bpf/xdp_keyword_classifier.bpf.h bpf/xdp_keyword_policy.generated.h
 	$(BPF_CLANG) $(BPF_CFLAGS) -c $< -o $@
 
 clean:
-	rm -f xdp_router xdp_router.bpf.o xdp_keyword_policy.generated.h benchmarks/mock_backend
+	rm -f xdp_router xdp_router.bpf.o bpf/xdp_keyword_policy.generated.h benchmarks/mock_backend
 
 setup:
 	@if ! ip netns list | awk '{print $$1}' | grep -Fxq "$(XDP_NETNS)"; then \

@@ -50,6 +50,13 @@ Benchmark reports are saved automatically to `reports/wrk-keyword-routing/latest
 ## File Structure
 ```
 .
+├── bpf/
+│   ├── xdp_decision.bpf.h
+│   ├── xdp_http_parser.bpf.h
+│   ├── xdp_keyword_classifier.bpf.h
+│   ├── xdp_keyword_policy.generated.h
+│   ├── xdp_router.bpf.c
+│   └── xdp_signals.bpf.h
 ├── benchmarks/
 │   ├── benchmark_keyword_routing.py
 │   ├── export_dataset_prompts.py
@@ -70,14 +77,8 @@ Benchmark reports are saved automatically to `reports/wrk-keyword-routing/latest
 │   └── generate_keyword_header.py
 ├── Makefile
 ├── README.md
-├── xdp_decision.bpf.h
-├── xdp_http_parser.bpf.h
-├── xdp_keyword_classifier.bpf.h
-├── xdp_keyword_policy.generated.h
-├── xdp_router.bpf.c
 ├── xdp_router.c
 ├── xdp_router.h
-└── xdp_signals.bpf.h
 ```
 
 ## References
