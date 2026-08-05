@@ -85,7 +85,7 @@ class ThreadingHTTPServer(http.server.ThreadingHTTPServer):
 
 @contextlib.contextmanager
 def run_mock_backend(host: str, port: int):
-    c_binary = ROOT / "tests" / "mock_backend"
+    c_binary = ROOT / "benchmarks" / "mock_backend"
     if c_binary.exists() and os.access(c_binary, os.X_OK):
         proc = subprocess.Popen(
             [str(c_binary), str(port)],
