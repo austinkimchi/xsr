@@ -46,6 +46,11 @@ xdp_router.bpf.o: bpf/xdp_router.bpf.c xdp_router.h bpf/xdp_http_parser.bpf.h bp
 clean:
 	rm -f xdp_router xdp_router.bpf.o bpf/xdp_keyword_policy.generated.h benchmarks/mock_backend
 
+clean-setup:
+	@ip link delete $(XDP_HOST_IF) 2>/dev/null || true
+	@ip netns delete $(XDP_NETNS) 2>/dev/null || true
+	@echo "network setup reset"
+
 setup:
 	@if ! ip netns list | awk '{print $$1}' | grep -Fxq "$(XDP_NETNS)"; then \
 		ip netns add $(XDP_NETNS); \
@@ -56,8 +61,12 @@ setup:
 		ip link add $(XDP_HOST_IF) type veth peer name $(XDP_PEER_IF); \
 		ip link set $(XDP_PEER_IF) netns $(XDP_NETNS); \
 	else \
-		echo "partial setup exists; expected both $(XDP_HOST_IF) and $(XDP_NETNS)/$(XDP_PEER_IF), or neither" >&2; \
-		exit 1; \
+		echo "Partial setup detected; resetting network interfaces..." >&2; \
+		ip link delete $(XDP_HOST_IF) 2>/dev/null || true; \
+		ip netns delete $(XDP_NETNS) 2>/dev/null || true; \
+		ip netns add $(XDP_NETNS); \
+		ip link add $(XDP_HOST_IF) type veth peer name $(XDP_PEER_IF); \
+		ip link set $(XDP_PEER_IF) netns $(XDP_NETNS); \
 	fi
 	@ip addr show dev $(XDP_HOST_IF) | grep -Fq "$(XDP_HOST_ADDR)" || ip addr add $(XDP_HOST_ADDR) dev $(XDP_HOST_IF)
 	@ip netns exec $(XDP_NETNS) ip addr show dev $(XDP_PEER_IF) | grep -Fq "$(XDP_PEER_ADDR)" || ip netns exec $(XDP_NETNS) ip addr add $(XDP_PEER_ADDR) dev $(XDP_PEER_IF)
@@ -66,4 +75,4 @@ setup:
 	@ip netns exec $(XDP_NETNS) ip link set lo up
 	@echo "setup complete: $(XDP_HOST_IF)=$(XDP_HOST_ADDR), $(XDP_NETNS)/$(XDP_PEER_IF)=$(XDP_PEER_ADDR)"
 
-.PHONY: all dev clean setup
+.PHONY: all dev clean clean-setup setup
