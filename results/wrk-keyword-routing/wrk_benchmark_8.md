@@ -1,6 +1,6 @@
 # High-Performance wrk Benchmark Results
 
-- Timestamp: `Wed Aug  5 05:05:36 PM PDT 2026`
+- Timestamp: `Wed Aug  5 05:37:27 PM PDT 2026`
 - Tool: `wrk`
 - Threads: `4`
 - Connections: `8`
@@ -16,11 +16,11 @@
 Running 10s test @ http://10.10.0.1:18081/v1/chat/completions
   4 threads and 8 connections
   Thread Stats   Avg      Stdev     Max   +/- Stdev
-    Latency   414.00us  244.78us   5.09ms   87.20%
-    Req/Sec     4.79k   536.04     9.04k    84.08%
-  191669 requests in 10.10s, 29.79MB read
-Requests/sec:  18978.30
-Transfer/sec:      2.95MB
+    Latency   457.28us  258.19us   3.97ms   85.44%
+    Req/Sec     4.33k   472.36     8.24k    83.33%
+  173172 requests in 10.10s, 26.92MB read
+Requests/sec:  17146.39
+Transfer/sec:      2.67MB
 ```
 
 ## [2/2] vLLM-SR Route
@@ -33,9 +33,9 @@ Transfer/sec:      2.95MB
 Running 10s test @ http://127.0.0.1:8899/v1/chat/completions
   4 threads and 8 connections
   Thread Stats   Avg      Stdev     Max   +/- Stdev
-    Latency     1.71ms  505.08us  10.55ms   93.08%
-    Req/Sec   603.40     45.01   686.00     69.12%
-  12260 requests in 10.01s, 4.80MB read
-Requests/sec:   1224.75
-Transfer/sec:    490.86KB
+    Latency     3.69ms    1.54ms  13.78ms   82.52%
+    Req/Sec   547.63     57.04   660.00     56.00%
+  21819 requests in 10.01s, 8.53MB read
+Requests/sec:   2179.64
+Transfer/sec:      0.85MB
 ```

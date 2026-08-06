@@ -1,6 +1,6 @@
-# High-Performance wrk Benchmark Report
+# High-Performance wrk Benchmark Results
 
-- Timestamp: `Wed Aug  5 04:33:48 PM PDT 2026`
+- Timestamp: `Wed Aug  5 05:38:09 PM PDT 2026`
 - Tool: `wrk`
 - Threads: `4`
 - Connections: `4`
@@ -8,34 +8,34 @@
 
 ## [1/2] XDP Route (via netns)
 ```
-[Lua] Loaded 150 prompts from tests/dataset_prompts.jsonl
-[Lua] Loaded 150 prompts from tests/dataset_prompts.jsonl
-[Lua] Loaded 150 prompts from tests/dataset_prompts.jsonl
-[Lua] Loaded 150 prompts from tests/dataset_prompts.jsonl
-[Lua] Loaded 150 prompts from tests/dataset_prompts.jsonl
+[Lua] Loaded 150 prompts from benchmarks/dataset_prompts.jsonl
+[Lua] Loaded 150 prompts from benchmarks/dataset_prompts.jsonl
+[Lua] Loaded 150 prompts from benchmarks/dataset_prompts.jsonl
+[Lua] Loaded 150 prompts from benchmarks/dataset_prompts.jsonl
+[Lua] Loaded 150 prompts from benchmarks/dataset_prompts.jsonl
 Running 10s test @ http://10.10.0.1:18081/v1/chat/completions
   4 threads and 4 connections
   Thread Stats   Avg      Stdev     Max   +/- Stdev
-    Latency   221.82us  159.48us   4.39ms   90.27%
-    Req/Sec     4.66k   105.21     4.87k    71.78%
-  187257 requests in 10.10s, 29.11MB read
-Requests/sec:  18540.85
-Transfer/sec:      2.88MB
+    Latency   251.15us  186.17us   3.91ms   91.10%
+    Req/Sec     4.15k   218.80     4.48k    93.56%
+  167059 requests in 10.10s, 25.97MB read
+Requests/sec:  16540.97
+Transfer/sec:      2.57MB
 ```
 
 ## [2/2] vLLM-SR Route
 ```
-[Lua] Loaded 150 prompts from tests/dataset_prompts.jsonl
-[Lua] Loaded 150 prompts from tests/dataset_prompts.jsonl
-[Lua] Loaded 150 prompts from tests/dataset_prompts.jsonl
-[Lua] Loaded 150 prompts from tests/dataset_prompts.jsonl
-[Lua] Loaded 150 prompts from tests/dataset_prompts.jsonl
+[Lua] Loaded 150 prompts from benchmarks/dataset_prompts.jsonl
+[Lua] Loaded 150 prompts from benchmarks/dataset_prompts.jsonl
+[Lua] Loaded 150 prompts from benchmarks/dataset_prompts.jsonl
+[Lua] Loaded 150 prompts from benchmarks/dataset_prompts.jsonl
+[Lua] Loaded 150 prompts from benchmarks/dataset_prompts.jsonl
 Running 10s test @ http://127.0.0.1:8899/v1/chat/completions
   4 threads and 4 connections
   Thread Stats   Avg      Stdev     Max   +/- Stdev
-    Latency     2.35ms  580.31us  12.57ms   65.87%
-    Req/Sec   426.84     87.71   616.00     74.00%
-  17006 requests in 10.01s, 6.65MB read
-Requests/sec:   1699.32
-Transfer/sec:    680.03KB
+    Latency     2.30ms  377.55us   7.18ms   82.26%
+    Req/Sec   434.38     22.17   474.00     79.50%
+  17300 requests in 10.01s, 6.76MB read
+Requests/sec:   1728.99
+Transfer/sec:    692.31KB
 ```
