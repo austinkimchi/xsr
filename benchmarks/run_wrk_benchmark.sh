@@ -14,6 +14,7 @@ CODING_BACKEND_PORT="${CODING_BACKEND_PORT:-18391}"
 MATH_BACKEND_PORT="${MATH_BACKEND_PORT:-18392}"
 OTHERS_BACKEND_PORT="${OTHERS_BACKEND_PORT:-18393}"
 VLLM_BACKEND_PORT="${VLLM_BACKEND_PORT:-18394}"
+START_VLLM_MOCK="${START_VLLM_MOCK:-0}"
 IFNAME="${IFNAME:-veth0}"
 NETNS="${NETNS:-ns1}"
 XDP_URL="${XDP_URL:-http://127.0.0.1:${XDP_PORT}/v1/chat/completions}"
@@ -36,6 +37,7 @@ if [ "$EUID" -ne 0 ]; then
         MATH_BACKEND_PORT="$MATH_BACKEND_PORT" \
         OTHERS_BACKEND_PORT="$OTHERS_BACKEND_PORT" \
         VLLM_BACKEND_PORT="$VLLM_BACKEND_PORT" \
+        START_VLLM_MOCK="$START_VLLM_MOCK" \
         XDP_URL="$XDP_URL" \
         VLLM_URL="$VLLM_URL" \
         "$0" "$@"
@@ -103,9 +105,12 @@ echo "Starting others backend on port ${OTHERS_BACKEND_PORT}..."
 ./benchmarks/mock_backend "${OTHERS_BACKEND_PORT}" others > /dev/null 2>&1 &
 OTHERS_MOCK_PID=$!
 
-echo "Starting mock HTTP backend for vLLM-SR on port ${VLLM_BACKEND_PORT}..."
-./benchmarks/mock_backend "${VLLM_BACKEND_PORT}" others > /dev/null 2>&1 &
-VLLM_MOCK_PID=$!
+VLLM_MOCK_PID=""
+if [ "$START_VLLM_MOCK" = "1" ]; then
+    echo "Starting auxiliary mock HTTP backend for vLLM-SR on port ${VLLM_BACKEND_PORT}..."
+    ./benchmarks/mock_backend "${VLLM_BACKEND_PORT}" others > /dev/null 2>&1 &
+    VLLM_MOCK_PID=$!
+fi
 
 # Start routing proxy in background. Set SK_ROUTER_MODE=sockmap to exercise the
 # experimental kernel SOCKMAP path instead.
@@ -176,13 +181,13 @@ run_benchmark() {
     echo ""
     echo "## [1/2] Routing Proxy"
     echo "\`\`\`"
-    "$WRK_BIN" -t"$THREADS" -c"$CONCURRENCY" -d"$DURATION" $RATE_ARG -s benchmarks/prompts.lua "$XDP_URL"
+    VERIFY_BACKEND_MARKERS=1 "$WRK_BIN" -t"$THREADS" -c"$CONCURRENCY" -d"$DURATION" $RATE_ARG -s benchmarks/prompts.lua "$XDP_URL"
     echo "\`\`\`"
     echo ""
     echo "## [2/2] vLLM-SR Route"
     echo "\`\`\`"
     if socket_check=$(curl -s -m 1 "$VLLM_URL" 2>&1); [[ ! "$socket_check" =~ "Failed to connect" ]]; then
-        "$WRK_BIN" -t"$THREADS" -c"$CONCURRENCY" -d"$DURATION" $RATE_ARG -s benchmarks/prompts.lua "$VLLM_URL"
+        VERIFY_BACKEND_MARKERS=1 "$WRK_BIN" -t"$THREADS" -c"$CONCURRENCY" -d"$DURATION" $RATE_ARG -s benchmarks/prompts.lua "$VLLM_URL"
     else
         echo "vLLM-SR endpoint ($VLLM_URL) unreachable, skipping vLLM-SR run."
     fi

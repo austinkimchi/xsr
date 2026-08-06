@@ -9,6 +9,7 @@ local all_threads = {}
 local route_matches = 0
 local route_mismatches = 0
 local responses = 0
+local verify_backend_markers = os.getenv("VERIFY_BACKEND_MARKERS") ~= "0"
 local script_dir = debug.getinfo(1, "S").source:sub(2):match("(.*[/\\])") or "./"
 local prompts_file = script_dir .. "dataset_prompts.jsonl"
 
@@ -113,16 +114,6 @@ done = function(summary, latency, requests)
         total_expected_counts.unknown = total_expected_counts.unknown + (thread:get("expected_unknown") or 0)
     end
 
-    local agreement = 0
-    local aggregate_matches = 0
-    if total_responses > 0 then
-        aggregate_matches =
-            math.min(total_backend_counts.coding, total_expected_counts.coding) +
-            math.min(total_backend_counts.math, total_expected_counts.math) +
-            math.min(total_backend_counts.others, total_expected_counts.others)
-        agreement = aggregate_matches / total_responses
-    end
-
     io.write(string.format(
         "[Lua] backend markers: coding=%d math=%d others=%d unknown=%d\n",
         total_backend_counts.coding,
@@ -137,12 +128,30 @@ done = function(summary, latency, requests)
         total_expected_counts.others,
         total_expected_counts.unknown
     ))
-    io.write(string.format(
-        "[Lua] aggregate route agreement: %.6f (%d/%d); fifo_matches=%d fifo_mismatches=%d\n",
-        agreement,
-        aggregate_matches,
-        total_responses,
-        total_matches,
-        total_mismatches
-    ))
+
+    if verify_backend_markers then
+        local agreement = 0
+        local aggregate_matches = 0
+        if total_responses > 0 then
+            aggregate_matches =
+                math.min(total_backend_counts.coding, total_expected_counts.coding) +
+                math.min(total_backend_counts.math, total_expected_counts.math) +
+                math.min(total_backend_counts.others, total_expected_counts.others)
+            agreement = aggregate_matches / total_responses
+        end
+
+        io.write(string.format(
+            "[Lua] aggregate route agreement: %.6f (%d/%d); fifo_matches=%d fifo_mismatches=%d\n",
+            agreement,
+            aggregate_matches,
+            total_responses,
+            total_matches,
+            total_mismatches
+        ))
+        if total_responses > 0 and agreement < 0.99 then
+            io.write("[Lua] warning: backend marker agreement is low; verify the target has reloaded policy config with distinct backend endpoints\n")
+        end
+    else
+        io.write("[Lua] backend marker agreement: skipped for this target; backend markers reflect configured upstream endpoints, not necessarily logical route selection\n")
+    end
 end

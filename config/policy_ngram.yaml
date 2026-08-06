@@ -20,21 +20,21 @@ providers:
       provider_model_id: math
       backend_refs:
         - name: benchmark
-          endpoint: host.docker.internal:18391
+          endpoint: host.docker.internal:18392
           protocol: http
           weight: 100
     - name: others
       provider_model_id: others
       backend_refs:
         - name: benchmark
-          endpoint: host.docker.internal:18391
+          endpoint: host.docker.internal:18393
           protocol: http
           weight: 100
     - name: benchmark-model
       provider_model_id: benchmark-model
       backend_refs:
         - name: benchmark
-          endpoint: host.docker.internal:18391
+          endpoint: host.docker.internal:18393
           protocol: http
           weight: 100
 

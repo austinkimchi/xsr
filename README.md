@@ -33,6 +33,11 @@ The default `sk_router` control process fails startup unless all three backends
 are reachable. The experimental SOCKMAP mode can be selected with
 `SK_ROUTER_MODE=sockmap`; it populates the decision map before attaching BPF.
 
+The checked-in vLLM-SR policy configs also map coding, math, and others to
+separate marker backend ports so `wrk` can profile physical backend responses.
+Restart or reload vLLM-SR after changing these configs; otherwise its response
+markers can still reflect an older single-backend configuration.
+
 ## Project MVP
 - Signal extraction from the network layer
 - Support some VSR Signals: keyword, complexity, domain
