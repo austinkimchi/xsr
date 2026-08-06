@@ -17,26 +17,12 @@
 #include <unistd.h>
 
 #define DEFAULT_PORT 18081
+#define DEFAULT_BACKEND "others"
 #define NUM_WORKERS 256
-
-static const char HTTP_RESPONSE[] =
-    "HTTP/1.1 200 OK\r\n"
-    "Content-Type: application/json\r\n"
-    "Content-Length: 68\r\n"
-    "Connection: keep-alive\r\n"
-    "\r\n"
-    "{\"id\":\"keyword-benchmark\",\"choices\":[{\"message\":{\"content\":\"ok\"}}]}\n";
-
-static const char HTTP_RESPONSE_CLOSE[] =
-    "HTTP/1.1 200 OK\r\n"
-    "Content-Type: application/json\r\n"
-    "Content-Length: 68\r\n"
-    "Connection: close\r\n"
-    "\r\n"
-    "{\"id\":\"keyword-benchmark\",\"choices\":[{\"message\":{\"content\":\"ok\"}}]}\n";
 
 static int server_fd = -1;
 static volatile int running = 1;
+static const char *backend_name = DEFAULT_BACKEND;
 
 static int contains_close_token(const char *value, size_t len) {
   const char needle[] = "close";
@@ -142,11 +128,20 @@ static void *worker_thread(void *arg) {
       if (buf_used < total_req_len)
         goto close_client;
 
-      // Send HTTP response
-      const char *response = keep_alive ? HTTP_RESPONSE : HTTP_RESPONSE_CLOSE;
-      size_t response_len =
-          keep_alive ? sizeof(HTTP_RESPONSE) - 1 : sizeof(HTTP_RESPONSE_CLOSE) - 1;
-      ssize_t w = write(client_fd, response, response_len);
+      char body[128];
+      char response[512];
+      int body_len = snprintf(body, sizeof(body), "{\"backend\":\"%s\"}\n",
+                              backend_name);
+      int response_len =
+          snprintf(response, sizeof(response),
+                   "HTTP/1.1 200 OK\r\n"
+                   "Content-Type: application/json\r\n"
+                   "Content-Length: %d\r\n"
+                   "Connection: %s\r\n"
+                   "\r\n"
+                   "%s",
+                   body_len, keep_alive ? "keep-alive" : "close", body);
+      ssize_t w = write(client_fd, response, (size_t)response_len);
       if (w <= 0)
         goto close_client;
 
@@ -171,6 +166,9 @@ int main(int argc, char *argv[]) {
   int port = DEFAULT_PORT;
   if (argc > 1) {
     port = atoi(argv[1]);
+  }
+  if (argc > 2) {
+    backend_name = argv[2];
   }
 
   signal(SIGINT, handle_sigint);
@@ -201,7 +199,8 @@ int main(int argc, char *argv[]) {
     return 1;
   }
 
-  printf("High-performance C Mock HTTP Backend listening on 0.0.0.0:%d\n", port);
+  printf("High-performance C Mock HTTP Backend listening on 0.0.0.0:%d as %s\n",
+         port, backend_name);
   fflush(stdout);
 
   pthread_t threads[NUM_WORKERS];

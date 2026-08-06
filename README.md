@@ -12,8 +12,26 @@ client sends HTTPS
 ```
 
 ## Current Prototype Implementation
-- HTTP parser that observes content body from requests in eBPF/XDP.
-- Simple n-gram domain classifier in eBPF/XDP to classify packets based on extracted signals. Identifies coding, general, or math prompts.
+- XDP observer that extracts prompt signals and records route counters/events.
+- Routing proxy that performs actual backend selection after TLS has already
+  been terminated to plaintext HTTP.
+- Experimental SK_SKB/SOCKMAP BPF program kept for kernel-level socket-map
+  routing work.
+- Simple n-gram domain classifier in eBPF to classify requests as coding,
+  general, or math prompts.
+
+## Routing Path
+```
+client
+  -> TLS termination
+  -> plaintext TCP connection on :18081
+  -> routing proxy
+  -> coding (:18391), math (:18392), or others (:18393)
+```
+
+The default `sk_router` control process fails startup unless all three backends
+are reachable. The experimental SOCKMAP mode can be selected with
+`SK_ROUTER_MODE=sockmap`; it populates the decision map before attaching BPF.
 
 ## Project MVP
 - Signal extraction from the network layer
@@ -35,7 +53,21 @@ Compile the XDP router binary, BPF object, and mock backend for a specific keywo
 sudo make KEYWORD_POLICY=config/policy_literal.yaml dev
 ```
 
-### 3. Run High-Performance Load Benchmark
+### 3. Run the Routing Smoke Test
+This test starts three distinct marker backends and verifies that the HTTP
+response came from the selected backend, not merely from a debug event:
+```bash
+sudo tests/probe_sk_router_smoke.py
+```
+
+Expected backend markers are:
+```json
+{"backend":"coding"}
+{"backend":"math"}
+{"backend":"others"}
+```
+
+### 4. Run High-Performance Load Benchmark
 Execute the high-throughput `wrk` / `wrk2` load benchmark with dataset prompts:
 ```bash
 # Default run (Concurrency = 4, Duration = 15s)

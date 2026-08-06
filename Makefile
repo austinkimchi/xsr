@@ -21,7 +21,7 @@ KEYWORD_POLICY ?= config/policy_literal.yaml
 
 .DEFAULT_GOAL := all
 
-all: xdp_router xdp_router.bpf.o benchmarks/mock_backend
+all: xdp_router sk_router xdp_router.bpf.o sk_router.bpf.o benchmarks/mock_backend
 
 dev: USER_CFLAGS += $(DEV_DEFS)
 dev: BPF_CFLAGS += $(DEV_DEFS)
@@ -34,6 +34,9 @@ prod: clean all
 xdp_router: xdp_router.c xdp_router.h
 	$(CC) $(USER_CFLAGS) $< -o $@ $(LIBBPF_FLAGS)
 
+sk_router: sk_router.c xdp_router.h bpf/xdp_decision.bpf.h bpf/xdp_signals.bpf.h
+	$(CC) $(USER_CFLAGS) $< -o $@ $(LIBBPF_FLAGS) -lpthread
+
 benchmarks/mock_backend: benchmarks/mock_backend.c
 	$(CC) -O3 $< -o $@ -lpthread
 
@@ -43,8 +46,11 @@ bpf/xdp_keyword_policy.generated.h: $(KEYWORD_POLICY) scripts/generate_keyword_h
 xdp_router.bpf.o: bpf/xdp_router.bpf.c xdp_router.h bpf/xdp_http_parser.bpf.h bpf/xdp_keyword_classifier.bpf.h bpf/xdp_keyword_policy.generated.h
 	$(BPF_CLANG) $(BPF_CFLAGS) -c $< -o $@
 
+sk_router.bpf.o: bpf/sk_router.bpf.c xdp_router.h bpf/xdp_decision.bpf.h bpf/xdp_signals.bpf.h bpf/xdp_keyword_classifier.bpf.h bpf/xdp_keyword_policy.generated.h
+	$(BPF_CLANG) $(BPF_CFLAGS) -c $< -o $@
+
 clean:
-	rm -f xdp_router xdp_router.bpf.o bpf/xdp_keyword_policy.generated.h benchmarks/mock_backend
+	rm -f xdp_router sk_router xdp_router.bpf.o sk_router.bpf.o bpf/xdp_keyword_policy.generated.h benchmarks/mock_backend
 
 clean-setup:
 	@ip link delete $(XDP_HOST_IF) 2>/dev/null || true
