@@ -18,6 +18,8 @@ tests/mock_backend
 # vLLM-SR Runtime State & Model Artifacts
 **/.vllm-sr/
 **/models/
+!/models/
+!/models/xdp_ngram_model_fnv.json
 tests/vllm-sr-bert-stack/
 
 # Generated Benchmark Results (Keep wrk-keyword-routing and master wrk_benchmark.md)

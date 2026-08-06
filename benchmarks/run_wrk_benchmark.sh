@@ -75,7 +75,7 @@ fi
 # Build mock backend and routers if missing
 if [ ! -f "benchmarks/mock_backend" ] || [ ! -f "sk_router" ] || [ ! -f "sk_router.bpf.o" ]; then
     echo "Building routing proxy and mock backends..."
-    make dev KEYWORD_POLICY=config/policy_literal.yaml
+    make dev KEYWORD_POLICY=config/policy_ngram.yaml XDP_CLASSIFIER=ngram
 fi
 
 # Flush old iptables rules for these ports

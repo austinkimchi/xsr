@@ -12,6 +12,7 @@
 #include <bpf/bpf_helpers.h>
 
 #include "xdp_decision.bpf.h"
+#include "xdp_classifier.bpf.h"
 #include "xdp_router.h"
 #include "xdp_signals.bpf.h"
 
@@ -72,150 +73,17 @@ static __always_inline unsigned char lower(unsigned char c) {
 
 struct sk_classify_ctx {
   struct __sk_buff *skb;
-  __u32 route;
-  __u8 debug_pos;
-  __u8 function_pos;
-  __u8 code_pos;
-  __u8 solve_pos;
-  __u8 matrix_pos;
-  __u8 derivative_pos;
+  struct xdp_classifier_state classifier;
 };
-
-static __always_inline unsigned char kw_char(__u32 word, __u32 pos) {
-  if (word == 0) {
-    switch (pos) {
-    case 0:
-      return 'd';
-    case 1:
-      return 'e';
-    case 2:
-      return 'b';
-    case 3:
-      return 'u';
-    case 4:
-      return 'g';
-    }
-  } else if (word == 1) {
-    switch (pos) {
-    case 0:
-      return 'f';
-    case 1:
-      return 'u';
-    case 2:
-      return 'n';
-    case 3:
-      return 'c';
-    case 4:
-      return 't';
-    case 5:
-      return 'i';
-    case 6:
-      return 'o';
-    case 7:
-      return 'n';
-    }
-  } else if (word == 2) {
-    switch (pos) {
-    case 0:
-      return 'c';
-    case 1:
-      return 'o';
-    case 2:
-      return 'd';
-    case 3:
-      return 'e';
-    }
-  } else if (word == 3) {
-    switch (pos) {
-    case 0:
-      return 's';
-    case 1:
-      return 'o';
-    case 2:
-      return 'l';
-    case 3:
-      return 'v';
-    case 4:
-      return 'e';
-    }
-  } else if (word == 4) {
-    switch (pos) {
-    case 0:
-      return 'm';
-    case 1:
-      return 'a';
-    case 2:
-      return 't';
-    case 3:
-      return 'r';
-    case 4:
-      return 'i';
-    case 5:
-      return 'x';
-    }
-  } else if (word == 5) {
-    switch (pos) {
-    case 0:
-      return 'd';
-    case 1:
-      return 'e';
-    case 2:
-      return 'r';
-    case 3:
-      return 'i';
-    case 4:
-      return 'v';
-    case 5:
-      return 'a';
-    case 6:
-      return 't';
-    case 7:
-      return 'i';
-    case 8:
-      return 'v';
-    case 9:
-      return 'e';
-    }
-  }
-
-  return 0;
-}
-
-static __always_inline __u8 advance_kw(__u8 pos, unsigned char c, __u32 word,
-                                       __u8 len) {
-  if (pos < len && c == kw_char(word, pos))
-    return pos + 1;
-  return c == kw_char(word, 0) ? 1 : 0;
-}
 
 static long classify_callback(__u32 i, void *data) {
   struct sk_classify_ctx *ctx = data;
   unsigned char c = 0;
 
-  if (ctx->route != SK_ROUTE_GENERAL)
-    return 1;
-
   if (bpf_skb_load_bytes(ctx->skb, i, &c, sizeof(c)) < 0)
     return 1;
 
-  c = lower(c);
-
-  ctx->debug_pos = advance_kw(ctx->debug_pos, c, 0, 5);
-  ctx->function_pos = advance_kw(ctx->function_pos, c, 1, 8);
-  ctx->code_pos = advance_kw(ctx->code_pos, c, 2, 4);
-  if (ctx->debug_pos == 5 || ctx->function_pos == 8 || ctx->code_pos == 4) {
-    ctx->route = SK_ROUTE_CODING;
-    return 1;
-  }
-
-  ctx->solve_pos = advance_kw(ctx->solve_pos, c, 3, 5);
-  ctx->matrix_pos = advance_kw(ctx->matrix_pos, c, 4, 6);
-  ctx->derivative_pos = advance_kw(ctx->derivative_pos, c, 5, 10);
-  if (ctx->solve_pos == 5 || ctx->matrix_pos == 6 ||
-      ctx->derivative_pos == 10) {
-    ctx->route = SK_ROUTE_MATH;
-    return 1;
-  }
+  xdp_classifier_score_char(&ctx->classifier, c);
 
   return 0;
 }
@@ -333,14 +201,14 @@ static __always_inline __u32 classify_request(struct __sk_buff *skb) {
   __u32 scan_len = skb->len;
   struct sk_classify_ctx ctx = {
       .skb = skb,
-      .route = SK_ROUTE_GENERAL,
   };
 
   if (scan_len > SK_ROUTER_MAX_SCAN)
     scan_len = SK_ROUTER_MAX_SCAN;
 
+  xdp_classifier_init(&ctx.classifier);
   bpf_loop(SK_ROUTER_MAX_SCAN, classify_callback, &ctx, 0);
-  return ctx.route;
+  return xdp_classifier_route(&ctx.classifier);
 }
 
 static __always_inline __u32 model_for_route(__u32 route) {

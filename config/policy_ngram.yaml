@@ -54,11 +54,15 @@ routing:
         operator: OR
         method: ngram
         keywords: ["code", "function", "debug", "algorithm", "refactor"]
+        ngram_threshold: 0.8
+        ngram_arity: 3
         case_sensitive: false
       - name: math_keywords
         operator: OR
         method: ngram
         keywords: ["solve", "equation", "derivative", "integral", "matrix", "probability", "geometry", "calculate"]
+        ngram_threshold: 0.8
+        ngram_arity: 3
         case_sensitive: false
   decisions:
     - name: coding

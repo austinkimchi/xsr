@@ -44,7 +44,7 @@ struct http_flow_state {
   __u32 next_seq;
   __u32 body_seq;
   struct content_flow_state content;
-  struct xdp_keyword_state keyword;
+  struct xdp_classifier_state classifier;
 };
 
 struct {
@@ -62,11 +62,11 @@ static __always_inline void increment_counter(__u32 key) {
 }
 
 static __always_inline void increment_route_counter(__u32 route) {
-  if (route == XDP_KEYWORD_ROUTE_CODING)
+  if (route == XDP_ROUTE_CODING)
     increment_counter(COUNT_ROUTE_CODING);
-  else if (route == XDP_KEYWORD_ROUTE_GENERAL)
+  else if (route == XDP_ROUTE_GENERAL)
     increment_counter(COUNT_ROUTE_OTHERS);
-  else if (route == XDP_KEYWORD_ROUTE_MATH)
+  else if (route == XDP_ROUTE_MATH)
     increment_counter(COUNT_ROUTE_MATH);
 }
 
@@ -74,15 +74,15 @@ static __always_inline void increment_route_counter(__u32 route) {
 static __always_inline void emit_route_event(__u32 route, __u32 model_id,
                                              __u32 content_length,
                                              __u16 src_port,
-                                             struct xdp_keyword_state *keyword,
+                                             struct xdp_classifier_state *classifier,
                                              __u64 elapsed_ns) {
   struct xdp_route_event event = {
       .route = route,
       .model_id = model_id,
       .content_length = content_length,
       .src_port = src_port,
-      .matched_coding = keyword->matched_coding,
-      .matched_math = keyword->matched_math,
+      .matched_coding = xdp_classifier_matched_coding(classifier),
+      .matched_math = xdp_classifier_matched_math(classifier),
       .elapsed_ns = elapsed_ns,
   };
 
@@ -208,17 +208,17 @@ int xdp_router(struct xdp_md *ctx) {
 
   bool is_post = p[0] == 'P' && p[1] == 'O' && p[2] == 'S' && p[3] == 'T';
   struct content_flow_state stack_content = {};
-  struct xdp_keyword_state stack_keyword = {};
+  struct xdp_classifier_state stack_classifier = {};
 
   if (is_post) {
     __u32 body_offset = 0;
     bool found_body = find_http_body_offset(p, data_end, &body_offset);
 
-    xdp_keyword_init(&stack_keyword);
+    xdp_classifier_init(&stack_classifier);
     if (found_body && body_offset < payload_length) {
       result = scan_content_stream(ctx, data, p + body_offset,
                                    payload_length - body_offset, &stack_content,
-                                   &stack_keyword, &content_length);
+                                   &stack_classifier, &content_length);
     } else {
       result = CONTENT_PARTIAL;
     }
@@ -228,7 +228,7 @@ int xdp_router(struct xdp_md *ctx) {
           .next_seq = tcp_seq + payload_length,
           .body_seq = found_body ? tcp_seq + body_offset : 0,
           .content = stack_content,
-          .keyword = stack_keyword,
+          .classifier = stack_classifier,
       };
 
       bpf_map_update_elem(&http_flows, &key, &new_flow, BPF_ANY);
@@ -250,20 +250,21 @@ int xdp_router(struct xdp_md *ctx) {
     }
 
     result = scan_content_stream(ctx, data, p, payload_length, &flow->content,
-                                 &flow->keyword, &content_length);
+                                 &flow->classifier, &content_length);
     flow->next_seq = tcp_seq + payload_length;
   }
 
   if (result == CONTENT_COMPLETE) {
-    struct xdp_keyword_state *kw = is_post ? &stack_keyword : &flow->keyword;
-    __u32 route = xdp_keyword_route_for_matches(kw);
+    struct xdp_classifier_state *classifier =
+        is_post ? &stack_classifier : &flow->classifier;
+    __u32 route = xdp_classifier_route(classifier);
     __u64 signals = 0;
 
-    if (route == XDP_KEYWORD_ROUTE_CODING)
+    if (route == XDP_ROUTE_CODING)
       signals |= XDP_SIGNAL_DOMAIN_CODING;
-    else if (route == XDP_KEYWORD_ROUTE_GENERAL)
+    else if (route == XDP_ROUTE_GENERAL)
       signals |= XDP_SIGNAL_DOMAIN_OTHERS;
-    else if (route == XDP_KEYWORD_ROUTE_MATH)
+    else if (route == XDP_ROUTE_MATH)
       signals |= XDP_SIGNAL_DOMAIN_MATH;
 
     __u32 model_id = xdp_decision_eval(signals);
@@ -273,7 +274,7 @@ int xdp_router(struct xdp_md *ctx) {
 #ifdef XDP_PROFILE
     elapsed_ns = bpf_ktime_get_ns() - start_ns;
 #endif
-    emit_route_event(route, model_id, content_length, key.src_port, kw,
+    emit_route_event(route, model_id, content_length, key.src_port, classifier,
                      elapsed_ns);
 #endif
 

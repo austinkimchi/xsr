@@ -17,6 +17,7 @@
 #include <unistd.h>
 
 #include "xdp_router.h"
+#include "bpf/xdp_ngram_model.generated.h"
 
 struct route_counter {
   __u32 key;
@@ -77,6 +78,20 @@ __u64 read_percpu_counter(int map_fd, __u32 key, int cpu_count) {
   return total;
 }
 
+static int populate_ngram_weights(struct bpf_object *obj) {
+  int map_fd = bpf_object__find_map_fd_by_name(obj, "xdp_ngram_weights");
+
+  if (map_fd < 0)
+    return 0;
+
+  for (__u32 key = 0; key < XDP_NGRAM_FEATURES; key++) {
+    if (bpf_map_update_elem(map_fd, &key, &xdp_ngram_model[key], BPF_ANY) != 0)
+      return -1;
+  }
+
+  return 0;
+}
+
 int main(void) {
   struct bpf_object *obj;
   struct bpf_program *prog;
@@ -103,6 +118,11 @@ int main(void) {
 
   if (bpf_object__load(obj)) { // Loading the object file could fail
     fprintf(stderr, "Failed to load BPF object file: %s\n", BPF_OBJECT_FILE);
+    return 1;
+  }
+
+  if (populate_ngram_weights(obj) != 0) {
+    perror("populate_ngram_weights");
     return 1;
   }
 

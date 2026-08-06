@@ -24,6 +24,7 @@
 #include <unistd.h>
 
 #include "xdp_router.h"
+#include "bpf/xdp_ngram_model.generated.h"
 #include "bpf/xdp_signals.bpf.h"
 
 #define BPF_OBJECT_FILE "sk_router.bpf.o"
@@ -171,6 +172,20 @@ static int populate_decision_rules(int rules_fd) {
   return 0;
 }
 
+static int populate_ngram_weights(struct bpf_object *obj) {
+  int map_fd = bpf_object__find_map_fd_by_name(obj, "xdp_ngram_weights");
+
+  if (map_fd < 0)
+    return 0;
+
+  for (__u32 key = 0; key < XDP_NGRAM_FEATURES; key++) {
+    if (bpf_map_update_elem(map_fd, &key, &xdp_ngram_model[key], BPF_ANY) != 0)
+      return -1;
+  }
+
+  return 0;
+}
+
 static int verify_backend_available(int port) {
   int fd = connect_backend(port);
 
@@ -288,6 +303,7 @@ static int read_http_message(int fd, char *buf, size_t cap, size_t *len_out) {
   return 1;
 }
 
+#ifdef XDP_CLASSIFIER_LITERAL
 static int contains_ci(const char *buf, size_t len, const char *needle) {
   size_t needle_len = strlen(needle);
 
@@ -305,8 +321,137 @@ static int contains_ci(const char *buf, size_t len, const char *needle) {
 
   return 0;
 }
+#endif
+
+#ifndef XDP_CLASSIFIER_LITERAL
+struct ngram_score {
+  int coding;
+  int general;
+  int math;
+  unsigned char seen;
+  unsigned char c0;
+  unsigned char c1;
+  unsigned char c2;
+};
+
+static unsigned int ngram_hash3(unsigned char c0, unsigned char c1,
+                                unsigned char c2) {
+  unsigned int hash = 2166136261u;
+
+  hash ^= c0;
+  hash *= 16777619u;
+  hash ^= c1;
+  hash *= 16777619u;
+  hash ^= c2;
+  hash *= 16777619u;
+
+  return hash & (XDP_NGRAM_FEATURES - 1);
+}
+
+static void ngram_score_init(struct ngram_score *score) {
+  score->coding = XDP_NGRAM_BIAS_CODING;
+  score->general = XDP_NGRAM_BIAS_GENERAL;
+  score->math = XDP_NGRAM_BIAS_MATH;
+  score->seen = 0;
+  score->c0 = 0;
+  score->c1 = 0;
+  score->c2 = 0;
+}
+
+static void ngram_score_char(struct ngram_score *score, unsigned char c) {
+  unsigned int key;
+  const struct xdp_ngram_weight *weight;
+
+  c = (unsigned char)ascii_lower((char)c);
+  score->c0 = score->c1;
+  score->c1 = score->c2;
+  score->c2 = c;
+
+  if (score->seen < 3) {
+    score->seen++;
+    if (score->seen < 3)
+      return;
+  }
+
+  key = ngram_hash3(score->c0, score->c1, score->c2);
+  weight = &xdp_ngram_model[key];
+  score->coding += weight->coding;
+  score->general += weight->general;
+  score->math += weight->math;
+}
+
+static int ngram_route_for_scores(const struct ngram_score *score) {
+  int route = BACKEND_CODING_PORT;
+  int best = score->coding;
+
+  if (score->general > best) {
+    best = score->general;
+    route = BACKEND_OTHERS_PORT;
+  }
+
+  if (score->math > best)
+    route = BACKEND_MATH_PORT;
+
+  return route;
+}
+
+static int score_first_content_string(const char *request, size_t len,
+                                      struct ngram_score *score) {
+  const char key[] = "\"content\"";
+  int waiting_colon = 0;
+  int waiting_quote = 0;
+
+  for (size_t i = 0; i + sizeof(key) - 1 <= len; i++) {
+    if (strncmp(request + i, key, sizeof(key) - 1) == 0) {
+      i += sizeof(key) - 1;
+      waiting_colon = 1;
+    }
+
+    if (waiting_colon) {
+      while (i < len && (request[i] == ' ' || request[i] == '\t' ||
+                         request[i] == '\r' || request[i] == '\n'))
+        i++;
+      if (i < len && request[i] == ':') {
+        i++;
+        waiting_quote = 1;
+        waiting_colon = 0;
+      } else {
+        waiting_colon = 0;
+      }
+    }
+
+    if (waiting_quote) {
+      while (i < len && (request[i] == ' ' || request[i] == '\t' ||
+                         request[i] == '\r' || request[i] == '\n'))
+        i++;
+      if (i >= len || request[i] != '"')
+        return 0;
+      i++;
+
+      int escaped = 0;
+      for (; i < len; i++) {
+        unsigned char c = (unsigned char)request[i];
+
+        if (escaped) {
+          escaped = 0;
+        } else if (c == '\\') {
+          escaped = 1;
+        } else if (c == '"') {
+          return 1;
+        }
+
+        ngram_score_char(score, c);
+      }
+      return 0;
+    }
+  }
+
+  return 0;
+}
+#endif
 
 static int select_backend_port(const char *request, size_t len) {
+#ifdef XDP_CLASSIFIER_LITERAL
   if (contains_ci(request, len, "debug") ||
       contains_ci(request, len, "function") ||
       contains_ci(request, len, "code") ||
@@ -325,6 +470,14 @@ static int select_backend_port(const char *request, size_t len) {
     return BACKEND_MATH_PORT;
 
   return BACKEND_OTHERS_PORT;
+#else
+  struct ngram_score score;
+
+  ngram_score_init(&score);
+  if (!score_first_content_string(request, len, &score))
+    return BACKEND_OTHERS_PORT;
+  return ngram_route_for_scores(&score);
+#endif
 }
 
 static void *proxy_client_thread(void *arg) {
@@ -557,6 +710,10 @@ static int run_sockmap_router(void) {
 
   if (populate_decision_rules(rules_fd) != 0) {
     perror("populate_decision_rules");
+    return 1;
+  }
+  if (populate_ngram_weights(obj) != 0) {
+    perror("populate_ngram_weights");
     return 1;
   }
 

@@ -17,8 +17,9 @@ client sends HTTPS
   been terminated to plaintext HTTP.
 - Experimental SK_SKB/SOCKMAP BPF program kept for kernel-level socket-map
   routing work.
-- Simple n-gram domain classifier in eBPF to classify requests as coding,
-  general, or math prompts.
+- Hashed 3-gram FNV classifier in eBPF to classify requests as coding,
+  general, or math prompts, with the literal substring keyword matcher still
+  available as an alternate build mode.
 
 ## Routing Path
 ```
@@ -53,9 +54,15 @@ sudo make setup
 ```
 
 ### 2. Build eBPF Router with Keyword Policy
-Compile the XDP router binary, BPF object, and mock backend for a specific keyword policy (e.g. `policy_literal.yaml`):
+Compile the XDP router binary, BPF object, and mock backend. The default build
+uses the checked-in 3-gram model at `models/xdp_ngram_model_fnv.json`:
 ```bash
-sudo make KEYWORD_POLICY=config/policy_literal.yaml dev
+sudo make dev
+```
+
+To build the preserved literal substring classifier instead:
+```bash
+sudo make KEYWORD_POLICY=config/policy_literal.yaml XDP_CLASSIFIER=literal dev
 ```
 
 ### 3. Run the Routing Smoke Test
@@ -89,9 +96,12 @@ Benchmark results are saved automatically to `results/wrk-keyword-routing/latest
 .
 ├── bpf/
 │   ├── xdp_decision.bpf.h
+│   ├── xdp_classifier.bpf.h
 │   ├── xdp_http_parser.bpf.h
 │   ├── xdp_keyword_classifier.bpf.h
 │   ├── xdp_keyword_policy.generated.h
+│   ├── xdp_ngram_classifier.bpf.h
+│   ├── xdp_ngram_model.generated.h
 │   ├── xdp_router.bpf.c
 │   └── xdp_signals.bpf.h
 ├── benchmarks/
@@ -108,10 +118,12 @@ Benchmark results are saved automatically to `results/wrk-keyword-routing/latest
 │   ├── policy_ngram.yaml
 │   └── policy_regex.yaml
 ├── models/
+│   └── xdp_ngram_model_fnv.json
 ├── results/
 │   └── wrk-keyword-routing/
 ├── scripts/
-│   └── generate_keyword_header.py
+│   ├── generate_keyword_header.py
+│   └── generate_ngram_header.py
 ├── Makefile
 ├── README.md
 ├── xdp_router.c

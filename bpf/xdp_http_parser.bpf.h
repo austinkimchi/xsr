@@ -1,12 +1,12 @@
-#ifndef XDP_CLASSIFIER_BPF_H
-#define XDP_CLASSIFIER_BPF_H
+#ifndef XDP_HTTP_PARSER_BPF_H
+#define XDP_HTTP_PARSER_BPF_H
 
 #include <linux/bpf.h>
 #include <linux/types.h>
 
 #include <bpf/bpf_helpers.h>
 
-#include "xdp_keyword_classifier.bpf.h"
+#include "xdp_classifier.bpf.h"
 
 #define MAX_SCAN 512
 #define MAX_CONTENT 1500
@@ -34,7 +34,7 @@ struct content_scan_ctx {
   __u32 length;
   int result;
   struct content_flow_state *state;
-  struct xdp_keyword_state *keyword;
+  struct xdp_classifier_state *classifier;
 };
 
 static __always_inline unsigned char content_key_char(__u32 pos) {
@@ -134,8 +134,8 @@ static long scan_content_callback(__u32 i, void *data) {
     }
 
     state->content_length++;
-    if (ctx->keyword)
-      xdp_keyword_score_char(ctx->keyword, c);
+    if (ctx->classifier)
+      xdp_classifier_score_char(ctx->classifier, c);
     ctx->length = state->content_length;
     ctx->result = CONTENT_PARTIAL;
     return 0;
@@ -149,7 +149,7 @@ static __always_inline int
 scan_content_stream(struct xdp_md *xdp, unsigned char *data,
                     unsigned char *payload, __u32 payload_length,
                     struct content_flow_state *state,
-                    struct xdp_keyword_state *keyword, __u32 *length) {
+                    struct xdp_classifier_state *classifier, __u32 *length) {
   __u32 scan_length = payload_length;
 
   if (scan_length > MAX_CONTENT)
@@ -162,7 +162,7 @@ scan_content_stream(struct xdp_md *xdp, unsigned char *data,
       .length = state->content_length,
       .result = CONTENT_NOT_FOUND,
       .state = state,
-      .keyword = keyword,
+      .classifier = classifier,
   };
 
   bpf_loop(MAX_CONTENT, scan_content_callback, &ctx, 0);

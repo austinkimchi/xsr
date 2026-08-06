@@ -5,6 +5,14 @@
 #ifndef XDP_ROUTER_H
 #define XDP_ROUTER_H
 
+#include <linux/types.h>
+
+struct xdp_ngram_weight {
+  __s32 coding;
+  __s32 general;
+  __s32 math;
+};
+
 #ifdef XDP_DEBUG
 struct xdp_route_event {
   __u32 route;

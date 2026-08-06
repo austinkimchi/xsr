@@ -36,7 +36,11 @@ for METHOD in "${METHODS[@]}"; do
   echo " [1/2] Building XDP router for method: ${METHOD}"
   echo " Config: ${CONFIG}"
   echo "-----------------------------------------------------------------"
-  make KEYWORD_POLICY="$CONFIG" dev
+  XDP_CLASSIFIER_MODE="literal"
+  if [ "$METHOD" = "ngram" ]; then
+    XDP_CLASSIFIER_MODE="ngram"
+  fi
+  make KEYWORD_POLICY="$CONFIG" XDP_CLASSIFIER="$XDP_CLASSIFIER_MODE" dev
 
   echo ""
   echo "-----------------------------------------------------------------"
