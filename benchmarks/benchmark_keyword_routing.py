@@ -32,7 +32,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 from generate_keyword_header import load_policy, validate_policy  # noqa: E402
 
 
-DEFAULT_CONFIG = ROOT / "config" / "policy_literal.yaml"
+DEFAULT_CONFIG = ROOT / "config" / "policy_ngram.yaml"
 DEFAULT_REPORT_DIR = ROOT / "reports"
 DEFAULT_CACHE_DIR = Path.home() / ".cache" / "xdp-keyword-routing"
 DEFAULT_XDP_URL = "http://10.10.0.1:18081/v1/chat/completions"
