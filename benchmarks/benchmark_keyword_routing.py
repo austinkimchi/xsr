@@ -20,6 +20,7 @@ import sys
 import threading
 import time
 import urllib.parse
+import urllib.error
 import urllib.request
 from pathlib import Path
 from typing import Any
@@ -358,11 +359,29 @@ def load_rows(args: argparse.Namespace) -> tuple[list[dict[str, Any]], dict[str,
                     "length": min(100, args.scan_limit - len(rows)),
                 }
             )
-            with urllib.request.urlopen(
-                f"https://datasets-server.huggingface.co/rows?{query}",
-                timeout=60,
-            ) as response:
-                data = json.load(response)
+            url = f"https://datasets-server.huggingface.co/rows?{query}"
+            request = urllib.request.Request(
+                url,
+                headers={"User-Agent": "xdp-router-benchmark/1.0"},
+            )
+            for attempt in range(6):
+                try:
+                    with urllib.request.urlopen(request, timeout=60) as response:
+                        data = json.load(response)
+                    break
+                except urllib.error.HTTPError as exc:
+                    if exc.code != 429 or attempt == 5:
+                        raise
+                    retry_after = exc.headers.get("Retry-After")
+                    try:
+                        sleep_s = float(retry_after) if retry_after else 2**attempt
+                    except ValueError:
+                        sleep_s = 2**attempt
+                    print(
+                        f"Rate limited by Hugging Face rows API; retrying in {sleep_s:.1f}s...",
+                        file=sys.stderr,
+                    )
+                    time.sleep(sleep_s)
             page = [item["row"] for item in data.get("rows", [])]
             if not page:
                 break
