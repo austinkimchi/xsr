@@ -1,7 +1,7 @@
 # XDP vs. vllm-sr Benchmark Summary
 
 This markdown summarizes the load testing results comparing `xsr` against `vllm-sr` across varying concurrency levels (1, 2, 4, 8, 10, 16, 32, 64, 96).
-Both XDP and vllm-sr execute the shared literal keyword policy, matching 13 case-insensitive substring matching across 13 domain keywords to route prompts into `coding`, `math`, and `others` routes.
+Both XDP and vllm-sr execute the shared ngram keyword policy, matching 13 case-insensitive substring matching across 13 domain keywords to route prompts into `coding`, `math`, and `others` routes.
 
 ---
 
