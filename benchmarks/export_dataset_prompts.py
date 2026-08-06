@@ -28,8 +28,9 @@ def main() -> None:
 
     with args.output.open("w", encoding="utf-8") as f:
         for case in cases:
-            body_bytes = chat_body(case.prompt)
-            f.write(body_bytes.decode("utf-8") + "\n")
+            body = json.loads(chat_body(case.prompt))
+            body["x_expected_route"] = case.expected_route
+            f.write(json.dumps(body, separators=(",", ":")) + "\n")
 
     print(f"Successfully exported {len(cases)} prompts to {args.output}")
 

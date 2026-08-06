@@ -10,10 +10,13 @@ THREADS="${THREADS:-4}"
 CONCURRENCY="${CONCURRENCY:-4}"
 RATE="${RATE:-10000}"
 XDP_PORT="${XDP_PORT:-18081}"
-VLLM_BACKEND_PORT="${VLLM_BACKEND_PORT:-18391}"
+CODING_BACKEND_PORT="${CODING_BACKEND_PORT:-18391}"
+MATH_BACKEND_PORT="${MATH_BACKEND_PORT:-18392}"
+OTHERS_BACKEND_PORT="${OTHERS_BACKEND_PORT:-18393}"
+VLLM_BACKEND_PORT="${VLLM_BACKEND_PORT:-18394}"
 IFNAME="${IFNAME:-veth0}"
 NETNS="${NETNS:-ns1}"
-XDP_URL="${XDP_URL:-http://10.10.0.1:${XDP_PORT}/v1/chat/completions}"
+XDP_URL="${XDP_URL:-http://127.0.0.1:${XDP_PORT}/v1/chat/completions}"
 VLLM_URL="${VLLM_URL:-http://127.0.0.1:8899/v1/chat/completions}"
 REPORT_DIR="${ROOT_DIR}/results/wrk-keyword-routing"
 TIMESTAMP="$(date +%Y%m%d_%H%M%S)"
@@ -21,8 +24,21 @@ REPORT_FILE="${REPORT_DIR}/wrk_benchmark_${TIMESTAMP}.md"
 LATEST_FILE="${REPORT_DIR}/latest.md"
 
 if [ "$EUID" -ne 0 ]; then
-    echo "XDP benchmark requires root privileges to attach BPF and manage netns. Elevating with sudo..."
-    exec sudo "$0" "$@"
+    echo "Routing benchmark uses sudo for cleanup and firewall setup. Elevating..."
+    exec sudo env \
+        WRK_BIN="$WRK_BIN" \
+        DURATION="$DURATION" \
+        THREADS="$THREADS" \
+        CONCURRENCY="$CONCURRENCY" \
+        RATE="$RATE" \
+        XDP_PORT="$XDP_PORT" \
+        CODING_BACKEND_PORT="$CODING_BACKEND_PORT" \
+        MATH_BACKEND_PORT="$MATH_BACKEND_PORT" \
+        OTHERS_BACKEND_PORT="$OTHERS_BACKEND_PORT" \
+        VLLM_BACKEND_PORT="$VLLM_BACKEND_PORT" \
+        XDP_URL="$XDP_URL" \
+        VLLM_URL="$VLLM_URL" \
+        "$0" "$@"
 fi
 
 cd "$ROOT_DIR"
@@ -43,55 +59,94 @@ if [ "$THREADS" -gt "$CONCURRENCY" ]; then
     THREADS="$CONCURRENCY"
 fi
 
-# Kill any stale mock_backend or xdp_router processes
+# Kill any stale mock_backend or router processes
 pkill -9 mock_backend >/dev/null 2>&1 || true
 pkill -9 xdp_router >/dev/null 2>&1 || true
+pkill -9 sk_router >/dev/null 2>&1 || true
 
-# Ensure netns setup
-make setup >/dev/null 2>&1 || true
-
-# Generate prompt dataset if missing
-if [ ! -f "benchmarks/dataset_prompts.jsonl" ]; then
+# Generate prompt dataset if missing or from the older no-route-metadata format.
+if [ ! -f "benchmarks/dataset_prompts.jsonl" ] || ! head -n 1 benchmarks/dataset_prompts.jsonl | grep -q '"x_expected_route"'; then
     echo "Generating dataset_prompts.jsonl..."
     python3 benchmarks/export_dataset_prompts.py
 fi
 
-# Build mock backend and xdp_router if missing
-if [ ! -f "benchmarks/mock_backend" ] || [ ! -f "xdp_router" ]; then
-    echo "Building XDP router and mock backend..."
+# Build mock backend and routers if missing
+if [ ! -f "benchmarks/mock_backend" ] || [ ! -f "sk_router" ] || [ ! -f "sk_router.bpf.o" ]; then
+    echo "Building routing proxy and mock backends..."
     make dev KEYWORD_POLICY=config/policy_literal.yaml
 fi
 
 # Flush old iptables rules for these ports
 iptables -D INPUT -p tcp --dport "${XDP_PORT}" -j ACCEPT >/dev/null 2>&1 || true
+iptables -D INPUT -p tcp --dport "${CODING_BACKEND_PORT}" -j ACCEPT >/dev/null 2>&1 || true
+iptables -D INPUT -p tcp --dport "${MATH_BACKEND_PORT}" -j ACCEPT >/dev/null 2>&1 || true
+iptables -D INPUT -p tcp --dport "${OTHERS_BACKEND_PORT}" -j ACCEPT >/dev/null 2>&1 || true
 iptables -D INPUT -p tcp --dport "${VLLM_BACKEND_PORT}" -j ACCEPT >/dev/null 2>&1 || true
 
 # Add iptables rules
 iptables -I INPUT 1 -p tcp --dport "${XDP_PORT}" -j ACCEPT >/dev/null 2>&1 || true
+iptables -I INPUT 1 -p tcp --dport "${CODING_BACKEND_PORT}" -j ACCEPT >/dev/null 2>&1 || true
+iptables -I INPUT 1 -p tcp --dport "${MATH_BACKEND_PORT}" -j ACCEPT >/dev/null 2>&1 || true
+iptables -I INPUT 1 -p tcp --dport "${OTHERS_BACKEND_PORT}" -j ACCEPT >/dev/null 2>&1 || true
 iptables -I INPUT 1 -p tcp --dport "${VLLM_BACKEND_PORT}" -j ACCEPT >/dev/null 2>&1 || true
 
-# Start mock HTTP backends for both XDP (18081) and vLLM-SR (18391)
-echo "Starting mock HTTP backend for XDP on port ${XDP_PORT}..."
-./benchmarks/mock_backend "${XDP_PORT}" > /dev/null 2>&1 &
-XDP_MOCK_PID=$!
+# Start marker backends for routing.
+echo "Starting coding backend on port ${CODING_BACKEND_PORT}..."
+./benchmarks/mock_backend "${CODING_BACKEND_PORT}" coding > /dev/null 2>&1 &
+CODING_MOCK_PID=$!
+
+echo "Starting math backend on port ${MATH_BACKEND_PORT}..."
+./benchmarks/mock_backend "${MATH_BACKEND_PORT}" math > /dev/null 2>&1 &
+MATH_MOCK_PID=$!
+
+echo "Starting others backend on port ${OTHERS_BACKEND_PORT}..."
+./benchmarks/mock_backend "${OTHERS_BACKEND_PORT}" others > /dev/null 2>&1 &
+OTHERS_MOCK_PID=$!
 
 echo "Starting mock HTTP backend for vLLM-SR on port ${VLLM_BACKEND_PORT}..."
-./benchmarks/mock_backend "${VLLM_BACKEND_PORT}" > /dev/null 2>&1 &
+./benchmarks/mock_backend "${VLLM_BACKEND_PORT}" others > /dev/null 2>&1 &
 VLLM_MOCK_PID=$!
 
-# Start xdp_router in background
-echo "Attaching XDP router to ${IFNAME}..."
-./xdp_router > /dev/null 2>&1 &
+# Start routing proxy in background. Set SK_ROUTER_MODE=sockmap to exercise the
+# experimental kernel SOCKMAP path instead.
+echo "Starting routing proxy..."
+./sk_router > /tmp/sk_router_wrk.log 2>&1 &
 ROUTER_PID=$!
+
+wait_for_port() {
+    local port="$1"
+    local name="$2"
+    local deadline=$((SECONDS + 10))
+
+    while [ "$SECONDS" -lt "$deadline" ]; do
+        if ! kill -0 "$ROUTER_PID" >/dev/null 2>&1; then
+            echo "Error: sk_router exited before ${name} opened:"
+            cat /tmp/sk_router_wrk.log
+            exit 1
+        fi
+        if timeout 1 bash -c ":</dev/tcp/127.0.0.1/${port}" >/dev/null 2>&1; then
+            return 0
+        fi
+        sleep 0.1
+    done
+
+    echo "Error: ${name} did not open on port ${port}; router log:"
+    cat /tmp/sk_router_wrk.log
+    exit 1
+}
 
 cleanup() {
     echo ""
     echo "Cleaning up processes and network rules..."
     kill -9 "$ROUTER_PID" >/dev/null 2>&1 || true
-    kill -9 "$XDP_MOCK_PID" >/dev/null 2>&1 || true
+    kill -9 "$CODING_MOCK_PID" >/dev/null 2>&1 || true
+    kill -9 "$MATH_MOCK_PID" >/dev/null 2>&1 || true
+    kill -9 "$OTHERS_MOCK_PID" >/dev/null 2>&1 || true
     kill -9 "$VLLM_MOCK_PID" >/dev/null 2>&1 || true
-    ip link set dev "${IFNAME}" xdp off >/dev/null 2>&1 || true
     iptables -D INPUT -p tcp --dport "${XDP_PORT}" -j ACCEPT >/dev/null 2>&1 || true
+    iptables -D INPUT -p tcp --dport "${CODING_BACKEND_PORT}" -j ACCEPT >/dev/null 2>&1 || true
+    iptables -D INPUT -p tcp --dport "${MATH_BACKEND_PORT}" -j ACCEPT >/dev/null 2>&1 || true
+    iptables -D INPUT -p tcp --dport "${OTHERS_BACKEND_PORT}" -j ACCEPT >/dev/null 2>&1 || true
     iptables -D INPUT -p tcp --dport "${VLLM_BACKEND_PORT}" -j ACCEPT >/dev/null 2>&1 || true
     if [ -n "$SUDO_USER" ]; then
         chown -R "$SUDO_USER:" "$REPORT_DIR" 2>/dev/null || true
@@ -99,8 +154,8 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# Wait a moment for socket bind and BPF attach
-sleep 1.5
+# Wait for socket bind.
+wait_for_port "$XDP_PORT" "routing frontend"
 
 run_benchmark() {
     echo "# High-Performance ${WRK_BIN} Benchmark Results"
@@ -117,9 +172,11 @@ run_benchmark() {
         RATE_ARG=""
     fi
     echo ""
-    echo "## [1/2] XDP Route (via netns)"
+    echo "- Routing backend ports: coding=\`${CODING_BACKEND_PORT}\`, math=\`${MATH_BACKEND_PORT}\`, others=\`${OTHERS_BACKEND_PORT}\`"
+    echo ""
+    echo "## [1/2] Routing Proxy"
     echo "\`\`\`"
-    ip netns exec "${NETNS}" "$WRK_BIN" -t"$THREADS" -c"$CONCURRENCY" -d"$DURATION" $RATE_ARG -s benchmarks/prompts.lua "$XDP_URL"
+    "$WRK_BIN" -t"$THREADS" -c"$CONCURRENCY" -d"$DURATION" $RATE_ARG -s benchmarks/prompts.lua "$XDP_URL"
     echo "\`\`\`"
     echo ""
     echo "## [2/2] vLLM-SR Route"
