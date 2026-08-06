@@ -5,20 +5,20 @@ Both XDP and vllm-sr execute the shared literal keyword policy, matching 13 case
 
 ---
 
-## Executive Summary
+## Summary
 
-| Concurrency ($c$) | Threads ($t$) | XDP RPS | XDP Avg Latency | vLLM-SR RPS | vLLM-SR Avg Latency | XDP Throughput Speedup |
-| :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| **c = 1** | 1 | **13,685.10 RPS** | **0.08 ms** ($82.5\mu\text{s}$) | 753.32 RPS | 1.32 ms | **18.2×** |
-| **c = 2** | 2 | **15,449.43 RPS** | **0.14 ms** ($137.1\mu\text{s}$) | 1,273.11 RPS | 1.57 ms | **12.1×** |
-| **c = 4** | 4 | **18,540.85 RPS** | **0.22 ms** ($221.8\mu\text{s}$) | 1,699.32 RPS | 2.35 ms | **10.9×** |
-| **c = 8** | 4 | **17,457.97 RPS** | **0.45 ms** ($449.3\mu\text{s}$) | 754.76 RPS | 1.48 ms | **23.1×** |
-| **c = 16** | 4 | **18,317.89 RPS** | **0.88 ms** | 1,863.66 RPS | 2.10 ms | **9.8×** |
-| **c = 32** | 4 | **18,538.90 RPS** | **0.86 ms** | 1,783.94 RPS | 2.35 ms | **10.4×** |
+| Concurrency ($c$) | Threads ($t$) | XDP RPS           | XDP Avg Latency | vLLM-SR RPS   | vLLM-SR Avg Latency | XDP Throughput Speedup  |
+| :---:             | :---:         | :---:             | :---:           | :---:         | :---:               | :---:                   |
+| **c = 1**         | 1             | **13,685.10 RPS** | **0.08 ms**     | 753.32 RPS    | 1.32 ms             | **18.2×**               |
+| **c = 2**         | 2             | **15,449.43 RPS** | **0.14 ms**     | 1,273.11 RPS  | 1.57 ms             | **12.1×**               |
+| **c = 4**         | 4             | **18,540.85 RPS** | **0.22 ms**     | 1,699.32 RPS  | 2.35 ms             | **10.9×**               |
+| **c = 8**         | 4             | **17,457.97 RPS** | **0.45 ms**     | 754.76 RPS    | 1.48 ms             | **23.1×**               |
+| **c = 16**        | 4             | **18,317.89 RPS** | **0.88 ms**     | 1,863.66 RPS  | 2.10 ms             | **9.8×**                |
+| **c = 32**        | 4             | **18,538.90 RPS** | **0.86 ms**     | 1,783.94 RPS  | 2.35 ms             | **10.4×**               |
 
 ---
 
-## Detailed Benchmark Results by Concurrency Level
+## Detailed Benchmark Results
 
 ### Concurrency 1 (c=1, t=1)
 * **XDP Throughput**: `13,685.10 RPS` | **Avg Latency**: `82.50 us`
