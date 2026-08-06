@@ -9,250 +9,251 @@ Both XDP and vllm-sr execute the shared ngram keyword policy, matching 13 case-i
 
 | Concurrency (c) | Threads (t) | XDP RPS           | XDP Avg Latency | vLLM-SR RPS   | vLLM-SR Avg Latency | XDP Throughput Speedup  | XDP Latency Speedup |
 | :---:             | :---:         | :---:             | :---:           | :---:         | :---:               | :---:                   | :---:               |
-| 1                 | 1             | 7,290.39          | 0.13 ms         | 411.35        | 2.40 ms             | 17.7×                   | 19.1×               |
-| 2                 | 2             | 12,679.96         | 0.14 ms         | 719.87        | 2.74 ms             | 17.6×                   | 19.8×               |
-| 4                 | 4             | 17,783.60         | 0.20 ms         | 910.55        | 4.35 ms             | 19.5×                   | 21.7×               |
-| 8                 | 4             | 21,961.98         | 0.33 ms         | 939.93        | 8.47 ms             | 23.4×                   | 25.9×               |
-| 10                | 4             | 21,591.17         | 0.33 ms         | 929.78        | 8.55 ms             | 23.2×                   | 25.8×               |
-| 16                | 4             | 25,693.47         | 0.60 ms         | 927.17        | 17.21 ms            | 27.7×                   | 28.5×               |
-| 32                | 4             | 25,555.63         | 1.21 ms         | 927.75        | 34.41 ms            | 27.5×                   | 28.4×               |
-| 64                | 4             | 25,129.42         | 2.50 ms         | 914.97        | 69.65 ms            | 27.5×                   | 27.9×               |
-| 96                | 4             | 25,040.14         | 3.76 ms         | 917.54        | 103.89 ms           | 27.3×                   | 27.6×               |
+| 1                 | 1             | 7,474.02          | 0.12 ms         | 414.81        | 2.37 ms             | 18.0×                   | 20.4×               |
+| 2                 | 2             | 12,634.41         | 0.14 ms         | 717.42        | 2.75 ms             | 17.6×                   | 20.1×               |
+| 4                 | 4             | 17,445.58         | 0.20 ms         | 906.42        | 4.37 ms             | 19.2×                   | 21.6×               |
+| 8                 | 4             | 21,642.27         | 0.33 ms         | 932.49        | 8.54 ms             | 23.2×                   | 26.1×               |
+| 10                | 4             | 21,592.17         | 0.33 ms         | 931.71        | 8.54 ms             | 23.2×                   | 26.0×               |
+| 16                | 4             | 25,344.87         | 0.60 ms         | 926.63        | 17.23 ms            | 27.4×                   | 28.9×               |
+| 32                | 4             | 25,457.04         | 1.21 ms         | 924.59        | 34.58 ms            | 27.5×                   | 28.6×               |
+| 64                | 4             | 19,786.41         | 3.18 ms         | 747.11        | 85.51 ms            | 26.5×                   | 26.9×               |
+| 96                | 4             | 21,582.43         | 4.39 ms         | 929.65        | 103.02 ms           | 23.2×                   | 23.5×               |
 
 ---
 
 ## Detailed Benchmark Results
 
 ### Concurrency 1 (c=1, t=1)
-* **XDP Throughput**: `7,290.39 RPS` | **Avg Latency**: `125.47 us`
-* **vLLM-SR Throughput**: `411.35 RPS` | **Avg Latency**: `2.40 ms`
-* **Speedup**: `17.7×` Throughput | `19.1×` Latency
+* **XDP Throughput**: `7,474.02 RPS` | **Avg Latency**: `116.25 us`
+* **vLLM-SR Throughput**: `414.81 RPS` | **Avg Latency**: `2.37 ms`
+* **Speedup**: `18.0×` Throughput | `20.4×` Latency
 
 ```text
 --- [1/2] XDP Route ---
   1 threads and 1 connections
   Thread Stats   Avg      Stdev     Max   +/- Stdev
-    Latency   125.47us  130.50us   3.70ms   99.38%
-    Req/Sec     7.32k   273.47     7.84k    66.00%
-  72914 requests in 10.00s, 9.53MB read
-Requests/sec:   7290.39
+    Latency   116.25us   44.57us   3.16ms   96.26%
+    Req/Sec     7.51k   259.51     8.11k    70.76%
+  224968 requests in 30.10s, 29.55MB read
+Requests/sec:   7474.02
 
 --- [2/2] vLLM-SR Route ---
   1 threads and 1 connections
   Thread Stats   Avg      Stdev     Max   +/- Stdev
-    Latency     2.40ms  792.66us   6.84ms   66.85%
-    Req/Sec   413.03     37.42   505.00     64.00%
-  4115 requests in 10.00s, 1.51MB read
-Requests/sec:    411.35
+    Latency     2.37ms  752.94us   7.25ms   65.28%
+    Req/Sec   416.70     37.91   505.00     69.67%
+  12449 requests in 30.01s, 4.56MB read
+Requests/sec:    414.81
 ```
 
 ---
 
 ### Concurrency 2 (c=2, t=2)
-* **XDP Throughput**: `12,679.96 RPS` | **Avg Latency**: `138.63 us`
-* **vLLM-SR Throughput**: `719.87 RPS` | **Avg Latency**: `2.74 ms`
-* **Speedup**: `17.6×` Throughput | `19.8×` Latency
+* **XDP Throughput**: `12,634.41 RPS` | **Avg Latency**: `136.85 us`
+* **vLLM-SR Throughput**: `717.42 RPS` | **Avg Latency**: `2.75 ms`
+* **Speedup**: `17.6×` Throughput | `20.1×` Latency
 
 ```text
 --- [1/2] XDP Route ---
   2 threads and 2 connections
   Thread Stats   Avg      Stdev     Max   +/- Stdev
-    Latency   138.63us   74.50us   3.34ms   96.55%
-    Req/Sec     6.37k   190.86     6.77k    67.33%
-  128060 requests in 10.10s, 16.74MB read
-Requests/sec:  12679.96
+    Latency   136.85us   45.72us   3.31ms   86.92%
+    Req/Sec     6.35k   179.60     6.82k    75.58%
+  380292 requests in 30.10s, 49.91MB read
+Requests/sec:  12634.41
 
 --- [2/2] vLLM-SR Route ---
   2 threads and 2 connections
   Thread Stats   Avg      Stdev     Max   +/- Stdev
-    Latency     2.74ms    0.88ms   7.54ms   67.82%
-    Req/Sec   361.45     31.55   440.00     69.50%
-  7202 requests in 10.00s, 2.63MB read
-Requests/sec:    719.87
+    Latency     2.75ms    0.88ms   7.70ms   67.07%
+    Req/Sec   360.30     32.40   434.00     67.50%
+  21532 requests in 30.01s, 7.88MB read
+Requests/sec:    717.42
 ```
 
 ---
 
 ### Concurrency 4 (c=4, t=4)
-* **XDP Throughput**: `17,783.60 RPS` | **Avg Latency**: `200.71 us`
-* **vLLM-SR Throughput**: `910.55 RPS` | **Avg Latency**: `4.35 ms`
-* **Speedup**: `19.5×` Throughput | `21.7×` Latency
+* **XDP Throughput**: `17,445.58 RPS` | **Avg Latency**: `201.94 us`
+* **vLLM-SR Throughput**: `906.42 RPS` | **Avg Latency**: `4.37 ms`
+* **Speedup**: `19.2×` Throughput | `21.6×` Latency
 
 ```text
 --- [1/2] XDP Route ---
   4 threads and 4 connections
   Thread Stats   Avg      Stdev     Max   +/- Stdev
-    Latency   200.71us   97.62us   3.97ms   95.35%
-    Req/Sec     4.47k   141.75     4.85k    71.04%
-  179609 requests in 10.10s, 23.46MB read
-Requests/sec:  17783.60
+    Latency   201.94us   58.72us   3.97ms   73.93%
+    Req/Sec     4.38k   170.77     4.79k    82.81%
+  525104 requests in 30.10s, 68.79MB read
+Requests/sec:  17445.58
 
 --- [2/2] vLLM-SR Route ---
   4 threads and 4 connections
   Thread Stats   Avg      Stdev     Max   +/- Stdev
-    Latency     4.35ms    1.44ms  12.23ms   67.20%
-    Req/Sec   228.65     31.07   313.00     63.50%
-  9113 requests in 10.01s, 3.35MB read
-Requests/sec:    910.55
+    Latency     4.37ms    1.42ms  11.81ms   66.89%
+    Req/Sec   227.57     30.32   300.00     61.08%
+  27212 requests in 30.02s, 9.97MB read
+Requests/sec:    906.42
 ```
 
 ---
 
 ### Concurrency 8 (c=8, t=4)
-* **XDP Throughput**: `21,961.98 RPS` | **Avg Latency**: `326.59 us`
-* **vLLM-SR Throughput**: `939.93 RPS` | **Avg Latency**: `8.47 ms`
-* **Speedup**: `23.4×` Throughput | `25.9×` Latency
+* **XDP Throughput**: `21,642.27 RPS` | **Avg Latency**: `327.24 us`
+* **vLLM-SR Throughput**: `932.49 RPS` | **Avg Latency**: `8.54 ms`
+* **Speedup**: `23.2×` Throughput | `26.1×` Latency
 
 ```text
 --- [1/2] XDP Route ---
   4 threads and 8 connections
   Thread Stats   Avg      Stdev     Max   +/- Stdev
-    Latency   326.59us  164.93us   5.15ms   84.53%
-    Req/Sec     5.54k   390.56    10.08k    90.80%
-  221798 requests in 10.10s, 28.98MB read
-Requests/sec:  21961.98
+    Latency   327.24us  115.26us   3.65ms   78.61%
+    Req/Sec     5.44k   193.40     7.13k    83.71%
+  651430 requests in 30.10s, 85.44MB read
+Requests/sec:  21642.27
 
 --- [2/2] vLLM-SR Route ---
   4 threads and 8 connections
   Thread Stats   Avg      Stdev     Max   +/- Stdev
-    Latency     8.47ms    2.28ms  22.69ms   69.70%
-    Req/Sec   235.98     35.65   320.00     65.50%
-  9407 requests in 10.01s, 3.45MB read
-Requests/sec:    939.93
+    Latency     8.54ms    2.21ms  24.39ms   69.07%
+    Req/Sec   234.11     30.79   313.00     60.42%
+  27990 requests in 30.02s, 10.25MB read
+Requests/sec:    932.49
 ```
 
 ---
 
 ### Concurrency 10 (c=10, t=4)
-* **XDP Throughput**: `21,591.17 RPS` | **Avg Latency**: `331.04 us`
-* **vLLM-SR Throughput**: `929.78 RPS` | **Avg Latency**: `8.55 ms`
-* **Speedup**: `23.2×` Throughput | `25.8×` Latency
+* **XDP Throughput**: `21,592.17 RPS` | **Avg Latency**: `327.71 us`
+* **vLLM-SR Throughput**: `931.71 RPS` | **Avg Latency**: `8.54 ms`
+* **Speedup**: `23.2×` Throughput | `26.0×` Latency
 
 ```text
 --- [1/2] XDP Route ---
   4 threads and 10 connections
   Thread Stats   Avg      Stdev     Max   +/- Stdev
-    Latency   331.04us  147.89us   4.77ms   82.11%
-    Req/Sec     5.43k   255.48     6.16k    72.28%
-  218066 requests in 10.10s, 28.49MB read
-Requests/sec:  21591.17
+    Latency   327.71us  115.88us   3.58ms   78.64%
+    Req/Sec     5.42k   185.32     5.94k    79.24%
+  649911 requests in 30.10s, 85.24MB read
+Requests/sec:  21592.17
 
 --- [2/2] vLLM-SR Route ---
   4 threads and 10 connections
   Thread Stats   Avg      Stdev     Max   +/- Stdev
-    Latency     8.55ms    2.47ms  23.38ms   69.65%
-    Req/Sec   233.52     35.94   313.00     65.25%
-  9308 requests in 10.01s, 3.42MB read
-Requests/sec:    929.78
+    Latency     8.54ms    2.37ms  28.86ms   69.98%
+    Req/Sec   233.92     33.99   313.00     67.42%
+  27968 requests in 30.02s, 10.24MB read
+Requests/sec:    931.71
 ```
 
 ---
 
 ### Concurrency 16 (c=16, t=4)
-* **XDP Throughput**: `25,693.47 RPS` | **Avg Latency**: `603.96 us`
-* **vLLM-SR Throughput**: `927.17 RPS` | **Avg Latency**: `17.21 ms`
-* **Speedup**: `27.7×` Throughput | `28.5×` Latency
+* **XDP Throughput**: `25,344.87 RPS` | **Avg Latency**: `595.36 us`
+* **vLLM-SR Throughput**: `926.63 RPS` | **Avg Latency**: `17.23 ms`
+* **Speedup**: `27.4×` Throughput | `28.9×` Latency
 
 ```text
 --- [1/2] XDP Route ---
   4 threads and 16 connections
   Thread Stats   Avg      Stdev     Max   +/- Stdev
-    Latency   603.96us  393.40us  11.22ms   98.13%
-    Req/Sec     6.50k   540.45    15.61k    92.77%
-  259485 requests in 10.10s, 33.91MB read
-Requests/sec:  25693.47
+    Latency   595.36us  207.16us  11.70ms   90.50%
+    Req/Sec     6.37k   192.33     7.30k    84.75%
+  760511 requests in 30.01s, 99.82MB read
+Requests/sec:  25344.87
 
 --- [2/2] vLLM-SR Route ---
   4 threads and 16 connections
   Thread Stats   Avg      Stdev     Max   +/- Stdev
-    Latency    17.21ms    4.11ms  62.55ms   75.05%
-    Req/Sec   232.76     35.77   310.00     62.50%
-  9278 requests in 10.01s, 3.41MB read
-Requests/sec:    927.17
+    Latency    17.23ms    3.97ms  57.85ms   74.90%
+    Req/Sec   232.65     33.27   310.00     68.17%
+  27819 requests in 30.02s, 10.18MB read
+Requests/sec:    926.63
 ```
 
 ---
 
 ### Concurrency 32 (c=32, t=4)
-* **XDP Throughput**: `25,555.63 RPS` | **Avg Latency**: `1.21 ms`
-* **vLLM-SR Throughput**: `927.75 RPS` | **Avg Latency**: `34.41 ms`
-* **Speedup**: `27.5×` Throughput | `28.4×` Latency
+* **XDP Throughput**: `25,457.04 RPS` | **Avg Latency**: `1.21 ms`
+* **vLLM-SR Throughput**: `924.59 RPS` | **Avg Latency**: `34.58 ms`
+* **Speedup**: `27.5×` Throughput | `28.6×` Latency
 
 ```text
 --- [1/2] XDP Route ---
   4 threads and 32 connections
   Thread Stats   Avg      Stdev     Max   +/- Stdev
-    Latency     1.21ms  370.13us  13.63ms   96.39%
-    Req/Sec     6.47k   553.49    16.53k    96.01%
-  258106 requests in 10.10s, 33.73MB read
-Requests/sec:  25555.63
+    Latency     1.21ms  193.01us  12.48ms   68.45%
+    Req/Sec     6.40k   175.47     6.97k    82.23%
+  766257 requests in 30.10s, 100.57MB read
+Requests/sec:  25457.04
 
 --- [2/2] vLLM-SR Route ---
   4 threads and 32 connections
   Thread Stats   Avg      Stdev     Max   +/- Stdev
-    Latency    34.41ms    7.46ms 117.40ms   82.02%
-    Req/Sec   232.90     33.93   320.00     67.75%
-  9282 requests in 10.00s, 3.41MB read
-Requests/sec:    927.75
+    Latency    34.58ms    7.19ms 114.59ms   81.46%
+    Req/Sec   232.10     33.14   320.00     68.17%
+  27752 requests in 30.02s, 10.16MB read
+Requests/sec:    924.59
 ```
 
 ---
 
 ### Concurrency 64 (c=64, t=4)
-* **XDP Throughput**: `25,129.42 RPS` | **Avg Latency**: `2.50 ms`
-* **vLLM-SR Throughput**: `914.97 RPS` | **Avg Latency**: `69.65 ms`
-* **Speedup**: `27.5×` Throughput | `27.9×` Latency
+* **XDP Throughput**: `19,786.41 RPS` | **Avg Latency**: `3.18 ms`
+* **vLLM-SR Throughput**: `747.11 RPS` | **Avg Latency**: `85.51 ms`
+* **Speedup**: `26.5×` Throughput | `26.9×` Latency
 
 ```text
 --- [1/2] XDP Route ---
   4 threads and 64 connections
   Thread Stats   Avg      Stdev     Max   +/- Stdev
-    Latency     2.50ms  516.84us  14.97ms   92.09%
-    Req/Sec     6.34k   520.93    12.59k    93.78%
-  253790 requests in 10.10s, 33.17MB read
-Requests/sec:  25129.42
+    Latency     3.18ms  476.73us   8.49ms   68.92%
+    Req/Sec     4.98k   428.01     9.01k    87.35%
+  595564 requests in 30.10s, 78.07MB read
+Requests/sec:  19786.41
 
 --- [2/2] vLLM-SR Route ---
   4 threads and 64 connections
   Thread Stats   Avg      Stdev     Max   +/- Stdev
-    Latency    69.65ms   15.15ms 223.14ms   83.09%
-    Req/Sec   229.90     44.58   333.00     63.00%
-  9163 requests in 10.01s, 3.37MB read
-Requests/sec:    914.97
+    Latency    85.51ms   16.22ms 284.91ms   81.92%
+    Req/Sec   187.61     30.99   330.00     71.00%
+  22440 requests in 30.04s, 8.22MB read
+Requests/sec:    747.11
 ```
 
 ---
 
 ### Concurrency 96 (c=96, t=4)
-* **XDP Throughput**: `25,040.14 RPS` | **Avg Latency**: `3.76 ms`
-* **vLLM-SR Throughput**: `917.54 RPS` | **Avg Latency**: `103.89 ms`
-* **Speedup**: `27.3×` Throughput | `27.6×` Latency
+* **XDP Throughput**: `21,582.43 RPS` | **Avg Latency**: `4.39 ms`
+* **vLLM-SR Throughput**: `929.65 RPS` | **Avg Latency**: `103.02 ms`
+* **Speedup**: `23.2×` Throughput | `23.5×` Latency
 
 ```text
 --- [1/2] XDP Route ---
   4 threads and 96 connections
   Thread Stats   Avg      Stdev     Max   +/- Stdev
-    Latency     3.76ms  490.24us   9.95ms   81.88%
-    Req/Sec     6.34k   730.41    19.07k    94.76%
-  252889 requests in 10.10s, 33.05MB read
-Requests/sec:  25040.14
+    Latency     4.39ms  832.33us   8.84ms   63.86%
+    Req/Sec     5.44k     0.89k   16.44k    64.36%
+  649605 requests in 30.10s, 85.20MB read
+Requests/sec:  21582.43
 
 --- [2/2] vLLM-SR Route ---
   4 threads and 96 connections
   Thread Stats   Avg      Stdev     Max   +/- Stdev
-    Latency   103.89ms   21.09ms 250.65ms   87.93%
-    Req/Sec   230.79     39.99   363.00     72.00%
-  9199 requests in 10.03s, 3.38MB read
-Requests/sec:    917.54
+    Latency   103.02ms   20.00ms 307.54ms   89.00%
+    Req/Sec   233.52     37.96   390.00     71.75%
+  27921 requests in 30.03s, 10.22MB read
+Requests/sec:    929.65
 ```
 
 ---
 
 ## Observations: Advantages of XDP
 
-1. **Throughput Scaling**: XDP scales up to **~25,000 – 25,700 RPS** across higher concurrency levels ($c \ge 16$), whereas vllm-sr caps around **~915 – 940 RPS**.
-2. **Sub-millisecond Latency**: XDP delivers sub-millisecond average latency at concurrency $\le 16$ ($125\mu\text{s}$ at $c=1$ to $604\mu\text{s}$ at $c=16$) and stays low ($2.50\text{ms}$ at $c=64$, $3.76\text{ms}$ at $c=96$), whereas vllm-sr average latency grows linearly up to **103.89ms**.
-3. **Efficiency**: XDP achieves an overall **~17.6× to 27.7× throughput speedup** and **~19.1× to 28.5× latency speedup** compared to application-layer HTTP semantic routing.
+1. **Throughput Scaling**: XDP scales up to **~21,500 – 25,500 RPS** across higher concurrency levels ($c \ge 8$), whereas vllm-sr caps around **~747 – 932 RPS**.
+2. **Sub-millisecond Latency**: XDP delivers sub-millisecond average latency at concurrency $\le 16$ ($116\mu\text{s}$ at $c=1$ to $595\mu\text{s}$ at $c=16$) and stays relatively low ($3.18\text{ms}$ at $c=64$, $4.39\text{ms}$ at $c=96$), whereas vllm-sr average latency grows linearly up to **103.02ms**.
+3. **Efficiency**: XDP achieves an overall **~17.6× to 27.5× throughput speedup** and **~20.1× to 28.9× latency speedup** compared to application-layer HTTP semantic routing.
+
 
 <!-- image of latency_comparison -->
 <img src="latency_comparison.png" alt="Latency Comparison" width="600"/>

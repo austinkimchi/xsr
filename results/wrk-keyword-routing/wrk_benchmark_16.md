@@ -1,41 +1,41 @@
 # High-Performance wrk Benchmark Results
 
-- Timestamp: `Wed Aug  5 11:50:38 PM PDT 2026`
+- Timestamp: `Thu Aug  6 01:06:18 PM PDT 2026`
 - Tool: `wrk`
 - Threads: `4`
 - Connections: `16`
-- Duration: `10s`
+- Duration: `30s`
 
 - Routing backend ports: coding=`18391`, math=`18392`, others=`18393`
 
 ## [1/2] XDP Route
 ```
 [Lua] Loaded 240 prompts from benchmarks/dataset_prompts.jsonl
-Running 10s test @ http://10.10.0.1:18081/v1/chat/completions
+Running 30s test @ http://10.10.0.1:18081/v1/chat/completions
   4 threads and 16 connections
   Thread Stats   Avg      Stdev     Max   +/- Stdev
-    Latency   603.96us  393.40us  11.22ms   98.13%
-    Req/Sec     6.50k   540.45    15.61k    92.77%
-  259485 requests in 10.10s, 33.91MB read
-Requests/sec:  25693.47
-Transfer/sec:      3.36MB
-[Lua] backend markers: coding=111402 math=102735 others=45348 unknown=0
-[Lua] expected routes: coding=97370 math=100574 others=61541 unknown=0
-[Lua] aggregate route agreement: 0.937596 (243292/259485); fifo_matches=220584 fifo_mismatches=38901
+    Latency   595.36us  207.16us  11.70ms   90.50%
+    Req/Sec     6.37k   192.33     7.30k    84.75%
+  760511 requests in 30.01s, 99.82MB read
+Requests/sec:  25344.87
+Transfer/sec:      3.33MB
+[Lua] backend markers: coding=326411 math=301058 others=133042 unknown=0
+[Lua] expected routes: coding=285233 math=294722 others=180556 unknown=0
+[Lua] aggregate route agreement: 0.937524 (712997/760511); fifo_matches=646451 fifo_mismatches=114060
 ```
 
 ## [2/2] vLLM-SR Route
 ```
 [Lua] Loaded 240 prompts from benchmarks/dataset_prompts.jsonl
-Running 10s test @ http://127.0.0.1:8899/v1/chat/completions
+Running 30s test @ http://127.0.0.1:8899/v1/chat/completions
   4 threads and 16 connections
   Thread Stats   Avg      Stdev     Max   +/- Stdev
-    Latency    17.21ms    4.11ms  62.55ms   75.05%
-    Req/Sec   232.76     35.77   310.00     62.50%
-  9278 requests in 10.01s, 3.41MB read
-Requests/sec:    927.17
-Transfer/sec:    348.89KB
-[Lua] backend markers: coding=3199 math=3251 others=2828 unknown=0
-[Lua] expected routes: coding=3515 math=3663 others=2100 unknown=0
-[Lua] aggregate route agreement: 0.921535 (8550/9278); fifo_matches=6802 fifo_mismatches=2476
+    Latency    17.23ms    3.97ms  57.85ms   74.90%
+    Req/Sec   232.65     33.27   310.00     68.17%
+  27819 requests in 30.02s, 10.18MB read
+Requests/sec:    926.63
+Transfer/sec:    347.23KB
+[Lua] backend markers: coding=9291 math=9509 others=9019 unknown=0
+[Lua] expected routes: coding=10437 math=10781 others=6601 unknown=0
+[Lua] aggregate route agreement: 0.913081 (25401/27819); fifo_matches=20296 fifo_mismatches=7523
 ```
