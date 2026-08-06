@@ -1,41 +1,41 @@
 # High-Performance wrk Benchmark Results
 
-- Timestamp: `Wed Aug  5 05:38:09 PM PDT 2026`
+- Timestamp: `Wed Aug  5 10:58:24 PM PDT 2026`
 - Tool: `wrk`
 - Threads: `4`
 - Connections: `4`
 - Duration: `10s`
 
-## [1/2] XDP Route (via netns)
+- Routing backend ports: coding=`18391`, math=`18392`, others=`18393`
+
+## [1/2] Routing Proxy
 ```
-[Lua] Loaded 150 prompts from benchmarks/dataset_prompts.jsonl
-[Lua] Loaded 150 prompts from benchmarks/dataset_prompts.jsonl
-[Lua] Loaded 150 prompts from benchmarks/dataset_prompts.jsonl
-[Lua] Loaded 150 prompts from benchmarks/dataset_prompts.jsonl
-[Lua] Loaded 150 prompts from benchmarks/dataset_prompts.jsonl
-Running 10s test @ http://10.10.0.1:18081/v1/chat/completions
+[Lua] Loaded 240 prompts from benchmarks/dataset_prompts.jsonl
+Running 10s test @ http://127.0.0.1:18081/v1/chat/completions
   4 threads and 4 connections
   Thread Stats   Avg      Stdev     Max   +/- Stdev
-    Latency   251.15us  186.17us   3.91ms   91.10%
-    Req/Sec     4.15k   218.80     4.48k    93.56%
-  167059 requests in 10.10s, 25.97MB read
-Requests/sec:  16540.97
-Transfer/sec:      2.57MB
+    Latency   108.46us  101.42us   4.58ms   99.53%
+    Req/Sec     7.57k   428.46     8.56k    77.97%
+  304376 requests in 10.10s, 39.79MB read
+Requests/sec:  30136.94
+Transfer/sec:      3.94MB
+[Lua] backend markers: coding=130682 math=120462 others=53232 unknown=0
+[Lua] expected routes: coding=114210 math=117926 others=72240 unknown=0
+[Lua] aggregate route agreement: 0.937551 (285368/304376); fifo_matches=258733 fifo_mismatches=45643
 ```
 
 ## [2/2] vLLM-SR Route
 ```
-[Lua] Loaded 150 prompts from benchmarks/dataset_prompts.jsonl
-[Lua] Loaded 150 prompts from benchmarks/dataset_prompts.jsonl
-[Lua] Loaded 150 prompts from benchmarks/dataset_prompts.jsonl
-[Lua] Loaded 150 prompts from benchmarks/dataset_prompts.jsonl
-[Lua] Loaded 150 prompts from benchmarks/dataset_prompts.jsonl
+[Lua] Loaded 240 prompts from benchmarks/dataset_prompts.jsonl
 Running 10s test @ http://127.0.0.1:8899/v1/chat/completions
   4 threads and 4 connections
   Thread Stats   Avg      Stdev     Max   +/- Stdev
-    Latency     2.30ms  377.55us   7.18ms   82.26%
-    Req/Sec   434.38     22.17   474.00     79.50%
-  17300 requests in 10.01s, 6.76MB read
-Requests/sec:   1728.99
-Transfer/sec:    692.31KB
+    Latency     4.43ms    1.52ms  15.34ms   68.07%
+    Req/Sec   224.55     33.75   292.00     65.25%
+  8948 requests in 10.01s, 3.28MB read
+Requests/sec:    894.30
+Transfer/sec:    335.82KB
+[Lua] backend markers: coding=3188 math=2952 others=2808 unknown=0
+[Lua] expected routes: coding=3476 math=3400 others=2072 unknown=0
+[Lua] aggregate route agreement: 0.917747 (8212/8948); fifo_matches=6536 fifo_mismatches=2412
 ```
