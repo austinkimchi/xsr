@@ -78,6 +78,10 @@ setup:
 	fi
 	@ip addr show dev $(XDP_HOST_IF) | grep -Fq "$(XDP_HOST_ADDR)" || ip addr add $(XDP_HOST_ADDR) dev $(XDP_HOST_IF)
 	@ip netns exec $(XDP_NETNS) ip addr show dev $(XDP_PEER_IF) | grep -Fq "$(XDP_PEER_ADDR)" || ip netns exec $(XDP_NETNS) ip addr add $(XDP_PEER_ADDR) dev $(XDP_PEER_IF)
+	@ip link set dev $(XDP_HOST_IF) mtu 1500
+	@ip netns exec $(XDP_NETNS) ip link set dev $(XDP_PEER_IF) mtu 1500
+	@ethtool -K $(XDP_HOST_IF) gro off gso off tso off lro off 2>/dev/null || true
+	@ip netns exec $(XDP_NETNS) ethtool -K $(XDP_PEER_IF) gro off gso off tso off lro off 2>/dev/null || true
 	@ip link set $(XDP_HOST_IF) up
 	@ip netns exec $(XDP_NETNS) ip link set $(XDP_PEER_IF) up
 	@ip netns exec $(XDP_NETNS) ip link set lo up
