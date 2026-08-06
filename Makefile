@@ -20,12 +20,6 @@ XDP_HOST_ADDR ?= 10.10.0.1/24
 XDP_PEER_ADDR ?= 10.10.0.2/24
 KEYWORD_POLICY ?= config/policy_ngram.yaml
 NGRAM_MODEL ?= models/xdp_ngram_model_fnv.json
-XDP_CLASSIFIER ?= ngram
-
-ifeq ($(XDP_CLASSIFIER),literal)
-USER_CFLAGS += -DXDP_CLASSIFIER_LITERAL=1
-BPF_CFLAGS += -DXDP_CLASSIFIER_LITERAL=1
-endif
 
 .DEFAULT_GOAL := all
 
@@ -48,16 +42,13 @@ sk_router: sk_router.c xdp_router.h bpf/xdp_decision.bpf.h bpf/xdp_signals.bpf.h
 benchmarks/mock_backend: benchmarks/mock_backend.c
 	$(CC) -O3 $< -o $@ -lpthread
 
-bpf/xdp_keyword_policy.generated.h: $(KEYWORD_POLICY) scripts/generate_keyword_header.py
-	$(PYTHON) scripts/generate_keyword_header.py $(KEYWORD_POLICY) $@
-
 bpf/xdp_ngram_model.generated.h: $(NGRAM_MODEL) scripts/generate_ngram_header.py
 	$(PYTHON) scripts/generate_ngram_header.py $(NGRAM_MODEL) $@
 
-xdp_router.bpf.o: bpf/xdp_router.bpf.c xdp_router.h bpf/xdp_http_parser.bpf.h bpf/xdp_classifier.bpf.h bpf/xdp_keyword_classifier.bpf.h bpf/xdp_ngram_classifier.bpf.h bpf/xdp_keyword_policy.generated.h bpf/xdp_ngram_model.generated.h
+xdp_router.bpf.o: bpf/xdp_router.bpf.c xdp_router.h bpf/xdp_http_parser.bpf.h bpf/xdp_classifier.bpf.h bpf/xdp_ngram_classifier.bpf.h bpf/xdp_ngram_model.generated.h
 	$(BPF_CLANG) $(BPF_CFLAGS) -c $< -o $@
 
-sk_router.bpf.o: bpf/sk_router.bpf.c xdp_router.h bpf/xdp_decision.bpf.h bpf/xdp_signals.bpf.h bpf/xdp_classifier.bpf.h bpf/xdp_keyword_classifier.bpf.h bpf/xdp_ngram_classifier.bpf.h bpf/xdp_keyword_policy.generated.h bpf/xdp_ngram_model.generated.h
+sk_router.bpf.o: bpf/sk_router.bpf.c xdp_router.h bpf/xdp_decision.bpf.h bpf/xdp_signals.bpf.h bpf/xdp_classifier.bpf.h bpf/xdp_ngram_classifier.bpf.h bpf/xdp_ngram_model.generated.h
 	$(BPF_CLANG) $(BPF_CFLAGS) -c $< -o $@
 
 clean:

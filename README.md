@@ -12,27 +12,29 @@ client sends HTTPS
 ```
 
 ## Current Prototype Implementation
-- XDP observer that extracts prompt signals and records route counters/events.
-- Routing proxy that performs actual backend selection after TLS has already
-  been terminated to plaintext HTTP.
+- XDP/eBPF classifier that extracts prompt content, runs the hashed 3-gram
+  model, records route counters/events, and publishes a per-flow route decision.
+- Routing proxy that performs physical backend forwarding from the XDP-produced
+  decision after TLS has already been terminated to plaintext HTTP.
 - Experimental SK_SKB/SOCKMAP BPF program kept for kernel-level socket-map
   routing work.
 - Hashed 3-gram FNV classifier in eBPF to classify requests as coding,
-  general, or math prompts, with the literal substring keyword matcher still
-  available as an alternate build mode.
+  general, or math prompts.
 
 ## Routing Path
 ```
 client
   -> TLS termination
   -> plaintext TCP connection on :18081
-  -> routing proxy
+  -> XDP/eBPF ngram classification on veth0
+  -> routing proxy reads XDP flow decision
   -> coding (:18391), math (:18392), or others (:18393)
 ```
 
 The default `sk_router` control process fails startup unless all three backends
-are reachable. The experimental SOCKMAP mode can be selected with
-`SK_ROUTER_MODE=sockmap`; it populates the decision map before attaching BPF.
+are reachable and the XDP classifier can attach to `veth0`. The experimental
+SOCKMAP mode can be selected with `SK_ROUTER_MODE=sockmap`; it populates the
+decision map before attaching BPF.
 
 The checked-in vLLM-SR policy configs also map coding, math, and others to
 separate marker backend ports so `wrk` can profile physical backend responses.
@@ -54,15 +56,10 @@ sudo make setup
 ```
 
 ### 2. Build eBPF Router with Keyword Policy
-Compile the XDP router binary, BPF object, and mock backend. The default build
-uses the checked-in 3-gram model at `models/xdp_ngram_model_fnv.json`:
+Compile the XDP router binary, BPF object, and mock backend. The build uses the
+checked-in 3-gram model at `models/xdp_ngram_model_fnv.json`:
 ```bash
 sudo make dev
-```
-
-To build the preserved literal substring classifier instead:
-```bash
-sudo make KEYWORD_POLICY=config/policy_literal.yaml XDP_CLASSIFIER=literal dev
 ```
 
 ### 3. Run the Routing Smoke Test
@@ -98,8 +95,6 @@ Benchmark results are saved automatically to `results/wrk-keyword-routing/latest
 │   ├── xdp_decision.bpf.h
 │   ├── xdp_classifier.bpf.h
 │   ├── xdp_http_parser.bpf.h
-│   ├── xdp_keyword_classifier.bpf.h
-│   ├── xdp_keyword_policy.generated.h
 │   ├── xdp_ngram_classifier.bpf.h
 │   ├── xdp_ngram_model.generated.h
 │   ├── xdp_router.bpf.c
@@ -122,7 +117,6 @@ Benchmark results are saved automatically to `results/wrk-keyword-routing/latest
 ├── results/
 │   └── wrk-keyword-routing/
 ├── scripts/
-│   ├── generate_keyword_header.py
 │   └── generate_ngram_header.py
 ├── Makefile
 ├── README.md

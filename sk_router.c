@@ -12,6 +12,7 @@
 #include <bpf/libbpf.h>
 #include <errno.h>
 #include <linux/bpf.h>
+#include <net/if.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <pthread.h>
@@ -28,6 +29,8 @@
 #include "bpf/xdp_signals.bpf.h"
 
 #define BPF_OBJECT_FILE "sk_router.bpf.o"
+#define XDP_BPF_OBJECT_FILE "xdp_router.bpf.o"
+#define XDP_PROGRAM_NAME "xdp_router"
 #define FRONTEND_PORT 18081
 #define BACKEND_HOST "127.0.0.1"
 #define BACKEND_CODING_PORT 18391
@@ -58,6 +61,14 @@ struct sk_route_entry {
 };
 
 static volatile sig_atomic_t running = 1;
+
+struct xdp_classifier_runtime {
+  struct bpf_object *obj;
+  struct bpf_link *link;
+  int decisions_fd;
+};
+
+static void bump_memlock_rlimit(void);
 
 static void handle_signal(int sig) {
   (void)sig;
@@ -186,6 +197,89 @@ static int populate_ngram_weights(struct bpf_object *obj) {
   return 0;
 }
 
+static int route_to_backend_port(__u32 route) {
+  if (route == XDP_ROUTE_CODING)
+    return BACKEND_CODING_PORT;
+  if (route == XDP_ROUTE_MATH)
+    return BACKEND_MATH_PORT;
+  return BACKEND_OTHERS_PORT;
+}
+
+static int start_xdp_classifier(struct xdp_classifier_runtime *runtime) {
+  const char *ifname = getenv("XDP_IFNAME");
+  struct bpf_program *prog = NULL;
+  int rules_fd;
+  int ifindex;
+
+  memset(runtime, 0, sizeof(*runtime));
+  runtime->decisions_fd = -1;
+  if (!ifname || !*ifname)
+    ifname = "veth0";
+
+  ifindex = if_nametoindex(ifname);
+  if (!ifindex) {
+    fprintf(stderr, "failed to resolve XDP interface %s: %s\n", ifname,
+            strerror(errno));
+    return -1;
+  }
+
+  runtime->obj = bpf_object__open_file(XDP_BPF_OBJECT_FILE, NULL);
+  if (libbpf_get_error(runtime->obj)) {
+    fprintf(stderr, "failed to open %s\n", XDP_BPF_OBJECT_FILE);
+    runtime->obj = NULL;
+    return -1;
+  }
+
+  if (bpf_object__load(runtime->obj) != 0) {
+    fprintf(stderr, "failed to load %s\n", XDP_BPF_OBJECT_FILE);
+    return -1;
+  }
+
+  if (populate_ngram_weights(runtime->obj) != 0) {
+    perror("populate_ngram_weights");
+    return -1;
+  }
+
+  rules_fd = bpf_object__find_map_fd_by_name(runtime->obj,
+                                             "xdp_decision_rules");
+  if (rules_fd < 0 || populate_decision_rules(rules_fd) != 0) {
+    perror("populate_decision_rules");
+    return -1;
+  }
+
+  runtime->decisions_fd = bpf_object__find_map_fd_by_name(
+      runtime->obj, "xdp_flow_decisions");
+  if (runtime->decisions_fd < 0) {
+    fprintf(stderr, "failed to find xdp_flow_decisions map\n");
+    return -1;
+  }
+
+  prog = bpf_object__find_program_by_name(runtime->obj, XDP_PROGRAM_NAME);
+  if (!prog) {
+    fprintf(stderr, "failed to find XDP program: %s\n", XDP_PROGRAM_NAME);
+    return -1;
+  }
+
+  bpf_xdp_detach(ifindex, 0, NULL);
+  runtime->link = bpf_program__attach_xdp(prog, ifindex);
+  if (libbpf_get_error(runtime->link)) {
+    fprintf(stderr, "failed to attach XDP classifier to %s\n", ifname);
+    runtime->link = NULL;
+    return -1;
+  }
+
+  printf("XDP ngram classifier attached to %s\n", ifname);
+  fflush(stdout);
+  return 0;
+}
+
+static void stop_xdp_classifier(struct xdp_classifier_runtime *runtime) {
+  if (runtime->link)
+    bpf_link__destroy(runtime->link);
+  if (runtime->obj)
+    bpf_object__close(runtime->obj);
+}
+
 static int verify_backend_available(int port) {
   int fd = connect_backend(port);
 
@@ -303,185 +397,62 @@ static int read_http_message(int fd, char *buf, size_t cap, size_t *len_out) {
   return 1;
 }
 
-#ifdef XDP_CLASSIFIER_LITERAL
-static int contains_ci(const char *buf, size_t len, const char *needle) {
-  size_t needle_len = strlen(needle);
+static int build_xdp_decision_key(int client_fd, struct xdp_flow_key *key) {
+  struct sockaddr_in peer = {};
+  struct sockaddr_in local = {};
+  socklen_t peer_len = sizeof(peer);
+  socklen_t local_len = sizeof(local);
 
-  if (needle_len == 0 || needle_len > len)
-    return 0;
-
-  for (size_t i = 0; i + needle_len <= len; i++) {
-    size_t j = 0;
-
-    while (j < needle_len && ascii_lower(buf[i + j]) == needle[j])
-      j++;
-    if (j == needle_len)
-      return 1;
+  if (getpeername(client_fd, (struct sockaddr *)&peer, &peer_len) != 0 ||
+      getsockname(client_fd, (struct sockaddr *)&local, &local_len) != 0)
+    return -1;
+  if (peer.sin_family != AF_INET || local.sin_family != AF_INET) {
+    errno = EAFNOSUPPORT;
+    return -1;
   }
 
+  key->src_ip = peer.sin_addr.s_addr;
+  key->dst_ip = local.sin_addr.s_addr;
+  key->src_port = ntohs(peer.sin_port);
+  key->dst_port = ntohs(local.sin_port);
   return 0;
 }
-#endif
 
-#ifndef XDP_CLASSIFIER_LITERAL
-struct ngram_score {
-  int coding;
-  int general;
-  int math;
-  unsigned char seen;
-  unsigned char c0;
-  unsigned char c1;
-  unsigned char c2;
+static int select_backend_port_from_xdp(int decisions_fd, int client_fd) {
+  struct xdp_flow_key key = {};
+  struct xdp_flow_decision decision = {};
+  char src[INET_ADDRSTRLEN] = {};
+  char dst[INET_ADDRSTRLEN] = {};
+
+  if (build_xdp_decision_key(client_fd, &key) != 0)
+    return -1;
+
+  for (int attempt = 0; attempt < 1000; attempt++) {
+    if (bpf_map_lookup_elem(decisions_fd, &key, &decision) == 0) {
+      bpf_map_delete_elem(decisions_fd, &key);
+      return route_to_backend_port(decision.route);
+    }
+    usleep(100);
+  }
+
+  inet_ntop(AF_INET, &key.src_ip, src, sizeof(src));
+  inet_ntop(AF_INET, &key.dst_ip, dst, sizeof(dst));
+  fprintf(stderr,
+          "timed out waiting for XDP decision for %s:%u -> %s:%u\n", src,
+          key.src_port, dst, key.dst_port);
+  errno = ETIMEDOUT;
+  return -1;
+}
+
+struct proxy_client_arg {
+  int client_fd;
+  int decisions_fd;
 };
 
-static unsigned int ngram_hash3(unsigned char c0, unsigned char c1,
-                                unsigned char c2) {
-  unsigned int hash = 2166136261u;
-
-  hash ^= c0;
-  hash *= 16777619u;
-  hash ^= c1;
-  hash *= 16777619u;
-  hash ^= c2;
-  hash *= 16777619u;
-
-  return hash & (XDP_NGRAM_FEATURES - 1);
-}
-
-static void ngram_score_init(struct ngram_score *score) {
-  score->coding = XDP_NGRAM_BIAS_CODING;
-  score->general = XDP_NGRAM_BIAS_GENERAL;
-  score->math = XDP_NGRAM_BIAS_MATH;
-  score->seen = 0;
-  score->c0 = 0;
-  score->c1 = 0;
-  score->c2 = 0;
-}
-
-static void ngram_score_char(struct ngram_score *score, unsigned char c) {
-  unsigned int key;
-  const struct xdp_ngram_weight *weight;
-
-  c = (unsigned char)ascii_lower((char)c);
-  score->c0 = score->c1;
-  score->c1 = score->c2;
-  score->c2 = c;
-
-  if (score->seen < 3) {
-    score->seen++;
-    if (score->seen < 3)
-      return;
-  }
-
-  key = ngram_hash3(score->c0, score->c1, score->c2);
-  weight = &xdp_ngram_model[key];
-  score->coding += weight->coding;
-  score->general += weight->general;
-  score->math += weight->math;
-}
-
-static int ngram_route_for_scores(const struct ngram_score *score) {
-  int route = BACKEND_CODING_PORT;
-  int best = score->coding;
-
-  if (score->general > best) {
-    best = score->general;
-    route = BACKEND_OTHERS_PORT;
-  }
-
-  if (score->math > best)
-    route = BACKEND_MATH_PORT;
-
-  return route;
-}
-
-static int score_first_content_string(const char *request, size_t len,
-                                      struct ngram_score *score) {
-  const char key[] = "\"content\"";
-  int waiting_colon = 0;
-  int waiting_quote = 0;
-
-  for (size_t i = 0; i + sizeof(key) - 1 <= len; i++) {
-    if (strncmp(request + i, key, sizeof(key) - 1) == 0) {
-      i += sizeof(key) - 1;
-      waiting_colon = 1;
-    }
-
-    if (waiting_colon) {
-      while (i < len && (request[i] == ' ' || request[i] == '\t' ||
-                         request[i] == '\r' || request[i] == '\n'))
-        i++;
-      if (i < len && request[i] == ':') {
-        i++;
-        waiting_quote = 1;
-        waiting_colon = 0;
-      } else {
-        waiting_colon = 0;
-      }
-    }
-
-    if (waiting_quote) {
-      while (i < len && (request[i] == ' ' || request[i] == '\t' ||
-                         request[i] == '\r' || request[i] == '\n'))
-        i++;
-      if (i >= len || request[i] != '"')
-        return 0;
-      i++;
-
-      int escaped = 0;
-      for (; i < len; i++) {
-        unsigned char c = (unsigned char)request[i];
-
-        if (escaped) {
-          escaped = 0;
-        } else if (c == '\\') {
-          escaped = 1;
-        } else if (c == '"') {
-          return 1;
-        }
-
-        ngram_score_char(score, c);
-      }
-      return 0;
-    }
-  }
-
-  return 0;
-}
-#endif
-
-static int select_backend_port(const char *request, size_t len) {
-#ifdef XDP_CLASSIFIER_LITERAL
-  if (contains_ci(request, len, "debug") ||
-      contains_ci(request, len, "function") ||
-      contains_ci(request, len, "code") ||
-      contains_ci(request, len, "algorithm") ||
-      contains_ci(request, len, "refactor"))
-    return BACKEND_CODING_PORT;
-
-  if (contains_ci(request, len, "solve") ||
-      contains_ci(request, len, "matrix") ||
-      contains_ci(request, len, "equation") ||
-      contains_ci(request, len, "derivative") ||
-      contains_ci(request, len, "integral") ||
-      contains_ci(request, len, "geometry") ||
-      contains_ci(request, len, "calculate") ||
-      contains_ci(request, len, "probability"))
-    return BACKEND_MATH_PORT;
-
-  return BACKEND_OTHERS_PORT;
-#else
-  struct ngram_score score;
-
-  ngram_score_init(&score);
-  if (!score_first_content_string(request, len, &score))
-    return BACKEND_OTHERS_PORT;
-  return ngram_route_for_scores(&score);
-#endif
-}
-
 static void *proxy_client_thread(void *arg) {
-  int client_fd = *(int *)arg;
+  struct proxy_client_arg *client_arg = arg;
+  int client_fd = client_arg->client_fd;
+  int decisions_fd = client_arg->decisions_fd;
   char *request = NULL;
   char *response = NULL;
 
@@ -494,21 +465,56 @@ static void *proxy_client_thread(void *arg) {
   while (running) {
     size_t request_len = 0;
     size_t response_len = 0;
+    int backend_port;
     int backend_fd;
     int read_result = read_http_message(client_fd, request, MAX_HTTP_MESSAGE,
                                         &request_len);
 
-    if (read_result <= 0)
+    if (read_result <= 0) {
+#ifdef XDP_DEBUG
+      fprintf(stderr, "failed to read complete HTTP request: result=%d errno=%d\n",
+              read_result, errno);
+#endif
+      break;
+    }
+
+    backend_port = select_backend_port_from_xdp(decisions_fd, client_fd);
+    if (backend_port < 0)
       break;
 
-    backend_fd = connect_backend(select_backend_port(request, request_len));
-    if (backend_fd < 0)
+    backend_fd = connect_backend(backend_port);
+    if (backend_fd < 0) {
+#ifdef XDP_DEBUG
+      fprintf(stderr, "failed to connect backend port %d: %s\n", backend_port,
+              strerror(errno));
+#endif
       break;
+    }
 
-    if (send_all(backend_fd, request, request_len) != 0 ||
-        read_http_message(backend_fd, response, MAX_HTTP_MESSAGE,
-                          &response_len) <= 0 ||
-        send_all(client_fd, response, response_len) != 0) {
+    if (send_all(backend_fd, request, request_len) != 0) {
+#ifdef XDP_DEBUG
+      fprintf(stderr, "failed to send request to backend: %s\n",
+              strerror(errno));
+#endif
+      close(backend_fd);
+      break;
+    }
+
+    if (read_http_message(backend_fd, response, MAX_HTTP_MESSAGE,
+                          &response_len) <= 0) {
+#ifdef XDP_DEBUG
+      fprintf(stderr, "failed to read backend response: %s\n",
+              strerror(errno));
+#endif
+      close(backend_fd);
+      break;
+    }
+
+    if (send_all(client_fd, response, response_len) != 0) {
+#ifdef XDP_DEBUG
+      fprintf(stderr, "failed to send response to client: %s\n",
+              strerror(errno));
+#endif
       close(backend_fd);
       break;
     }
@@ -524,21 +530,32 @@ out:
 }
 
 static int run_proxy_router(void) {
-  int listener_fd = create_listener();
+  struct xdp_classifier_runtime xdp = {};
+  int listener_fd;
 
-  if (listener_fd < 0) {
-    perror("listen frontend");
+  bump_memlock_rlimit();
+  if (start_xdp_classifier(&xdp) != 0) {
+    stop_xdp_classifier(&xdp);
     return 1;
   }
 
-  printf("userspace routing proxy listening on 0.0.0.0:%d\n", FRONTEND_PORT);
+  listener_fd = create_listener();
+
+  if (listener_fd < 0) {
+    perror("listen frontend");
+    stop_xdp_classifier(&xdp);
+    return 1;
+  }
+
+  printf("XDP-classified routing proxy listening on 0.0.0.0:%d\n",
+         FRONTEND_PORT);
   printf("routes: coding=%d math=%d others=%d\n", BACKEND_CODING_PORT,
          BACKEND_MATH_PORT, BACKEND_OTHERS_PORT);
   fflush(stdout);
 
   while (running) {
     int client_fd = accept(listener_fd, NULL, NULL);
-    int *thread_fd;
+    struct proxy_client_arg *thread_arg;
     pthread_t thread;
 
     if (client_fd < 0) {
@@ -549,15 +566,16 @@ static int run_proxy_router(void) {
     }
 
     set_reuse_and_nodelay(client_fd);
-    thread_fd = malloc(sizeof(*thread_fd));
-    if (!thread_fd) {
+    thread_arg = malloc(sizeof(*thread_arg));
+    if (!thread_arg) {
       close(client_fd);
       continue;
     }
-    *thread_fd = client_fd;
+    thread_arg->client_fd = client_fd;
+    thread_arg->decisions_fd = xdp.decisions_fd;
 
-    if (pthread_create(&thread, NULL, proxy_client_thread, thread_fd) != 0) {
-      free(thread_fd);
+    if (pthread_create(&thread, NULL, proxy_client_thread, thread_arg) != 0) {
+      free(thread_arg);
       close(client_fd);
       continue;
     }
@@ -565,6 +583,7 @@ static int run_proxy_router(void) {
   }
 
   close(listener_fd);
+  stop_xdp_classifier(&xdp);
   return 0;
 }
 

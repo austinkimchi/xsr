@@ -18,6 +18,19 @@
 
 #include "xdp_router.h"
 #include "bpf/xdp_ngram_model.generated.h"
+#include "bpf/xdp_signals.bpf.h"
+
+#define XDP_MODEL_CODING 1
+#define XDP_MODEL_MATH 2
+#define XDP_MODEL_OTHERS 3
+
+struct xdp_decision_rule {
+  __u64 require_any;
+  __u64 require_all;
+  __u64 reject_any;
+  __u32 model_id;
+  __u32 enabled;
+};
 
 struct route_counter {
   __u32 key;
@@ -92,6 +105,31 @@ static int populate_ngram_weights(struct bpf_object *obj) {
   return 0;
 }
 
+static int populate_decision_rules(struct bpf_object *obj) {
+  int rules_fd = bpf_object__find_map_fd_by_name(obj, "xdp_decision_rules");
+  struct xdp_decision_rule rules[3] = {
+      {.require_any = XDP_SIGNAL_DOMAIN_CODING,
+       .model_id = XDP_MODEL_CODING,
+       .enabled = 1},
+      {.require_any = XDP_SIGNAL_DOMAIN_MATH,
+       .model_id = XDP_MODEL_MATH,
+       .enabled = 1},
+      {.require_any = XDP_SIGNAL_DOMAIN_OTHERS,
+       .model_id = XDP_MODEL_OTHERS,
+       .enabled = 1},
+  };
+
+  if (rules_fd < 0)
+    return -1;
+
+  for (__u32 i = 0; i < 3; i++) {
+    if (bpf_map_update_elem(rules_fd, &i, &rules[i], BPF_ANY) != 0)
+      return -1;
+  }
+
+  return 0;
+}
+
 int main(void) {
   struct bpf_object *obj;
   struct bpf_program *prog;
@@ -123,6 +161,10 @@ int main(void) {
 
   if (populate_ngram_weights(obj) != 0) {
     perror("populate_ngram_weights");
+    return 1;
+  }
+  if (populate_decision_rules(obj) != 0) {
+    perror("populate_decision_rules");
     return 1;
   }
 

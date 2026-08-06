@@ -33,13 +33,6 @@ struct {
 } xdp_route_events SEC(".maps");
 #endif
 
-struct tcp_flow_key {
-  __u32 src_ip;
-  __u32 dst_ip;
-  __u16 src_port;
-  __u16 dst_port;
-};
-
 struct http_flow_state {
   __u32 next_seq;
   __u32 body_seq;
@@ -50,9 +43,16 @@ struct http_flow_state {
 struct {
   __uint(type, BPF_MAP_TYPE_LRU_HASH);
   __uint(max_entries, 1024);
-  __type(key, struct tcp_flow_key);
+  __type(key, struct xdp_flow_key);
   __type(value, struct http_flow_state);
 } http_flows SEC(".maps");
+
+struct {
+  __uint(type, BPF_MAP_TYPE_LRU_HASH);
+  __uint(max_entries, 4096);
+  __type(key, struct xdp_flow_key);
+  __type(value, struct xdp_flow_decision);
+} xdp_flow_decisions SEC(".maps");
 
 static __always_inline void increment_counter(__u32 key) {
   __u64 *value = bpf_map_lookup_elem(&counters, &key);
@@ -91,7 +91,7 @@ static __always_inline void emit_route_event(__u32 route, __u32 model_id,
 #endif
 
 static __always_inline void build_flow_key(struct iphdr *ip, struct tcphdr *tcp,
-                                           struct tcp_flow_key *key) {
+                                           struct xdp_flow_key *key) {
   key->src_ip = ip->saddr;
   key->dst_ip = ip->daddr;
   key->src_port = bpf_ntohs(tcp->source);
@@ -191,7 +191,7 @@ int xdp_router(struct xdp_md *ctx) {
   // -- HTTP --
   __u32 payload_length = data_end - payload;
   unsigned char *p = payload;
-  struct tcp_flow_key key = {};
+  struct xdp_flow_key key = {};
   struct http_flow_state *flow;
   __u32 tcp_seq = bpf_ntohl(tcp->seq);
   __u32 content_length = 0;
@@ -268,6 +268,13 @@ int xdp_router(struct xdp_md *ctx) {
       signals |= XDP_SIGNAL_DOMAIN_MATH;
 
     __u32 model_id = xdp_decision_eval(signals);
+    struct xdp_flow_decision decision = {
+        .route = route,
+        .model_id = model_id,
+        .content_length = content_length,
+    };
+
+    bpf_map_update_elem(&xdp_flow_decisions, &key, &decision, BPF_ANY);
 
 #ifdef XDP_DEBUG
     __u64 elapsed_ns = 0;

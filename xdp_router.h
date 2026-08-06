@@ -13,6 +13,25 @@ struct xdp_ngram_weight {
   __s32 math;
 };
 
+#ifndef XDP_ROUTE_CODING
+#define XDP_ROUTE_CODING 0
+#define XDP_ROUTE_GENERAL 1
+#define XDP_ROUTE_MATH 2
+#endif
+
+struct xdp_flow_key {
+  __u32 src_ip;
+  __u32 dst_ip;
+  __u16 src_port;
+  __u16 dst_port;
+};
+
+struct xdp_flow_decision {
+  __u32 route;
+  __u32 model_id;
+  __u32 content_length;
+};
+
 #ifdef XDP_DEBUG
 struct xdp_route_event {
   __u32 route;
