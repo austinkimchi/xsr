@@ -17,7 +17,7 @@
 #include <unistd.h>
 
 #define DEFAULT_PORT 18081
-#define NUM_WORKERS 16
+#define NUM_WORKERS 256
 
 static const char HTTP_RESPONSE[] =
     "HTTP/1.1 200 OK\r\n"
