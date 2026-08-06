@@ -1,13 +1,13 @@
-# High-Performance XDP vs. vllm-sr Benchmark Report
+# XDP vs. vllm-sr Benchmark Summary
 
-This markdown summarizes the load testing results comparing `xsr` against `vllm-sr` across varying concurrency levels ($c = 1, 2, 4, 8, 10, 16, 32, 64, 96$).
+This markdown summarizes the load testing results comparing `xsr` against `vllm-sr` across varying concurrency levels (1, 2, 4, 8, 10, 16, 32, 64, 96).
 Both XDP and vllm-sr execute the shared literal keyword policy, matching 13 case-insensitive substring matching across 13 domain keywords to route prompts into `coding`, `math`, and `others` routes.
 
 ---
 
 ## Summary
 
-| Concurrency ($c$) | Threads ($t$) | XDP RPS           | XDP Avg Latency | vLLM-SR RPS   | vLLM-SR Avg Latency | XDP Throughput Speedup  | XDP Latency Speedup |
+| Concurrency (c) | Threads (t) | XDP RPS           | XDP Avg Latency | vLLM-SR RPS   | vLLM-SR Avg Latency | XDP Throughput Speedup  | XDP Latency Speedup |
 | :---:             | :---:         | :---:             | :---:           | :---:         | :---:               | :---:                   | :---:               |
 | 1                 | 1             | 7,290.39          | 0.13 ms         | 411.35        | 2.40 ms             | 17.7×                   | 19.1×               |
 | 2                 | 2             | 12,679.96         | 0.14 ms         | 719.87        | 2.74 ms             | 17.6×                   | 19.8×               |
