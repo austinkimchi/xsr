@@ -51,6 +51,76 @@ static void handle_sigint(int sig) {
     close(server_fd);
 }
 
+static void extract_route_seq(const char *body, size_t body_len, char *out,
+                              size_t out_len) {
+  const char key[] = "\"x_route_seq\"";
+  const char *body_end = body + body_len;
+  const char *p = body;
+
+  if (out_len == 0)
+    return;
+  out[0] = '\0';
+
+  while (p + sizeof(key) - 1 <= body_end) {
+    if (strncmp(p, key, sizeof(key) - 1) == 0)
+      break;
+    p++;
+  }
+  if (p + sizeof(key) - 1 > body_end)
+    return;
+
+  p += sizeof(key) - 1;
+  while (p < body_end && (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n'))
+    p++;
+  if (p >= body_end || *p != ':')
+    return;
+  p++;
+  while (p < body_end && (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n'))
+    p++;
+  if (p >= body_end || *p != '"')
+    return;
+  p++;
+
+  size_t used = 0;
+  while (p < body_end && *p != '"' && used + 1 < out_len) {
+    out[used++] = *p++;
+  }
+  out[used] = '\0';
+}
+
+static void extract_header_value(const char *headers, size_t header_len,
+                                 const char *name, char *out, size_t out_len) {
+  const char *line = headers;
+  const char *end = headers + header_len;
+  size_t name_len = strlen(name);
+
+  if (out_len == 0)
+    return;
+  out[0] = '\0';
+
+  while (line < end) {
+    const char *next = strstr(line, "\r\n");
+    const char *line_end = next && next < end ? next : end;
+    size_t line_len = line_end - line;
+
+    if (line_len > name_len && strncasecmp(line, name, name_len) == 0) {
+      const char *p = line + name_len;
+      while (p < line_end && (*p == ' ' || *p == '\t'))
+        p++;
+
+      size_t used = 0;
+      while (p < line_end && used + 1 < out_len)
+        out[used++] = *p++;
+      out[used] = '\0';
+      return;
+    }
+
+    if (!next || next >= end)
+      break;
+    line = next + 2;
+  }
+}
+
 static void *worker_thread(void *arg) {
   int sfd = *(int *)arg;
   char buf[65536];
@@ -128,10 +198,21 @@ static void *worker_thread(void *arg) {
       if (buf_used < total_req_len)
         goto close_client;
 
-      char body[128];
+      char route_seq[64];
+      char body[192];
       char response[512];
-      int body_len = snprintf(body, sizeof(body), "{\"backend\":\"%s\"}\n",
-                              backend_name);
+      extract_header_value(buf, header_len, "x-route-seq:", route_seq,
+                           sizeof(route_seq));
+      if (route_seq[0] == '\0')
+        extract_route_seq(buf + header_len, content_length, route_seq,
+                          sizeof(route_seq));
+      int body_len =
+          route_seq[0] != '\0'
+              ? snprintf(body, sizeof(body),
+                         "{\"backend\":\"%s\",\"x_route_seq\":\"%s\"}\n",
+                         backend_name, route_seq)
+              : snprintf(body, sizeof(body), "{\"backend\":\"%s\"}\n",
+                         backend_name);
       int response_len =
           snprintf(response, sizeof(response),
                    "HTTP/1.1 200 OK\r\n"

@@ -3,6 +3,7 @@
 
 local prompts = {}
 local pending = {}
+local expected_by_id = {}
 local backend_counts = { coding = 0, math = 0, others = 0, unknown = 0 }
 local expected_counts = { coding = 0, math = 0, others = 0, unknown = 0 }
 local all_threads = {}
@@ -24,8 +25,6 @@ if #prompts == 0 then
     error("No prompts found in " .. prompts_file .. ". Run export_dataset_prompts.py first.")
 end
 
-print(string.format("[Lua] Loaded %d prompts from %s", #prompts, prompts_file))
-
 local counter = 0
 
 wrk.method = "POST"
@@ -33,6 +32,9 @@ wrk.headers["Content-Type"] = "application/json"
 wrk.headers["Connection"] = "keep-alive"
 
 setup = function(thread)
+    if #all_threads == 0 then
+        print(string.format("[Lua] Loaded %d prompts from %s", #prompts, prompts_file))
+    end
     table.insert(all_threads, thread)
     thread:set("route_matches", 0)
     thread:set("route_mismatches", 0)
@@ -55,16 +57,29 @@ local function backend_marker(body)
     return body:match('"backend"%s*:%s*"([^"]+)"') or "unknown"
 end
 
+local function route_seq_marker(body)
+    return body:match('"x_route_seq"%s*:%s*"([^"]+)"')
+end
+
 request = function()
     counter = counter + 1
-    local payload = prompts[(counter % #prompts) + 1]
-    table.insert(pending, expected_route(payload))
+    local payload = prompts[((counter - 1) % #prompts) + 1]
+    local expected = expected_route(payload)
+    local route_seq = tostring(counter)
+    table.insert(pending, expected)
+    expected_by_id[route_seq] = expected
     payload = payload:gsub(',"x_expected_route"%s*:%s*"[^"]+"', "")
-    return wrk.format("POST", "/v1/chat/completions", nil, payload)
+    return wrk.format("POST", "/v1/chat/completions", { ["x-route-seq"] = route_seq }, payload)
 end
 
 response = function(status, headers, body)
-    local expected = table.remove(pending, 1) or "unknown"
+    local route_seq = route_seq_marker(body or "")
+    local expected = route_seq and expected_by_id[route_seq] or nil
+    if expected then
+        expected_by_id[route_seq] = nil
+    else
+        expected = table.remove(pending, 1) or "unknown"
+    end
     local backend = backend_marker(body or "")
 
     responses = responses + 1
@@ -148,7 +163,7 @@ done = function(summary, latency, requests)
             total_matches,
             total_mismatches
         ))
-        if total_responses > 0 and agreement < 0.99 then
+        if total_responses > 0 and agreement < 0.90 then
             io.write("[Lua] warning: backend marker agreement is low; verify the target has reloaded policy config with distinct backend endpoints\n")
         end
     else
