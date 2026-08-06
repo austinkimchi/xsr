@@ -71,11 +71,10 @@ static __always_inline void increment_route_counter(__u32 route) {
 }
 
 #ifdef XDP_DEBUG
-static __always_inline void emit_route_event(__u32 route, __u32 model_id,
-                                             __u32 content_length,
-                                             __u16 src_port,
-                                             struct xdp_classifier_state *classifier,
-                                             __u64 elapsed_ns) {
+static __always_inline void
+emit_route_event(__u32 route, __u32 model_id, __u32 content_length,
+                 __u16 src_port, struct xdp_classifier_state *classifier,
+                 __u64 elapsed_ns) {
   struct xdp_route_event event = {
       .route = route,
       .model_id = model_id,
@@ -101,7 +100,7 @@ static __always_inline void build_flow_key(struct iphdr *ip, struct tcphdr *tcp,
 static __always_inline int find_http_body_offset(unsigned char *payload,
                                                  unsigned char *data_end,
                                                  __u32 *body_offset) {
-  for (int i = 0; i < MAX_SCAN; i++) {
+  for (int i = 0; i < MAX_HEADER_SCAN; i++) {
     unsigned char *p = payload + i;
 
     if (p + 4 > data_end)
@@ -251,7 +250,8 @@ int xdp_router(struct xdp_md *ctx) {
 
     result = scan_content_stream(ctx, data, p, payload_length, &flow->content,
                                  &flow->classifier, &content_length);
-    flow->next_seq = tcp_seq + payload_length;
+    if (result != CONTENT_OVERSIZE)
+      flow->next_seq = tcp_seq + payload_length;
   }
 
   if (result == CONTENT_COMPLETE) {
@@ -291,6 +291,9 @@ int xdp_router(struct xdp_md *ctx) {
       bpf_map_delete_elem(&http_flows, &key);
   } else if (result == CONTENT_PARTIAL) {
     increment_counter(COUNT_CONTENT_PARTIAL);
+  } else if (result == CONTENT_OVERSIZE) {
+    increment_counter(COUNT_FRAGMENT);
+    bpf_map_delete_elem(&http_flows, &key);
   }
 
   if (tcp->fin || tcp->rst)

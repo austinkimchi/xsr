@@ -11,6 +11,7 @@
 
 #include <bpf/bpf.h>
 #include <bpf/libbpf.h>
+#include <linux/if_link.h>
 #include <net/if.h> // if_nametoindex
 #include <stdio.h>
 #include <stdlib.h>
@@ -174,6 +175,11 @@ int main(void) {
     fprintf(stderr, "Failed to find XDP program: %s\n", XDP_PROGRAM_NAME);
     return 1;
   }
+
+  bpf_xdp_detach(ifindex, XDP_FLAGS_SKB_MODE, NULL);
+  bpf_xdp_detach(ifindex, XDP_FLAGS_DRV_MODE, NULL);
+  bpf_xdp_detach(ifindex, XDP_FLAGS_HW_MODE, NULL);
+  bpf_xdp_detach(ifindex, 0, NULL);
 
   // Attach XDP program to the network interface with retry loop
   for (int retry = 0; retry < 5; retry++) {

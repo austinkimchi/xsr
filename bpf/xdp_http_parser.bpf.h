@@ -8,8 +8,8 @@
 
 #include "xdp_classifier.bpf.h"
 
-#define MAX_SCAN 512
-#define MAX_CONTENT 1500
+#define MAX_HEADER_SCAN 2000
+#define MAX_PACKET_SCAN 65535
 
 #define CONTENT_KEY_LEN 10 // "content":
 
@@ -17,6 +17,7 @@ enum content_parse_result {
   CONTENT_NOT_FOUND = 0,
   CONTENT_COMPLETE = 1,
   CONTENT_PARTIAL = 2,
+  CONTENT_OVERSIZE = 3,
 };
 
 struct content_flow_state {
@@ -152,8 +153,8 @@ scan_content_stream(struct xdp_md *xdp, unsigned char *data,
                     struct xdp_classifier_state *classifier, __u32 *length) {
   __u32 scan_length = payload_length;
 
-  if (scan_length > MAX_CONTENT)
-    scan_length = MAX_CONTENT;
+  if (scan_length > MAX_PACKET_SCAN)
+    return CONTENT_OVERSIZE;
 
   struct content_scan_ctx ctx = {
       .xdp = xdp,
@@ -165,7 +166,7 @@ scan_content_stream(struct xdp_md *xdp, unsigned char *data,
       .classifier = classifier,
   };
 
-  bpf_loop(MAX_CONTENT, scan_content_callback, &ctx, 0);
+  bpf_loop(scan_length, scan_content_callback, &ctx, 0);
 
   if (ctx.result != CONTENT_COMPLETE &&
       (state->in_content || state->waiting_for_value_quote ||

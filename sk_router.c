@@ -12,6 +12,7 @@
 #include <bpf/libbpf.h>
 #include <errno.h>
 #include <linux/bpf.h>
+#include <linux/if_link.h>
 #include <net/if.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
@@ -260,6 +261,9 @@ static int start_xdp_classifier(struct xdp_classifier_runtime *runtime) {
     return -1;
   }
 
+  bpf_xdp_detach(ifindex, XDP_FLAGS_SKB_MODE, NULL);
+  bpf_xdp_detach(ifindex, XDP_FLAGS_DRV_MODE, NULL);
+  bpf_xdp_detach(ifindex, XDP_FLAGS_HW_MODE, NULL);
   bpf_xdp_detach(ifindex, 0, NULL);
   runtime->link = bpf_program__attach_xdp(prog, ifindex);
   if (libbpf_get_error(runtime->link)) {
