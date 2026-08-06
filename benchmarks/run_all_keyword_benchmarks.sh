@@ -4,7 +4,7 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
-METHODS=("literal" "exact" "bm25" "ngram" "regex")
+METHODS=("ngram")
 CONCURRENCIES=(1 4 8 16)
 REPORT_ROOT="reports/keyword-routing"
 BENCHMARK_MODES="${BENCHMARK_MODES:-direct-netns,xdp,vllm-sr}"
@@ -36,11 +36,7 @@ for METHOD in "${METHODS[@]}"; do
   echo " [1/2] Building XDP router for method: ${METHOD}"
   echo " Config: ${CONFIG}"
   echo "-----------------------------------------------------------------"
-  XDP_CLASSIFIER_MODE="literal"
-  if [ "$METHOD" = "ngram" ]; then
-    XDP_CLASSIFIER_MODE="ngram"
-  fi
-  make KEYWORD_POLICY="$CONFIG" XDP_CLASSIFIER="$XDP_CLASSIFIER_MODE" dev
+  make KEYWORD_POLICY="$CONFIG" dev
 
   echo ""
   echo "-----------------------------------------------------------------"

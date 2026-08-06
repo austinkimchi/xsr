@@ -17,7 +17,7 @@ VLLM_BACKEND_PORT="${VLLM_BACKEND_PORT:-18394}"
 START_VLLM_MOCK="${START_VLLM_MOCK:-0}"
 IFNAME="${IFNAME:-veth0}"
 NETNS="${NETNS:-ns1}"
-XDP_URL="${XDP_URL:-http://127.0.0.1:${XDP_PORT}/v1/chat/completions}"
+XDP_URL="${XDP_URL:-http://10.10.0.1:${XDP_PORT}/v1/chat/completions}"
 VLLM_URL="${VLLM_URL:-http://127.0.0.1:8899/v1/chat/completions}"
 REPORT_DIR="${ROOT_DIR}/results/wrk-keyword-routing"
 TIMESTAMP="$(date +%Y%m%d_%H%M%S)"
@@ -38,6 +38,8 @@ if [ "$EUID" -ne 0 ]; then
         OTHERS_BACKEND_PORT="$OTHERS_BACKEND_PORT" \
         VLLM_BACKEND_PORT="$VLLM_BACKEND_PORT" \
         START_VLLM_MOCK="$START_VLLM_MOCK" \
+        IFNAME="$IFNAME" \
+        NETNS="$NETNS" \
         XDP_URL="$XDP_URL" \
         VLLM_URL="$VLLM_URL" \
         "$0" "$@"
@@ -75,7 +77,7 @@ fi
 # Build mock backend and routers if missing
 if [ ! -f "benchmarks/mock_backend" ] || [ ! -f "sk_router" ] || [ ! -f "sk_router.bpf.o" ]; then
     echo "Building routing proxy and mock backends..."
-    make dev KEYWORD_POLICY=config/policy_ngram.yaml XDP_CLASSIFIER=ngram
+    make dev KEYWORD_POLICY=config/policy_ngram.yaml
 fi
 
 # Flush old iptables rules for these ports
@@ -179,9 +181,9 @@ run_benchmark() {
     echo ""
     echo "- Routing backend ports: coding=\`${CODING_BACKEND_PORT}\`, math=\`${MATH_BACKEND_PORT}\`, others=\`${OTHERS_BACKEND_PORT}\`"
     echo ""
-    echo "## [1/2] Routing Proxy"
+    echo "## [1/2] XDP Route"
     echo "\`\`\`"
-    VERIFY_BACKEND_MARKERS=1 "$WRK_BIN" -t"$THREADS" -c"$CONCURRENCY" -d"$DURATION" $RATE_ARG -s benchmarks/prompts.lua "$XDP_URL"
+    VERIFY_BACKEND_MARKERS=1 ip netns exec "$NETNS" "$WRK_BIN" -t"$THREADS" -c"$CONCURRENCY" -d"$DURATION" $RATE_ARG -s benchmarks/prompts.lua "$XDP_URL"
     echo "\`\`\`"
     echo ""
     echo "## [2/2] vLLM-SR Route"
