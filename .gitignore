@@ -29,3 +29,7 @@ results/
 !results/wrk-keyword-routing/**
 !results/wrk_benchmark.md
 !results/latency_comparison.png
+
+# Other scripts and helper files
+scripts/
+tests/
