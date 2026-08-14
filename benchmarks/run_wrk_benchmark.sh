@@ -17,8 +17,12 @@ VLLM_BACKEND_PORT="${VLLM_BACKEND_PORT:-18394}"
 START_VLLM_MOCK="${START_VLLM_MOCK:-0}"
 IFNAME="${IFNAME:-veth0}"
 NETNS="${NETNS:-ns1}"
+XDP_PEER_IF="${XDP_PEER_IF:-veth1}"
 XDP_URL="${XDP_URL:-http://10.10.0.1:${XDP_PORT}/v1/chat/completions}"
-VLLM_URL="${VLLM_URL:-http://127.0.0.1:8899/v1/chat/completions}"
+# Exercise both routers from the same client namespace across the veth pair.
+# This preserves end-to-end router differences while removing the loopback vs.
+# veth client-path confounder.
+VLLM_URL="${VLLM_URL:-http://10.10.0.1:8899/v1/chat/completions}"
 REPORT_DIR="${ROOT_DIR}/results/wrk-keyword-routing"
 TIMESTAMP="$(date +%Y%m%d_%H%M%S)"
 REPORT_FILE="${REPORT_DIR}/wrk_benchmark_${TIMESTAMP}.md"
@@ -40,6 +44,7 @@ if [ "$EUID" -ne 0 ]; then
         START_VLLM_MOCK="$START_VLLM_MOCK" \
         IFNAME="$IFNAME" \
         NETNS="$NETNS" \
+        XDP_PEER_IF="$XDP_PEER_IF" \
         XDP_URL="$XDP_URL" \
         VLLM_URL="$VLLM_URL" \
         "$0" "$@"
@@ -93,6 +98,12 @@ iptables -I INPUT 1 -p tcp --dport "${CODING_BACKEND_PORT}" -j ACCEPT >/dev/null
 iptables -I INPUT 1 -p tcp --dport "${MATH_BACKEND_PORT}" -j ACCEPT >/dev/null 2>&1 || true
 iptables -I INPUT 1 -p tcp --dport "${OTHERS_BACKEND_PORT}" -j ACCEPT >/dev/null 2>&1 || true
 iptables -I INPUT 1 -p tcp --dport "${VLLM_BACKEND_PORT}" -j ACCEPT >/dev/null 2>&1 || true
+
+# Keep XDP exposed to ordinary MTU-sized TCP segments during benchmark runs.
+ip link set dev "$IFNAME" mtu 1500
+ip netns exec "$NETNS" ip link set dev "$XDP_PEER_IF" mtu 1500
+ethtool -K "$IFNAME" gro off gso off tso off lro off 2>/dev/null || true
+ip netns exec "$NETNS" ethtool -K "$XDP_PEER_IF" gro off gso off tso off lro off 2>/dev/null || true
 
 # Start marker backends for routing.
 echo "Starting coding backend on port ${CODING_BACKEND_PORT}..."
@@ -188,8 +199,8 @@ run_benchmark() {
     echo ""
     echo "## [2/2] vLLM-SR Route"
     echo "\`\`\`"
-    if socket_check=$(curl -s -m 1 "$VLLM_URL" 2>&1); [[ ! "$socket_check" =~ "Failed to connect" ]]; then
-        VERIFY_BACKEND_MARKERS=1 "$WRK_BIN" -t"$THREADS" -c"$CONCURRENCY" -d"$DURATION" $RATE_ARG -s benchmarks/prompts.lua "$VLLM_URL"
+    if socket_check=$(ip netns exec "$NETNS" curl -s -m 1 "$VLLM_URL" 2>&1); [[ ! "$socket_check" =~ "Failed to connect" ]]; then
+        VERIFY_BACKEND_MARKERS=1 ip netns exec "$NETNS" "$WRK_BIN" -t"$THREADS" -c"$CONCURRENCY" -d"$DURATION" $RATE_ARG -s benchmarks/prompts.lua "$VLLM_URL"
     else
         echo "vLLM-SR endpoint ($VLLM_URL) unreachable, skipping vLLM-SR run."
     fi

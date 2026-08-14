@@ -208,6 +208,7 @@ static __always_inline __u32 classify_request(struct __sk_buff *skb) {
 
   xdp_classifier_init(&ctx.classifier);
   bpf_loop(SK_ROUTER_MAX_SCAN, classify_callback, &ctx, 0);
+  xdp_classifier_finish(&ctx.classifier);
   return xdp_classifier_route(&ctx.classifier);
 }
 

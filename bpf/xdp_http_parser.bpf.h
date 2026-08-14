@@ -33,8 +33,17 @@ struct content_scan_ctx {
   __u32 payload_offset;
   __u32 scan_length;
   __u32 length;
+  __u32 content_start;
+  __u32 content_end;
   int result;
   struct content_flow_state *state;
+  struct xdp_classifier_state *classifier;
+};
+
+struct content_score_ctx {
+  struct xdp_md *xdp;
+  __u32 offset;
+  __u32 length;
   struct xdp_classifier_state *classifier;
 };
 
@@ -130,19 +139,30 @@ static long scan_content_callback(__u32 i, void *data) {
       state->escaped = 1;
     } else if (c == '"') {
       ctx->length = state->content_length;
+      ctx->content_end = i;
       ctx->result = CONTENT_COMPLETE;
       return 1;
     }
 
     state->content_length++;
-    if (ctx->classifier)
-      xdp_classifier_score_char(ctx->classifier, c);
     ctx->length = state->content_length;
     ctx->result = CONTENT_PARTIAL;
     return 0;
   }
 
   ctx->result = content_match_key(state, c);
+  if (state->in_content)
+    ctx->content_start = i + 1;
+  return 0;
+}
+
+static long score_content_callback(__u32 i, void *data) {
+  struct content_score_ctx *ctx = data;
+  unsigned char c;
+  if (i >= ctx->length ||
+      bpf_xdp_load_bytes(ctx->xdp, ctx->offset + i, &c, sizeof(c)) < 0)
+    return 1;
+  xdp_classifier_score_char(ctx->classifier, c);
   return 0;
 }
 
@@ -161,12 +181,24 @@ scan_content_stream(struct xdp_md *xdp, unsigned char *data,
       .payload_offset = (__u32)(payload - data),
       .scan_length = scan_length,
       .length = state->content_length,
+      .content_start = state->in_content ? 0 : scan_length,
+      .content_end = scan_length,
       .result = CONTENT_NOT_FOUND,
       .state = state,
       .classifier = classifier,
   };
 
   bpf_loop(scan_length, scan_content_callback, &ctx, 0);
+
+  if (classifier && ctx.content_start < ctx.content_end) {
+    struct content_score_ctx score_ctx = {
+        .xdp = xdp,
+        .offset = (__u32)(payload - data) + ctx.content_start,
+        .length = ctx.content_end - ctx.content_start,
+        .classifier = classifier,
+    };
+    bpf_loop(score_ctx.length, score_content_callback, &score_ctx, 0);
+  }
 
   if (ctx.result != CONTENT_COMPLETE &&
       (state->in_content || state->waiting_for_value_quote ||

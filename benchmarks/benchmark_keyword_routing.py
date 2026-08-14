@@ -30,6 +30,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from generate_keyword_header import load_policy, validate_policy  # noqa: E402
+from jaccard_reference import rule_matches  # noqa: E402
 
 
 DEFAULT_CONFIG = ROOT / "config" / "policy_ngram.yaml"
@@ -419,12 +420,16 @@ def expected_route(
     routes: list[dict[str, object]],
     case_sensitive: bool,
 ) -> tuple[str, str | None]:
-    text = prompt if case_sensitive else prompt.lower()
     for route in routes:
+        if str(route.get("method", "")).lower() != "ngram":
+            raise ValueError("benchmark policy must use the XDP Jaccard ngram matcher")
+        keywords = [str(keyword) for keyword in route["keywords"]]  # type: ignore[index]
+        if not rule_matches(prompt, keywords, str(route.get("operator", "OR")),
+                            int(route.get("ngram_arity", 3)),
+                            route.get("ngram_threshold", 0.4), case_sensitive):
+            continue
         for keyword in route["keywords"]:  # type: ignore[index]
-            token = str(keyword) if case_sensitive else str(keyword).lower()
-            if token in text:
-                return str(route["name"]), token
+            return str(route["name"]), str(keyword)
     return "others", None
 
 

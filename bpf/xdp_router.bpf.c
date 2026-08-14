@@ -257,6 +257,7 @@ int xdp_router(struct xdp_md *ctx) {
   if (result == CONTENT_COMPLETE) {
     struct xdp_classifier_state *classifier =
         is_post ? &stack_classifier : &flow->classifier;
+    xdp_classifier_finish(classifier);
     __u32 route = xdp_classifier_route(classifier);
     __u64 signals = 0;
 

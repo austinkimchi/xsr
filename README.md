@@ -8,18 +8,62 @@ client sends HTTPS
   -> plaintext HTTP hop over interface
   -> eBPF processes JSON body (signals; classifier)
   -> mark (decision; AND OR operator)
-  -> route (models; e.g., GPT-5.3-Codex, Claude Opus 4.5)
+  -> route (models; e.g., Qwen3-30B-A3B, GPT-5.3-Codex, Claude Opus 4.5)
 ```
 
 ## Current Prototype Implementation
-- XDP/eBPF classifier that extracts prompt content, runs the hashed 3-gram
-  model, records route counters/events, and publishes a per-flow route decision.
+- XDP/eBPF classifier that extracts prompt content, performs bounded
+  character-n-gram set-Jaccard keyword matching, records route counters/events,
+  and publishes a per-flow route decision.
 - Routing proxy that performs physical backend forwarding from the XDP-produced
   decision after TLS has already been terminated to plaintext HTTP.
 - Experimental SK_SKB/SOCKMAP BPF program kept for kernel-level socket-map
   routing work.
-- Hashed 3-gram FNV classifier in eBPF to classify requests as coding,
-  general, or math prompts.
+- The benchmark classifier uses exact packed ASCII n-grams rather than the
+  older learned hashed/FNV classifier. The learned model remains in `models/`
+  as a separate experiment and must not be described as VSR-equivalent.
+
+## VSR-aligned keyword matching
+
+`config/policy_ngram.yaml` is the shared XSR/VSR policy. During a build,
+`scripts/generate_jaccard_policy_header.py` normalizes each ASCII keyword,
+applies `ngrammatic` `Pad::Auto` boundary padding (two spaces per side for
+trigrams), deduplicates packed n-grams, and emits userspace initializers.
+`xdp_router` loads those initializers into fixed BPF array maps:
+
+- `xdp_jaccard_keywords`: up to 16 keyword gram sets of up to 16 grams.
+- `xdp_jaccard_rules`: up to 8 rules with route, OR/AND/NOR operator, arity,
+  case mode, priority, and threshold in thousandths.
+- `xdp_jaccard_config`: active keyword and rule counts.
+
+At packet processing time, XDP collects one ASCII word at a time (letters,
+digits, `_`, and `-`), deduplicates its padded grams, and uses integer
+arithmetic: `intersection * 1000 >= union * threshold_milli`. The fixed
+24-byte word buffer, 16 keywords, 16 grams per keyword, and trigram arity are
+intentional verifier bounds. Keyword and query grams are direct packed byte
+values, so there is no hash-collision approximation.
+
+Run the reference/unit coverage with:
+
+```bash
+python3 tests/test_jaccard_keyword.py
+```
+
+The reference test covers exact matching, typos, unrelated input, case,
+short words, duplicate grams, threshold inclusivity, multiple keywords, and
+OR/AND/NOR semantics. Benchmark case selection uses the same reference rather
+than substring matching.
+
+### Known VSR differences
+
+The XDP matcher reproduces VSR's ASCII case handling, word separators,
+per-word matching, auto padding, and inclusive threshold interface. It does
+not yet run VSR's second full-text search for multi-word phrases, and its byte
+parser does not implement VSR's Unicode-aware `char::is_alphanumeric` splitter.
+The pinned VSR `ngrammatic` implementation also uses a warp of 2 and occurrence
+counts internally; this benchmark deliberately uses the requested unwarped,
+deduplicated set-Jaccard definition. These differences should be reported with
+any XSR/VSR result rather than calling decisions bit-identical.
 
 ## Routing Path
 ```
@@ -56,8 +100,8 @@ sudo make setup
 ```
 
 ### 2. Build eBPF Router with Keyword Policy
-Compile the XDP router binary, BPF object, and mock backend. The build uses the
-checked-in 3-gram model at `models/xdp_ngram_model_fnv.json`:
+Compile the XDP router binary, BPF object, and mock backend. The build
+preprocesses the shared Jaccard policy and loads it into BPF maps:
 ```bash
 sudo make dev
 ```

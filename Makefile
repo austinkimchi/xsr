@@ -19,7 +19,6 @@ XDP_PEER_IF ?= veth1
 XDP_HOST_ADDR ?= 10.10.0.1/24
 XDP_PEER_ADDR ?= 10.10.0.2/24
 KEYWORD_POLICY ?= config/policy_ngram.yaml
-NGRAM_MODEL ?= models/xdp_ngram_model_fnv.json
 
 .DEFAULT_GOAL := all
 
@@ -33,26 +32,26 @@ prod: USER_CFLAGS += -O3
 prod: BPF_CFLAGS += -O2
 prod: clean all
 
-xdp_router: xdp_router.c xdp_router.h bpf/xdp_ngram_model.generated.h
+xdp_router: xdp_router.c xdp_router.h bpf/xdp_jaccard_classifier.bpf.h bpf/xdp_jaccard_policy.generated.h
 	$(CC) $(USER_CFLAGS) $< -o $@ $(LIBBPF_FLAGS)
 
-sk_router: sk_router.c xdp_router.h bpf/xdp_decision.bpf.h bpf/xdp_signals.bpf.h bpf/xdp_ngram_model.generated.h
+sk_router: sk_router.c xdp_router.h bpf/xdp_decision.bpf.h bpf/xdp_signals.bpf.h bpf/xdp_jaccard_classifier.bpf.h bpf/xdp_jaccard_policy.generated.h
 	$(CC) $(USER_CFLAGS) $< -o $@ $(LIBBPF_FLAGS) -lpthread
 
 benchmarks/mock_backend: benchmarks/mock_backend.c
 	$(CC) -O3 $< -o $@ -lpthread
 
-bpf/xdp_ngram_model.generated.h: $(NGRAM_MODEL) scripts/generate_ngram_header.py
-	$(PYTHON) scripts/generate_ngram_header.py $(NGRAM_MODEL) $@
+bpf/xdp_jaccard_policy.generated.h: $(KEYWORD_POLICY) scripts/generate_jaccard_policy_header.py scripts/generate_keyword_header.py
+	$(PYTHON) scripts/generate_jaccard_policy_header.py $(KEYWORD_POLICY) $@
 
-xdp_router.bpf.o: bpf/xdp_router.bpf.c xdp_router.h bpf/xdp_http_parser.bpf.h bpf/xdp_classifier.bpf.h bpf/xdp_ngram_classifier.bpf.h bpf/xdp_ngram_model.generated.h
+xdp_router.bpf.o: bpf/xdp_router.bpf.c xdp_router.h bpf/xdp_http_parser.bpf.h bpf/xdp_classifier.bpf.h bpf/xdp_jaccard_classifier.bpf.h
 	$(BPF_CLANG) $(BPF_CFLAGS) -c $< -o $@
 
-sk_router.bpf.o: bpf/sk_router.bpf.c xdp_router.h bpf/xdp_decision.bpf.h bpf/xdp_signals.bpf.h bpf/xdp_classifier.bpf.h bpf/xdp_ngram_classifier.bpf.h bpf/xdp_ngram_model.generated.h
+sk_router.bpf.o: bpf/sk_router.bpf.c xdp_router.h bpf/xdp_decision.bpf.h bpf/xdp_signals.bpf.h bpf/xdp_classifier.bpf.h bpf/xdp_jaccard_classifier.bpf.h
 	$(BPF_CLANG) $(BPF_CFLAGS) -c $< -o $@
 
 clean:
-	rm -f xdp_router sk_router xdp_router.bpf.o sk_router.bpf.o bpf/xdp_keyword_policy.generated.h bpf/xdp_ngram_model.generated.h benchmarks/mock_backend
+	rm -f xdp_router sk_router xdp_router.bpf.o sk_router.bpf.o bpf/xdp_keyword_policy.generated.h bpf/xdp_jaccard_policy.generated.h bpf/xdp_ngram_model.generated.h benchmarks/mock_backend
 
 clean-setup:
 	@ip link delete $(XDP_HOST_IF) 2>/dev/null || true

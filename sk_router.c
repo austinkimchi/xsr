@@ -26,7 +26,8 @@
 #include <unistd.h>
 
 #include "xdp_router.h"
-#include "bpf/xdp_ngram_model.generated.h"
+#include "bpf/xdp_jaccard_classifier.bpf.h"
+#include "bpf/xdp_jaccard_policy.generated.h"
 #include "bpf/xdp_signals.bpf.h"
 
 #define BPF_OBJECT_FILE "sk_router.bpf.o"
@@ -184,17 +185,39 @@ static int populate_decision_rules(int rules_fd) {
   return 0;
 }
 
-static int populate_ngram_weights(struct bpf_object *obj) {
-  int map_fd = bpf_object__find_map_fd_by_name(obj, "xdp_ngram_weights");
+static int populate_jaccard_policy(struct bpf_object *obj) {
+  int config_fd = bpf_object__find_map_fd_by_name(obj, "xdp_jaccard_config");
+  int rules_fd = bpf_object__find_map_fd_by_name(obj, "xdp_jaccard_rules");
+  int keywords_fd = bpf_object__find_map_fd_by_name(obj, "xdp_jaccard_keywords");
+  int grams_fd = bpf_object__find_map_fd_by_name(obj, "xdp_jaccard_gram_masks");
+  __u32 key = 0;
 
-  if (map_fd < 0)
-    return 0;
-
-  for (__u32 key = 0; key < XDP_NGRAM_FEATURES; key++) {
-    if (bpf_map_update_elem(map_fd, &key, &xdp_ngram_model[key], BPF_ANY) != 0)
+  if (config_fd < 0 || rules_fd < 0 || keywords_fd < 0 || grams_fd < 0)
+    return -1;
+  if (bpf_map_update_elem(config_fd, &key, &xdp_jaccard_generated_config,
+                          BPF_ANY) != 0)
+    return -1;
+  for (key = 0; key < XDP_JACCARD_GENERATED_RULE_COUNT; key++)
+    if (bpf_map_update_elem(rules_fd, &key, &xdp_jaccard_generated_rules[key],
+                            BPF_ANY) != 0)
       return -1;
-  }
-
+  for (key = 0; key < XDP_JACCARD_GENERATED_KEYWORD_COUNT; key++)
+    if (bpf_map_update_elem(keywords_fd, &key,
+                            &xdp_jaccard_generated_keywords[key], BPF_ANY) != 0)
+      return -1;
+  for (key = 0; key < XDP_JACCARD_GENERATED_KEYWORD_COUNT; key++)
+    for (__u32 gram_index = 0;
+         gram_index < xdp_jaccard_generated_keywords[key].count; gram_index++) {
+      __u32 gram = xdp_jaccard_generated_keywords[key].grams[gram_index];
+      struct xdp_jaccard_gram_vector vector = {};
+      bpf_map_lookup_elem(grams_fd, &gram, &vector);
+      if (key < 8)
+        vector.low |= 1ULL << (key * 5);
+      else
+        vector.high |= 1ULL << ((key - 8) * 5);
+      if (bpf_map_update_elem(grams_fd, &gram, &vector, BPF_ANY) != 0)
+        return -1;
+    }
   return 0;
 }
 
@@ -236,8 +259,8 @@ static int start_xdp_classifier(struct xdp_classifier_runtime *runtime) {
     return -1;
   }
 
-  if (populate_ngram_weights(runtime->obj) != 0) {
-    perror("populate_ngram_weights");
+  if (populate_jaccard_policy(runtime->obj) != 0) {
+    perror("populate_jaccard_policy");
     return -1;
   }
 
@@ -735,8 +758,8 @@ static int run_sockmap_router(void) {
     perror("populate_decision_rules");
     return 1;
   }
-  if (populate_ngram_weights(obj) != 0) {
-    perror("populate_ngram_weights");
+  if (populate_jaccard_policy(obj) != 0) {
+    perror("populate_jaccard_policy");
     return 1;
   }
 
