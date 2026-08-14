@@ -115,17 +115,22 @@ static int populate_jaccard_policy(struct bpf_object *obj) {
       return -1;
   for (key = 0; key < XDP_JACCARD_GENERATED_KEYWORD_COUNT; key++)
     for (__u32 gram_index = 0;
-         gram_index < xdp_jaccard_generated_keywords[key].count; gram_index++) {
-      __u32 gram = xdp_jaccard_generated_keywords[key].grams[gram_index];
-      struct xdp_jaccard_gram_vector vector = {};
-      bpf_map_lookup_elem(grams_fd, &gram, &vector);
-      if (key < 8)
-        vector.low |= 1ULL << (key * 5);
-      else
-        vector.high |= 1ULL << ((key - 8) * 5);
-      if (bpf_map_update_elem(grams_fd, &gram, &vector, BPF_ANY) != 0)
-        return -1;
-    }
+         gram_index < xdp_jaccard_generated_keywords[key].count; gram_index++)
+      for (__u8 occurrence = 1;
+           occurrence <= xdp_jaccard_generated_keywords[key].gram_counts[gram_index]; occurrence++) {
+        struct xdp_jaccard_gram_key gram_key = {
+            .gram = xdp_jaccard_generated_keywords[key].grams[gram_index],
+            .occurrence = occurrence,
+        };
+        struct xdp_jaccard_gram_vector vector = {};
+        bpf_map_lookup_elem(grams_fd, &gram_key, &vector);
+        if (key < 8)
+          vector.low |= 1ULL << (key * 5);
+        else
+          vector.high |= 1ULL << ((key - 8) * 5);
+        if (bpf_map_update_elem(grams_fd, &gram_key, &vector, BPF_ANY) != 0)
+          return -1;
+      }
   return 0;
 }
 

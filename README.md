@@ -13,35 +13,43 @@ client sends HTTPS
 
 ## Current Prototype Implementation
 - XDP/eBPF classifier that extracts prompt content, performs bounded
-  character-n-gram set-Jaccard keyword matching, records route counters/events,
+  `ngrammatic`-compatible character-n-gram matching, records route counters/events,
   and publishes a per-flow route decision.
 - Routing proxy that performs physical backend forwarding from the XDP-produced
   decision after TLS has already been terminated to plaintext HTTP.
 - Experimental SK_SKB/SOCKMAP BPF program kept for kernel-level socket-map
   routing work.
 - The benchmark classifier uses exact packed ASCII n-grams rather than the
-  older learned hashed/FNV classifier. The learned model remains in `models/`
-  as a separate experiment and must not be described as VSR-equivalent.
+  older learned hashed/FNV classifier.
 
 ## VSR-aligned keyword matching
 
 `config/policy_ngram.yaml` is the shared XSR/VSR policy. During a build,
 `scripts/generate_jaccard_policy_header.py` normalizes each ASCII keyword,
 applies `ngrammatic` `Pad::Auto` boundary padding (two spaces per side for
-trigrams), deduplicates packed n-grams, and emits userspace initializers.
+trigrams), preserves each packed n-gram's occurrence count, and emits
+userspace initializers.
 `xdp_router` loads those initializers into fixed BPF array maps:
 
-- `xdp_jaccard_keywords`: up to 16 keyword gram sets of up to 16 grams.
+- `xdp_jaccard_keywords`: up to 16 keywords, each with up to 16 total trigrams
+  and per-gram occurrence counts.
 - `xdp_jaccard_rules`: up to 8 rules with route, OR/AND/NOR operator, arity,
   case mode, priority, and threshold in thousandths.
 - `xdp_jaccard_config`: active keyword and rule counts.
 
 At packet processing time, XDP collects one ASCII word at a time (letters,
-digits, `_`, and `-`), deduplicates its padded grams, and uses integer
-arithmetic: `intersection * 1000 >= union * threshold_milli`. The fixed
-24-byte word buffer, 16 keywords, 16 grams per keyword, and trigram arity are
-intentional verifier bounds. Keyword and query grams are direct packed byte
-values, so there is no hash-collision approximation.
+digits, `_`, and `-`) and preserves its gram multiplicities. It implements
+`ngrammatic::Corpus::search`'s default warp of 2 with integer arithmetic:
+`1 - ((all - same) / all)^2 >= threshold`, where `same` is the sum of
+`min(query_count, keyword_count)` and `all = query_total + keyword_total - same`.
+The comparison is inclusive. Direct packed byte grams avoid hash collisions.
+
+The verifier bound is 16 total trigrams per keyword and query word (therefore
+ASCII words up to 14 bytes for trigrams with `Pad::Auto`). Policies exceeding
+that limit are rejected at build time; oversized query words are deliberately
+not matched. Within that bounded ASCII subset and thresholds expressed in
+thousandths, XSR has the same scoring and match decision as `ngrammatic` 0.7's
+default `Corpus::search`.
 
 Run the reference/unit coverage with:
 
@@ -54,16 +62,13 @@ short words, duplicate grams, threshold inclusivity, multiple keywords, and
 OR/AND/NOR semantics. Benchmark case selection uses the same reference rather
 than substring matching.
 
-### Known VSR differences
+### Remaining VSR differences
 
-The XDP matcher reproduces VSR's ASCII case handling, word separators,
-per-word matching, auto padding, and inclusive threshold interface. It does
-not yet run VSR's second full-text search for multi-word phrases, and its byte
-parser does not implement VSR's Unicode-aware `char::is_alphanumeric` splitter.
-The pinned VSR `ngrammatic` implementation also uses a warp of 2 and occurrence
-counts internally; this benchmark deliberately uses the requested unwarped,
-deduplicated set-Jaccard definition. These differences should be reported with
-any XSR/VSR result rather than calling decisions bit-identical.
+XSR reproduces VSR's lowercased ASCII, `Pad::Auto`, trigram multiset,
+warp-2, inclusive-threshold, and OR/AND/NOR behavior for the bounded subset.
+The remaining differences are explicit: XSR splits only supported ASCII words
+and evaluates each word independently; it does not reproduce VSR's Unicode
+character handling or its second full-text search for multi-word phrases.
 
 ## Routing Path
 ```
