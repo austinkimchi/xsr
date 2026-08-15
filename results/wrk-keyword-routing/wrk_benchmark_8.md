@@ -1,6 +1,6 @@
 # High-Performance wrk Benchmark Results
 
-- Timestamp: `Thu Aug 13 22:59:24 PDT 2026`
+- Timestamp: `Fri Aug 14 03:44:12 PM PDT 2026`
 - Tool: `wrk`
 - Threads: `4`
 - Connections: `8`
@@ -14,15 +14,14 @@
 Running 30s test @ http://10.10.0.1:18081/v1/chat/completions
   4 threads and 8 connections
   Thread Stats   Avg      Stdev     Max   +/- Stdev
-    Latency     2.69ms    1.72ms  43.28ms   88.25%
-    Req/Sec   757.13    156.09     1.34k    76.00%
-  90512 requests in 30.09s, 11.82MB read
-Requests/sec:   3008.35
-Transfer/sec:    402.17KB
-[Lua] backend markers: coding=28735 math=27921 others=33856 unknown=0
-[Lua] expected routes: coding=33978 math=35081 others=21453 unknown=0
-[Lua] aggregate route agreement: 0.862968 (78109/90512); fifo_matches=66395 fifo_mismatches=24117
-[Lua] warning: backend marker agreement is low; verify the target has reloaded policy config with distinct backend endpoints
+    Latency     2.36ms    1.08ms  18.22ms   80.36%
+    Req/Sec   832.85    117.62     1.16k    70.48%
+  99680 requests in 30.09s, 13.01MB read
+Requests/sec:   3312.24
+Transfer/sec:    442.75KB
+[Lua] backend markers: coding=33336 math=33637 others=32707 unknown=0
+[Lua] expected routes: coding=37437 math=38621 others=23622 unknown=0
+[Lua] aggregate route agreement: 0.908858 (90595/99680); fifo_matches=72289 fifo_mismatches=27391
 ```
 
 ## [2/2] vLLM-SR Route
@@ -31,12 +30,12 @@ Transfer/sec:    402.17KB
 Running 30s test @ http://10.10.0.1:8899/v1/chat/completions
   4 threads and 8 connections
   Thread Stats   Avg      Stdev     Max   +/- Stdev
-    Latency     8.54ms    2.35ms  25.06ms   69.61%
-    Req/Sec   233.87     34.66   330.00     65.67%
-  27964 requests in 30.02s, 10.24MB read
-Requests/sec:    931.60
-Transfer/sec:    349.16KB
-[Lua] backend markers: coding=9404 math=9512 others=9048 unknown=0
-[Lua] expected routes: coding=10545 math=10799 others=6620 unknown=0
-[Lua] aggregate route agreement: 0.913174 (25536/27964); fifo_matches=20405 fifo_mismatches=7559
+    Latency     8.41ms    2.24ms  21.42ms   69.34%
+    Req/Sec   237.52     33.59   333.00     57.92%
+  28397 requests in 30.01s, 10.41MB read
+Requests/sec:    946.10
+Transfer/sec:    355.04KB
+[Lua] backend markers: coding=9599 math=9748 others=9050 unknown=0
+[Lua] expected routes: coding=10701 math=11041 others=6655 unknown=0
+[Lua] aggregate route agreement: 0.915660 (26002/28397); fifo_matches=20740 fifo_mismatches=7657
 ```

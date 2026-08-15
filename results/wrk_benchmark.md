@@ -1,50 +1,41 @@
-# XDP vs. vLLM-SR Benchmark Summary
+# XDP vs. vLLM-SR benchmark summary
 
-This summary records the controlled `wrk` benchmark sweep run on August 13,
-2026. Every point used a 30-second run, the shared Jaccard trigram keyword
-policy, and the same prompt corpus. Both the XDP-assisted routing proxy and
-vLLM-SR were driven from `ns1` across the same `veth1 -> veth0` client path to
-`10.10.0.1`; they were run separately for each concurrency value.
+This is the controlled `wrk` sweep rerun on August 14, 2026, using the
+shared ngrammatic-compatible trigram keyword policy.  Each measurement ran for
+30 seconds.  `wrk` was used, so these are maximum
+throughput measurements: no fixed request rate was enforced.
 
-## Summary
+| Concurrency | XDP requests/s | XDP average latency | vLLM-SR requests/s | vLLM-SR average latency | XDP throughput advantage | XDP latency advantage |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | 2,516.91 | 381.14 us | 420.63 | 2.34 ms | 6.0x | 6.1x |
+| 2 | 2,635.39 | 738.02 us | 720.52 | 2.74 ms | 3.7x | 3.7x |
+| 4 | 2,696.18 | 1.45 ms | 911.46 | 4.35 ms | 3.0x | 3.0x |
+| 8 | 3,312.24 | 2.36 ms | 946.10 | 8.41 ms | 3.5x | 3.6x |
+| 10 | 3,261.86 | 2.38 ms | 939.49 | 8.47 ms | 3.5x | 3.6x |
+| 16 | 3,410.32 | 4.64 ms | 941.10 | 16.96 ms | 3.6x | 3.7x |
+| 32 | 3,467.61 | 9.17 ms | 941.76 | 33.94 ms | 3.7x | 3.7x |
+| 64 | 3,419.94 | 18.62 ms | 937.81 | 68.13 ms | 3.6x | 3.7x |
+| 96 | 3,438.79 | 27.78 ms | 938.14 | 102.15 ms | 3.7x | 3.7x |
 
-| Concurrency | XDP RPS | XDP avg latency | vLLM-SR RPS | vLLM-SR avg latency | XDP throughput speedup | XDP latency speedup |
-| :---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| 1 | 2,532.68 | 379.74 us | 403.48 | 2.45 ms | 6.3x | 6.5x |
-| 2 | 2,634.17 | 759.91 us | 722.05 | 2.73 ms | 3.6x | 3.6x |
-| 4 | 2,707.81 | 1.44 ms | 900.07 | 4.41 ms | 3.0x | 3.1x |
-| 8 | 3,008.35 | 2.69 ms | 931.60 | 8.54 ms | 3.2x | 3.2x |
-| 10 | 3,213.10 | 2.41 ms | 938.86 | 8.48 ms | 3.4x | 3.5x |
-| 16 | 3,183.63 | 4.97 ms | 938.53 | 17.01 ms | 3.4x | 3.4x |
-| 32 | 3,271.82 | 9.73 ms | 934.12 | 34.21 ms | 3.5x | 3.5x |
-| 64 | 3,388.82 | 18.80 ms | 932.11 | 68.55 ms | 3.6x | 3.6x |
-| 96 | 3,121.42 | 30.78 ms | 922.89 | 103.88 ms | 3.4x | 3.4x |
+XDP sustains roughly 3.4k requests/s from concurrency 16 onward, while the
+vLLM-SR route plateaus near 940 requests/s.  At concurrency 96, XDP has 3.7x
+the throughput and 3.7x lower average latency (27.78 ms versus 102.15 ms).
 
-Speedups are calculated as `XDP / vLLM-SR` for throughput and
-`vLLM-SR / XDP` for average latency.
+## Routing-marker checks
 
-## Observations
+The reports also include two marker-based diagnostics.  They should not be
+read as direct XSR-versus-VSR per-input parity: the aggregate check compares
+route distributions, and the FIFO check compares response-marker ordering.
 
-- XDP sustained 2,532.68–3,388.82 RPS across the sweep; it peaked at
-  concurrency 64.
-- vLLM-SR saturated near 930 RPS from concurrency 8 onward, while its average
-  latency rose from 8.54 ms at concurrency 8 to 103.88 ms at concurrency 96.
-- XDP retained a 3.0x–6.3x throughput advantage and a 3.1x–6.5x average
-  latency advantage in these runs.
+| Metric across the sweep | XDP | vLLM-SR |
+| --- | ---: | ---: |
+| Aggregate route-distribution agreement | 90.85%--90.91% | 91.27%--91.57% |
+| FIFO response-marker agreement | 72.51%--72.53% | 72.94%--73.04% |
 
-## Raw Reports
+For ngrammatic semantic equivalence, use the differential tests that compare
+XSR's reference matcher with the VSR/`ngrammatic` behavior; these traffic
+markers are useful operational checks, not the parity oracle.
 
-The timestamped reports retain the full `wrk` output, request counts, backend
-marker totals, and route-agreement measurements.
+## Raw reports
 
-| Concurrency | Report |
-| :---: | :--- |
-| 1 | `results/wrk-keyword-routing/wrk_benchmark_1.md` |
-| 2 | `results/wrk-keyword-routing/wrk_benchmark_2.md` |
-| 4 | `results/wrk-keyword-routing/wrk_benchmark_4.md` |
-| 8 | `results/wrk-keyword-routing/wrk_benchmark_8.md` |
-| 10 | `results/wrk-keyword-routing/wrk_benchmark_10.md` |
-| 16 | `results/wrk-keyword-routing/wrk_benchmark_16.md` |
-| 32 | `results/wrk-keyword-routing/wrk_benchmark_32.md` |
-| 64 | `results/wrk-keyword-routing/wrk_benchmark_64.md` |
-| 96 | `results/wrk-keyword-routing/wrk_benchmark_96.md` |
+The source reports are in `results/wrk-keyword-routing/wrk_benchmark_{1,2,4,8,10,16,32,64,96}.md`; the most recent individual run is also available as `results/wrk-keyword-routing/latest.md`.
