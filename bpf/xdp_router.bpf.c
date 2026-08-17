@@ -97,22 +97,45 @@ static __always_inline void build_flow_key(struct iphdr *ip, struct tcphdr *tcp,
   key->dst_port = bpf_ntohs(tcp->dest);
 }
 
-static __always_inline int find_http_body_offset(unsigned char *payload,
-                                                 unsigned char *data_end,
+struct http_header_scan_ctx {
+  struct xdp_md *xdp;
+  __u32 payload_offset;
+  __u32 body_offset;
+};
+
+/* Keep the header search out of the entry program's verifier state graph.
+ * A regular 2,000-iteration loop compounded with the ngrammatic-compatible
+ * classifier and exceeded the one-million processed-instruction limit. */
+static long find_http_body_offset_callback(__u32 index, void *data) {
+  struct http_header_scan_ctx *scan = data;
+  unsigned char bytes[4];
+
+  if (index >= MAX_HEADER_SCAN ||
+      bpf_xdp_load_bytes(scan->xdp, scan->payload_offset + index, bytes,
+                         sizeof(bytes)) < 0)
+    return 1;
+  if (bytes[0] != '\r' || bytes[1] != '\n' || bytes[2] != '\r' ||
+      bytes[3] != '\n')
+    return 0;
+
+  scan->body_offset = index + 4;
+  return 1;
+}
+
+static __always_inline int find_http_body_offset(struct xdp_md *xdp,
+                                                 unsigned char *data,
+                                                 unsigned char *payload,
                                                  __u32 *body_offset) {
-  for (int i = 0; i < MAX_HEADER_SCAN; i++) {
-    unsigned char *p = payload + i;
+  struct http_header_scan_ctx scan = {
+      .xdp = xdp,
+      .payload_offset = (__u32)(payload - data),
+  };
 
-    if (p + 4 > data_end)
-      return 0;
-
-    if (p[0] == '\r' && p[1] == '\n' && p[2] == '\r' && p[3] == '\n') {
-      *body_offset = i + 4;
-      return 1;
-    }
-  }
-
-  return 0;
+  bpf_loop(MAX_HEADER_SCAN, find_http_body_offset_callback, &scan, 0);
+  if (!scan.body_offset)
+    return 0;
+  *body_offset = scan.body_offset;
+  return 1;
 }
 
 SEC("xdp")
@@ -211,7 +234,7 @@ int xdp_router(struct xdp_md *ctx) {
 
   if (is_post) {
     __u32 body_offset = 0;
-    bool found_body = find_http_body_offset(p, data_end, &body_offset);
+    bool found_body = find_http_body_offset(ctx, data, p, &body_offset);
 
     xdp_classifier_init(&stack_classifier);
     if (found_body && body_offset < payload_length) {
