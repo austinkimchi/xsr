@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import Any
 
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from generate_keyword_header import load_policy, validate_policy  # noqa: E402
@@ -34,10 +34,14 @@ from jaccard_reference import rule_matches  # noqa: E402
 
 
 DEFAULT_CONFIG = ROOT / "config" / "policy_ngram.yaml"
-DEFAULT_REPORT_DIR = ROOT / "reports"
-DEFAULT_CACHE_DIR = Path.home() / ".cache" / "xdp-keyword-routing"
+DEFAULT_REPORT_DIR = ROOT / "results"
+DEFAULT_CACHE_DIR = Path.home() / ".cache" / "routing-correctness-benchmark"
+DEFAULT_PROMPTS_FILE = ROOT / "benchmarks" / "dataset_prompts.jsonl"
 DEFAULT_XDP_URL = "http://10.10.0.1:18081/v1/chat/completions"
 DEFAULT_VLLM_SR_URL = "http://127.0.0.1:8899/v1/chat/completions"
+DEFAULT_VLLM_CODING_BACKEND_PORT = 18391
+DEFAULT_VLLM_MATH_BACKEND_PORT = 18392
+DEFAULT_VLLM_OTHERS_BACKEND_PORT = 18393
 ROUTES = ("coding", "math", "others")
 ROUTE_HEADERS = (
     "x-vllm-sr-route",
@@ -87,6 +91,7 @@ class Result:
     elapsed_ms: float
     route: str | None
     matched_keyword: str | None
+    source_index: int = 0
     xdp_elapsed_ns: int | None = None
     src_port: int | None = None
     error: str | None = None
@@ -117,11 +122,19 @@ class ThreadingHTTPServer(http.server.ThreadingHTTPServer):
 
 
 @contextlib.contextmanager
-def mock_backend(port: int):
+def mock_backend(port: int, backend: str = "others"):
+    # A benchmark may be run against a backend started by the surrounding
+    # router environment.  Do not fail merely because that endpoint is
+    # already available (and do not terminate a process we do not own).
+    if socket_open(f"http://127.0.0.1:{port}"):
+        print(f"Reusing existing mock/backend listener on port {port}", file=sys.stderr)
+        yield
+        return
+
     c_binary = ROOT / "benchmarks" / "mock_backend"
     if c_binary.exists() and os.access(c_binary, os.X_OK):
         proc = subprocess.Popen(
-            [str(c_binary), str(port)],
+            [str(c_binary), str(port), backend],
             cwd=ROOT,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.PIPE,
@@ -130,6 +143,10 @@ def mock_backend(port: int):
         time.sleep(0.1)
         if proc.poll() is not None:
             stderr = proc.stderr.read().strip() if proc.stderr else ""
+            if "Address already in use" in stderr and socket_open(f"http://127.0.0.1:{port}"):
+                print(f"Reusing existing mock/backend listener on port {port}", file=sys.stderr)
+                yield
+                return
             raise RuntimeError(f"mock backend failed to start on port {port}: {stderr or 'unknown error'}")
         try:
             yield
@@ -224,6 +241,7 @@ def send_case(url: str, case: Case, timeout_s: float) -> Result:
             elapsed_ms,
             route_from_headers(headers),
             case.matched_keyword,
+            source_index=case.source_index,
             src_port=src_port,
         )
     except Exception as exc:
@@ -235,6 +253,7 @@ def send_case(url: str, case: Case, timeout_s: float) -> Result:
             elapsed_ms,
             None,
             case.matched_keyword,
+            source_index=case.source_index,
             src_port=src_port,
             error=str(exc),
         )
@@ -283,6 +302,7 @@ def send_case_persistent(url: str, case: Case, timeout_s: float) -> Result:
             elapsed_ms,
             route_from_headers(headers),
             case.matched_keyword,
+            source_index=case.source_index,
             src_port=src_port,
         )
     except Exception:
@@ -332,6 +352,74 @@ def prompt_from_row(row: dict[str, Any]) -> str | None:
         if isinstance(value, str) and value.strip():
             return value.strip()
     return None
+
+
+def prompt_from_request(row: dict[str, Any]) -> str | None:
+    """Extract the user prompt from an OpenAI-style JSONL request record."""
+    messages = row.get("messages")
+    if isinstance(messages, list):
+        for message in reversed(messages):
+            if not isinstance(message, dict) or message.get("role") != "user":
+                continue
+            content = message.get("content")
+            if isinstance(content, str) and content.strip():
+                return content.strip()
+    return prompt_from_row(row)
+
+
+def load_prompt_file(
+    path: Path,
+    routes: list[dict[str, object]],
+    case_sensitive: bool,
+) -> tuple[list[Case], dict[str, Any]]:
+    """Load every valid request from a JSONL file such as dataset_prompts.jsonl."""
+    cases: list[Case] = []
+    selected = {route: 0 for route in ROUTES}
+    selected.update({"embedded_quote": 0, "duplicate_prompt": 0, "missing_prompt": 0})
+
+    try:
+        lines = path.read_text().splitlines()
+    except OSError as exc:
+        raise SystemExit(f"cannot read prompts file {path}: {exc}") from exc
+
+    for line_number, line in enumerate(lines, start=1):
+        if not line.strip():
+            continue
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError as exc:
+            raise SystemExit(f"invalid JSON in prompts file {path}, line {line_number}: {exc}") from exc
+        if not isinstance(row, dict):
+            raise SystemExit(f"prompts file {path}, line {line_number} must contain a JSON object")
+
+        prompt = prompt_from_request(row)
+        if not prompt:
+            selected["missing_prompt"] += 1
+            continue
+        source_index = row.get("source_index", line_number - 1)
+        if not isinstance(source_index, int):
+            raise SystemExit(f"prompts file {path}, line {line_number} has a non-integer source_index")
+
+        policy_route, matched_keyword = expected_route(prompt, routes, case_sensitive)
+        labeled_route = canonical_route(row.get("x_expected_route"))
+        if row.get("x_expected_route") is not None and labeled_route not in ROUTES:
+            raise SystemExit(f"prompts file {path}, line {line_number} has an invalid x_expected_route")
+        expected = labeled_route or policy_route
+        cases.append(Case(prompt, expected, matched_keyword if expected == policy_route else None, source_index))
+        selected[expected] += 1
+
+    if not cases:
+        raise SystemExit(f"prompts file {path} contains no usable user prompts")
+    return cases, {
+        "name": "jsonl",
+        "source": str(path),
+        "config": "local",
+        "split": "jsonl",
+        "loader": "jsonl",
+        "scanned_rows": len(lines),
+        "requested_per_route": None,
+        "selected_counts": selected,
+    }
 
 
 def load_rows(args: argparse.Namespace) -> tuple[list[dict[str, Any]], dict[str, Any]]:
@@ -424,12 +512,20 @@ def expected_route(
         if str(route.get("method", "")).lower() != "ngram":
             raise ValueError("benchmark policy must use the XDP Jaccard ngram matcher")
         keywords = [str(keyword) for keyword in route["keywords"]]  # type: ignore[index]
-        if not rule_matches(prompt, keywords, str(route.get("operator", "OR")),
-                            int(route.get("ngram_arity", 3)),
-                            route.get("ngram_threshold", 0.4), case_sensitive):
+        operator = str(route.get("operator", "OR"))
+        arity = int(route.get("ngram_arity", 3))
+        threshold = route.get("ngram_threshold", 0.4)
+        if not rule_matches(prompt, keywords, operator, arity, threshold, case_sensitive):
             continue
-        for keyword in route["keywords"]:  # type: ignore[index]
-            return str(route["name"]), str(keyword)
+        matching_keyword = next(
+            (
+                keyword
+                for keyword in keywords
+                if rule_matches(prompt, [keyword], "OR", arity, threshold, case_sensitive)
+            ),
+            None,
+        )
+        return str(route["name"]), matching_keyword
     return "others", None
 
 
@@ -437,7 +533,7 @@ def select_cases(
     rows: list[dict[str, Any]],
     routes: list[dict[str, object]],
     case_sensitive: bool,
-    per_route: int,
+    per_route: int | None,
 ) -> tuple[list[Case], dict[str, int]]:
     buckets: dict[str, list[Case]] = {route: [] for route in ROUTES}
     counts = {"missing_prompt": 0, "duplicate_prompt": 0, "embedded_quote": 0}
@@ -458,22 +554,99 @@ def select_cases(
         seen.add(key)
 
         route, keyword = expected_route(prompt, routes, case_sensitive)
-        if len(buckets[route]) < per_route:
+        if per_route is None or len(buckets[route]) < per_route:
             buckets[route].append(Case(prompt, route, keyword, index))
-        if all(len(buckets[route]) >= per_route for route in ROUTES):
+        if per_route is not None and all(len(buckets[route]) >= per_route for route in ROUTES):
             break
 
     cases = [case for route in ROUTES for case in buckets[route]]
     counts.update({route: len(buckets[route]) for route in ROUTES})
-    if any(counts[route] < per_route for route in ROUTES):
+    if per_route is not None and any(counts[route] < per_route for route in ROUTES):
         missing = ", ".join(f"{route}={counts[route]}" for route in ROUTES)
         raise SystemExit(f"not enough dataset prompts for requested sample: {missing}")
     return cases, counts
 
 
+def mixed_dataset_names(value: str | None) -> list[str]:
+    # The checked-in/generated JSONL corpus makes normal benchmark runs
+    # reproducible and independent of the Hugging Face rows API. Fetching all
+    # remote sources remains available when explicitly requested.
+    if not value:
+        return ["dataset-prompts"]
+    if value.strip().lower() == "all":
+        return ["dataset-prompts", *DATASETS]
+    names = [name.strip() for name in value.split(",") if name.strip()]
+    invalid = [name for name in names if name != "dataset-prompts" and name not in DATASETS]
+    if invalid:
+        raise SystemExit(
+            f"unknown dataset(s): {', '.join(invalid)}; use dataset-prompts or one of {', '.join(sorted(DATASETS))}"
+        )
+    return names
+
+
+def load_mixed_cases(
+    args: argparse.Namespace,
+    routes: list[dict[str, object]],
+    case_sensitive: bool,
+) -> tuple[list[Case], dict[str, Any]]:
+    """Load all valid prompts from each selected source without route caps."""
+    cases: list[Case] = []
+    source_meta: list[dict[str, Any]] = []
+    selected = {route: 0 for route in ROUTES}
+    selected.update({"embedded_quote": 0, "duplicate_prompt": 0, "missing_prompt": 0})
+
+    for name in mixed_dataset_names(getattr(args, "datasets", None)):
+        if name == "dataset-prompts":
+            if not DEFAULT_PROMPTS_FILE.exists():
+                print(f"Skipping missing local prompts file: {DEFAULT_PROMPTS_FILE}", file=sys.stderr)
+                continue
+            source_cases, meta = load_prompt_file(DEFAULT_PROMPTS_FILE, routes, case_sensitive)
+        else:
+            source_args_dict = vars(args).copy()
+            source_args_dict["dataset"] = name
+            source_args = argparse.Namespace(**source_args_dict)
+            rows, meta = load_rows(source_args)
+            source_cases, counts = select_cases(rows, routes, case_sensitive, None)
+            meta["selected_counts"] = counts
+
+        cases.extend(source_cases)
+        source_meta.append(meta)
+        for key in selected:
+            selected[key] += meta["selected_counts"].get(key, 0)
+
+    if not cases:
+        raise SystemExit("the selected dataset mix contains no usable prompts")
+    return cases, {
+        "name": "mixed",
+        "source": ", ".join(meta["source"] for meta in source_meta),
+        "config": "mixed",
+        "split": "mixed",
+        "loader": "mixed",
+        "scanned_rows": sum(meta["scanned_rows"] for meta in source_meta),
+        "requested_per_route": None,
+        "selected_counts": selected,
+        "sources": source_meta,
+    }
+
+
 def load_cases(args: argparse.Namespace) -> tuple[list[Case], dict[str, Any], dict[str, Any]]:
     policy = load_policy(args.config)
     case_sensitive, routes = validate_policy(policy)
+    prompts_file = getattr(args, "prompts_file", None)
+    if prompts_file:
+        cases, meta = load_prompt_file(prompts_file, routes, case_sensitive)
+        return cases, meta, {
+            "case_sensitive": case_sensitive,
+            "keyword_count": sum(len(route["keywords"]) for route in routes),  # type: ignore[arg-type]
+            "routes": routes,
+        }
+    if getattr(args, "dataset", None) is None:
+        cases, meta = load_mixed_cases(args, routes, case_sensitive)
+        return cases, meta, {
+            "case_sensitive": case_sensitive,
+            "keyword_count": sum(len(route["keywords"]) for route in routes),  # type: ignore[arg-type]
+            "routes": routes,
+        }
     rows, meta = load_rows(args)
     cases, selected_counts = select_cases(rows, routes, case_sensitive, args.per_route)
     meta["selected_counts"] = selected_counts
@@ -539,19 +712,16 @@ def percentile(values: list[float], pct: float) -> float | None:
     return ordered[int(round((pct / 100.0) * (len(ordered) - 1)))]
 
 
-def summarize(mode: str, results: list[Result], wall_s: float, host_cpu: float | None, cpu: float | None) -> dict[str, Any]:
+def summarize(
+    mode: str,
+    results: list[Result],
+    wall_s: float,
+    host_cpu: float | None,
+    cpu: float | None,
+    expected_requests: int | None = None,
+) -> dict[str, Any]:
     latencies = [result.elapsed_ms for result in results if result.status and not result.error]
     correct = sum(1 for result in results if result.route == result.expected_route)
-    mismatches = [
-        {
-            "expected": result.expected_route,
-            "actual": result.route,
-            "matched_keyword": result.matched_keyword,
-            "prompt": result.prompt[:160],
-        }
-        for result in results
-        if result.route != result.expected_route
-    ]
     counts = {route: 0 for route in ROUTES}
     counts["unknown"] = 0
     for result in results:
@@ -562,6 +732,7 @@ def summarize(mode: str, results: list[Result], wall_s: float, host_cpu: float |
         "mode": mode,
         "status": "ok",
         "requests": len(results),
+        "expected_requests": len(results) if expected_requests is None else expected_requests,
         "successes": sum(1 for result in results if 200 <= result.status < 300),
         "errors": sum(1 for result in results if result.error or result.status >= 400 or result.status == 0),
         "route_agreement": correct / len(results) if results else None,
@@ -581,7 +752,9 @@ def summarize(mode: str, results: list[Result], wall_s: float, host_cpu: float |
         "requests_per_second": len(results) / wall_s if wall_s > 0 else 0.0,
         "host_cpu_percent": host_cpu,
         "sampled_cpu_percent": cpu,
-        "mismatches": mismatches[:10],
+        # Keep the complete observations so XDP and vLLM-SR can be compared
+        # directly by prompt rather than inferred from their reference scores.
+        "results": [dataclasses.asdict(result) for result in results],
     }
 
 
@@ -607,6 +780,7 @@ def run_vllm(args: argparse.Namespace, cases: list[Case]) -> dict[str, Any]:
         wall_s,
         cpu_delta(cpu_start, read_cpu()),
         sampled_cpu(containers=("vllm-sr-router-container", "vllm-sr-envoy-container")),
+        len(cases),
     )
 
 
@@ -630,7 +804,9 @@ def ensure_xdp(args: argparse.Namespace) -> str | None:
         except subprocess.CalledProcessError:
             return f"missing prerequisite: {' '.join(command)}"
     if not args.no_build:
-        checked(["make", "dev"])
+        # The benchmark reference matcher and the XDP maps must be generated
+        # from the exact same policy file, including when --config is custom.
+        checked(["make", f"KEYWORD_POLICY={args.config.resolve()}", "dev"])
     subprocess.run(["ip", "link", "set", "dev", args.xdp_ifname, "xdp", "off"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     time.sleep(0.5)
     return None
@@ -720,14 +896,26 @@ def netns_requests(args: argparse.Namespace, cases: list[Case]) -> list[Result]:
         text=True,
     )
     try:
-        assert worker.stdin and worker.stdout
-        for case in cases:
-            worker.stdin.write(json.dumps(dataclasses.asdict(case), separators=(",", ":")) + "\n")
-        worker.stdin.close()
-        results = [Result(**json.loads(line)) for line in worker.stdout if line.strip()]
-        stderr = worker.stderr.read() if worker.stderr else ""
-        if worker.wait(timeout=5) != 0:
-            raise RuntimeError(stderr.strip())
+        # communicate reads stdout while feeding stdin. Writing the complete
+        # case set first and only then reading results can deadlock when either
+        # pipe fills (especially with large prompts or many cases).
+        payload = "".join(
+            json.dumps(dataclasses.asdict(case), separators=(",", ":")) + "\n"
+            for case in cases
+        )
+        batches = (len(cases) + max(args.concurrency, 1) - 1) // max(args.concurrency, 1)
+        worker_timeout_s = max(15, batches * args.timeout_s + 10)
+        try:
+            stdout, stderr = worker.communicate(payload, timeout=worker_timeout_s)
+        except subprocess.TimeoutExpired as exc:
+            raise RuntimeError(
+                f"netns client timed out after {worker_timeout_s:.1f}s "
+                f"for {len(cases)} cases"
+            ) from exc
+        if worker.returncode != 0:
+            raise RuntimeError(stderr.strip() or f"netns client exited with {worker.returncode}")
+
+        results = [Result(**json.loads(line)) for line in stdout.splitlines() if line.strip()]
         if len(results) != len(cases):
             detail = stderr.strip() or f"got {len(results)} results for {len(cases)} cases"
             raise RuntimeError(f"netns client returned incomplete results: {detail}")
@@ -755,7 +943,7 @@ def run_direct_netns(args: argparse.Namespace, cases: list[Case]) -> dict[str, A
         wall_s = time.perf_counter() - start
         host_cpu = cpu_delta(cpu_start, read_cpu())
 
-        summary = summarize("direct-netns", results, wall_s, host_cpu, None)
+        summary = summarize("direct-netns", results, wall_s, host_cpu, None, len(cases))
         return summary
     finally:
         if firewall:
@@ -806,7 +994,7 @@ def run_xdp(args: argparse.Namespace, cases: list[Case]) -> dict[str, Any]:
                 result.route = canonical_route(event.get("route_name"))
                 result.xdp_elapsed_ns = event.get("xdp_elapsed_ns")
 
-        summary = summarize("xdp", results, wall_s, host_cpu, sampled_cpu(pid=router.pid))
+        summary = summarize("xdp", results, wall_s, host_cpu, sampled_cpu(pid=router.pid), len(cases))
         summary["route_events"] = len(events)
         summary["missing_route_events"] = max(0, len(results) - len(events))
         if len(events) < len(results):
@@ -853,32 +1041,124 @@ def comparison(results: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def xsr_vsr_routing_agreement(results: list[dict[str, Any]]) -> dict[str, Any]:
+    """Compare XDP (XSR) and vLLM-SR routes for the exact same prompts.
+
+    This intentionally does not derive equivalence from either system's
+    agreement with the reference label: two systems can have the same
+    reference score while disagreeing on individual prompts.
+    """
+    by_mode = {item.get("mode"): item for item in results}
+    xsr = by_mode.get("xdp")
+    vsr = by_mode.get("vllm-sr")
+    if not xsr or not vsr:
+        return {"status": "incomplete", "reason": "both xdp and vllm-sr modes must be run"}
+    if xsr.get("status") != "ok" or vsr.get("status") != "ok":
+        return {
+            "status": "incomplete",
+            "reason": "both xdp and vllm-sr modes must complete",
+            "xsr_status": xsr.get("status"),
+            "vsr_status": vsr.get("status"),
+        }
+
+    def index_mode(mode_result: dict[str, Any], name: str) -> tuple[dict[tuple[int, str], dict[str, Any]] | None, str | None]:
+        observations = mode_result.get("results")
+        if not isinstance(observations, list):
+            return None, f"{name} did not retain per-prompt results"
+        expected_requests = mode_result.get("expected_requests", mode_result.get("requests"))
+        if not isinstance(expected_requests, int) or len(observations) != expected_requests:
+            return None, f"{name} returned {len(observations)} of {expected_requests} expected prompt results"
+        indexed: dict[tuple[int, str], dict[str, Any]] = {}
+        for observation in observations:
+            if not isinstance(observation, dict) or not isinstance(observation.get("prompt"), str):
+                return None, f"{name} contains an invalid per-prompt result"
+            key = (observation.get("source_index", 0), observation["prompt"])
+            if key in indexed:
+                return None, f"{name} has duplicate prompt identity at source index {key[0]}"
+            indexed[key] = observation
+        return indexed, None
+
+    xsr_by_prompt, error = index_mode(xsr, "xdp")
+    if error:
+        return {"status": "incomplete", "reason": error}
+    vsr_by_prompt, error = index_mode(vsr, "vllm-sr")
+    if error:
+        return {"status": "incomplete", "reason": error}
+    assert xsr_by_prompt is not None and vsr_by_prompt is not None
+
+    xsr_keys = set(xsr_by_prompt)
+    vsr_keys = set(vsr_by_prompt)
+    if xsr_keys != vsr_keys:
+        missing_from_xsr = sorted(vsr_keys - xsr_keys)
+        missing_from_vsr = sorted(xsr_keys - vsr_keys)
+        return {
+            "status": "incomplete",
+            "reason": "one or more prompts are missing from a mode",
+            "missing_from_xsr": len(missing_from_xsr),
+            "missing_from_vsr": len(missing_from_vsr),
+            "missing_prompt_identities": {
+                "from_xsr": [{"source_index": index, "prompt": prompt[:160]} for index, prompt in missing_from_xsr[:10]],
+                "from_vsr": [{"source_index": index, "prompt": prompt[:160]} for index, prompt in missing_from_vsr[:10]],
+            },
+        }
+
+    missing_routes = [
+        {"source_index": key[0], "prompt": key[1][:160], "mode": mode}
+        for mode, observations in (("xsr", xsr_by_prompt), ("vsr", vsr_by_prompt))
+        for key, observation in observations.items()
+        if observation.get("route") not in ROUTES
+    ]
+    if missing_routes:
+        return {
+            "status": "incomplete",
+            "reason": "one or more prompts have no recognized route decision",
+            "missing_route_count": len(missing_routes),
+            "missing_routes": missing_routes[:10],
+        }
+
+    matrix = {xsr_route: {vsr_route: 0 for vsr_route in ROUTES} for xsr_route in ROUTES}
+    agreements = 0
+    for key in sorted(xsr_keys):
+        xsr_result = xsr_by_prompt[key]
+        vsr_result = vsr_by_prompt[key]
+        xsr_route = xsr_result["route"]
+        vsr_route = vsr_result["route"]
+        matrix[xsr_route][vsr_route] += 1
+        if xsr_route == vsr_route:
+            agreements += 1
+
+    total = len(xsr_keys)
+    return {
+        "status": "ok",
+        "total": total,
+        "agreement_count": agreements,
+        "agreement_percent": 100.0 * agreements / total if total else None,
+        "confusion_matrix": matrix,
+    }
+
+
 def fmt(value: Any, digits: int = 3) -> str:
     if value is None:
         return "n/a"
     return f"{value:.{digits}f}" if isinstance(value, float) else str(value)
 
 
-def get_report_filename(config_path: Path, report_name_arg: str | None = None) -> tuple[str, str]:
+def get_report_filename(report_name_arg: str | None = None) -> str:
     if report_name_arg:
-        stem = Path(report_name_arg).stem
-        md_name = report_name_arg if report_name_arg.endswith(".md") else f"{report_name_arg}.md"
-        json_name = f"{stem}.json"
-        return md_name, json_name
-
-    stem = config_path.stem
-    if stem.startswith("policy_"):
-        method = stem.removeprefix("policy_")
-        return f"keyword_{method}.md", f"keyword_{method}.json"
-
-    return "keyword_routing_benchmark.md", "keyword_routing_benchmark.json"
+        return report_name_arg if report_name_arg.endswith(".md") else f"{report_name_arg}.md"
+    return "routing_correctness_benchmark.md"
 
 
-def write_reports(report: dict[str, Any], report_dir: Path, report_name: str = "keyword_routing_benchmark.md") -> None:
+def write_reports(
+    report: dict[str, Any],
+    report_dir: Path,
+    report_name: str = "routing_correctness_benchmark.md",
+    write_json: bool = False,
+) -> None:
     report_dir.mkdir(parents=True, exist_ok=True)
-    stem = Path(report_name).stem
-    json_name = f"{stem}.json"
-    (report_dir / json_name).write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
+    if write_json:
+        json_name = f"{Path(report_name).stem}.json"
+        (report_dir / json_name).write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
 
     dataset = report["dataset"]
     selected = dataset["selected_counts"]
@@ -897,6 +1177,19 @@ def write_reports(report: dict[str, Any], report_dir: Path, report_name: str = "
         f"- Concurrency: {concurrency}",
         "",
     ]
+    if dataset.get("sources"):
+        lines += [
+            "## Dataset Mix",
+            "",
+            "| Source | Scanned | coding | math | others |",
+            "| --- | ---: | ---: | ---: | ---: |",
+        ]
+        for source in dataset["sources"]:
+            counts = source["selected_counts"]
+            lines.append(
+                f"| `{source['source']}` | {source['scanned_rows']} | {counts['coding']} | {counts['math']} | {counts['others']} |"
+            )
+        lines.append("")
 
     if control_results:
         lines += [
@@ -920,7 +1213,7 @@ def write_reports(report: dict[str, Any], report_dir: Path, report_name: str = "
     lines += [
         "## Results",
         "",
-        "| Mode | Requests | Route agreement | avg ms | p99 ms | RPS | Host CPU % | Sampled CPU % |",
+        "| Mode | Requests | Reference-label agreement | avg ms | p99 ms | RPS | Host CPU % | Sampled CPU % |",
         "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
     ]
     for result in test_results:
@@ -933,6 +1226,23 @@ def write_reports(report: dict[str, Any], report_dir: Path, report_name: str = "
             f"{fmt(latency['avg'])} | {fmt(latency['p99'])} | "
             f"{fmt(result['requests_per_second'])} | {fmt(result['host_cpu_percent'])} | {fmt(result['sampled_cpu_percent'])} |"
         )
+
+    pairwise = report["xsr_vsr_routing_agreement"]
+    lines += ["", "## XSR vs VSR Routing Agreement", ""]
+    if pairwise["status"] == "ok":
+        lines += [
+            f"XSR ↔ VSR agreement: {pairwise['agreement_count']}/{pairwise['total']} ({pairwise['agreement_percent']:.2f}%)",
+            "",
+            "```text",
+            "             VSR",
+            "           code math other",
+            f"XSR code  {pairwise['confusion_matrix']['coding']['coding']:>5} {pairwise['confusion_matrix']['coding']['math']:>4} {pairwise['confusion_matrix']['coding']['others']:>5}",
+            f"    math  {pairwise['confusion_matrix']['math']['coding']:>5} {pairwise['confusion_matrix']['math']['math']:>4} {pairwise['confusion_matrix']['math']['others']:>5}",
+            f"    other {pairwise['confusion_matrix']['others']['coding']:>5} {pairwise['confusion_matrix']['others']['math']:>4} {pairwise['confusion_matrix']['others']['others']:>5}",
+            "```",
+        ]
+    else:
+        lines.append(f"- Pairwise comparison incomplete: {pairwise.get('reason', 'unknown')}")
 
     lines += ["", "## Route Counts", "", "| Mode | coding | math | others |", "| --- | ---: | ---: | ---: |"]
     for result in test_results:
@@ -950,20 +1260,12 @@ def write_reports(report: dict[str, Any], report_dir: Path, report_name: str = "
                 "",
             ]
         lines += [
-            f"- Route agreement delta, XDP minus vLLM-SR: {fmt(comp['route_agreement_delta'], 4)}",
+            f"- Reference-label agreement delta, XDP minus vLLM-SR: {fmt(comp['route_agreement_delta'], 4)}",
             f"- Average latency delta, XDP minus vLLM-SR: {fmt(comp['avg_latency_delta_ms'])} ms",
             f"- p99 latency delta, XDP minus vLLM-SR: {fmt(comp['p99_latency_delta_ms'])} ms",
         ]
     else:
         lines.append(f"- Comparison incomplete: {comp.get('reason', 'unknown')}")
-
-    mismatches = [
-        f"- {result['mode']}: expected `{item['expected']}`, got `{item['actual']}`; keyword `{item['matched_keyword']}`; prompt: {item['prompt']!r}"
-        for result in test_results
-        for item in result.get("mismatches", [])
-    ]
-    if mismatches:
-        lines += ["", "## First Mismatches", "", *mismatches[:10]]
 
     lines += [
         "",
@@ -978,12 +1280,28 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--client-worker")
     parser.add_argument("-c", "--concurrency", type=int, default=1, help="Number of concurrent client workers / connections")
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
-    parser.add_argument("--dataset", choices=sorted(DATASETS), default="supralabs")
+    parser.add_argument(
+        "--dataset",
+        choices=sorted(DATASETS),
+        default=None,
+        help="Run one remote dataset only (the default uses local dataset_prompts.jsonl).",
+    )
+    parser.add_argument(
+        "--datasets",
+        default=None,
+        help="Comma-separated sources: dataset-prompts and/or configured remote dataset names; use all for every source.",
+    )
+    parser.add_argument(
+        "--prompts-file",
+        type=Path,
+        help="OpenAI-request JSONL input (for example benchmarks/dataset_prompts.jsonl); uses every valid record.",
+    )
     parser.add_argument("--scan-limit", type=int, default=2000)
     parser.add_argument("--per-route", type=int, default=50)
     parser.add_argument("--cache-dir", type=Path, default=DEFAULT_CACHE_DIR)
     parser.add_argument("--report-dir", type=Path, default=DEFAULT_REPORT_DIR)
-    parser.add_argument("--report-name", default=None, help="Markdown report filename (e.g. keyword_literal.md)")
+    parser.add_argument("--report-name", default=None, help="Markdown report filename (default: routing_correctness_benchmark.md)")
+    parser.add_argument("--json-output", action="store_true", help="Also write a JSON report alongside the Markdown report")
     parser.add_argument("--modes", default="direct-netns,xdp,vllm-sr")
     parser.add_argument("--timeout-s", type=float, default=10.0)
     parser.add_argument("--event-timeout-s", type=float, default=10.0)
@@ -992,7 +1310,24 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--xdp-netns", default="ns1")
     parser.add_argument("--xdp-backend-port", type=int, default=18081)
     parser.add_argument("--vllm-sr-url", default=DEFAULT_VLLM_SR_URL)
-    parser.add_argument("--vllm-backend-port", type=int, default=18391)
+    parser.add_argument(
+        "--vllm-backend-port",
+        type=int,
+        default=DEFAULT_VLLM_CODING_BACKEND_PORT,
+        help="Mock vLLM-SR coding backend port",
+    )
+    parser.add_argument(
+        "--vllm-math-backend-port",
+        type=int,
+        default=DEFAULT_VLLM_MATH_BACKEND_PORT,
+        help="Mock vLLM-SR math backend port",
+    )
+    parser.add_argument(
+        "--vllm-others-backend-port",
+        type=int,
+        default=DEFAULT_VLLM_OTHERS_BACKEND_PORT,
+        help="Mock vLLM-SR others backend port",
+    )
     parser.add_argument("--setup", action="store_true")
     parser.add_argument("--no-build", action="store_true")
     parser.add_argument("--no-firewall", action="store_true")
@@ -1004,6 +1339,9 @@ def main() -> int:
     args = parse_args()
     if args.client_worker:
         return run_client_worker(args.client_worker, args.timeout_s, args.concurrency)
+    if os.geteuid() != 0:
+        print("Routing correctness benchmark requires root privileges. Elevating with sudo...", file=sys.stderr)
+        os.execvp("sudo", ["sudo", sys.executable, str(Path(__file__).resolve()), *sys.argv[1:]])
 
     cases, dataset, policy = load_cases(args)
     modes = [mode.strip() for mode in args.modes.split(",") if mode.strip()]
@@ -1012,9 +1350,17 @@ def main() -> int:
     with contextlib.ExitStack() as stack:
         if not args.no_mock_backends:
             if "direct-netns" in modes or "xdp" in modes:
-                stack.enter_context(mock_backend(args.xdp_backend_port))
+                stack.enter_context(mock_backend(args.xdp_backend_port, "others"))
             if "vllm-sr" in modes:
-                stack.enter_context(mock_backend(args.vllm_backend_port))
+                # The shared vLLM-SR policy routes each decision to a distinct
+                # host backend. Provision all three so the benchmark is
+                # self-contained instead of stalling on math/others requests.
+                for port, backend in (
+                    (args.vllm_backend_port, "coding"),
+                    (args.vllm_math_backend_port, "math"),
+                    (args.vllm_others_backend_port, "others"),
+                ):
+                    stack.enter_context(mock_backend(port, backend))
         for mode in modes:
             if mode == "direct-netns":
                 results.append(run_direct_netns(args, cases))
@@ -1039,10 +1385,13 @@ def main() -> int:
         "policy": policy,
         "results": results,
         "comparison": comparison(results),
+        "xsr_vsr_routing_agreement": xsr_vsr_routing_agreement(results),
     }
-    md_name, _ = get_report_filename(args.config, args.report_name)
-    write_reports(report, args.report_dir, md_name)
-    print(json.dumps(report, indent=2, sort_keys=True))
+    md_name = get_report_filename(args.report_name)
+    write_reports(report, args.report_dir, md_name, args.json_output)
+    print(f"Wrote {args.report_dir / md_name}")
+    if args.json_output:
+        print(f"Wrote {args.report_dir / f'{Path(md_name).stem}.json'}")
     return 0
 
 

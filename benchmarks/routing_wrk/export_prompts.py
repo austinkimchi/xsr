@@ -15,10 +15,10 @@ import time
 import urllib.error
 import urllib.request
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "benchmarks"))
 
-from benchmark_keyword_routing import (
+from routing_correctness.benchmark import (
     DATASETS,
     DEFAULT_CACHE_DIR,
     ROUTES,

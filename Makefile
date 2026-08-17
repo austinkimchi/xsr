@@ -32,6 +32,12 @@ prod: USER_CFLAGS += -O3
 prod: BPF_CFLAGS += -O2
 prod: clean all
 
+correctness:
+	sudo ./benchmarks/run_routing_correctness.sh
+
+wrk:
+	sudo ./benchmarks/run_routing_performance.sh
+
 xdp_router: xdp_router.c xdp_router.h bpf/xdp_jaccard_classifier.bpf.h bpf/xdp_jaccard_policy.generated.h
 	$(CC) $(USER_CFLAGS) $< -o $@ $(LIBBPF_FLAGS)
 
@@ -86,4 +92,4 @@ setup:
 	@ip netns exec $(XDP_NETNS) ip link set lo up
 	@echo "setup complete: $(XDP_HOST_IF)=$(XDP_HOST_ADDR), $(XDP_NETNS)/$(XDP_PEER_IF)=$(XDP_PEER_ADDR)"
 
-.PHONY: all dev clean clean-setup setup
+.PHONY: all dev prod correctness wrk clean clean-setup setup

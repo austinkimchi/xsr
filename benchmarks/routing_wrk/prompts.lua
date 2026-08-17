@@ -12,7 +12,7 @@ local route_mismatches = 0
 local responses = 0
 local verify_backend_markers = os.getenv("VERIFY_BACKEND_MARKERS") ~= "0"
 local script_dir = debug.getinfo(1, "S").source:sub(2):match("(.*[/\\])") or "./"
-local prompts_file = script_dir .. "dataset_prompts.jsonl"
+local prompts_file = script_dir .. "../dataset_prompts.jsonl"
 
 -- Load prompts from file at startup
 for line in io.lines(prompts_file) do
@@ -22,7 +22,7 @@ for line in io.lines(prompts_file) do
 end
 
 if #prompts == 0 then
-    error("No prompts found in " .. prompts_file .. ". Run export_dataset_prompts.py first.")
+    error("No prompts found in " .. prompts_file .. ". Run export_prompts.py first.")
 end
 
 local counter = 0
@@ -109,6 +109,13 @@ response = function(status, headers, body)
 end
 
 done = function(summary, latency, requests)
+    io.write(string.format(
+        "[Lua] latency percentiles: p50=%.2fus p95=%.2fus p99=%.2fus\n",
+        latency:percentile(50.0),
+        latency:percentile(95.0),
+        latency:percentile(99.0)
+    ))
+    
     local total_backend_counts = { coding = 0, math = 0, others = 0, unknown = 0 }
     local total_expected_counts = { coding = 0, math = 0, others = 0, unknown = 0 }
     local total_matches = 0

@@ -125,17 +125,26 @@ Expected backend markers are:
 {"backend":"others"}
 ```
 
-### 4. Run High-Performance Load Benchmark
+### 4. Run Routing Correctness Benchmark
+Run the routing-agreement sweep across the configured concurrencies:
+```bash
+make correctness
+```
+
+Results are saved under `results/routing-correctness/`.
+The default corpus is the local `benchmarks/dataset_prompts.jsonl`, so this run does not depend on the Hugging Face rows API. Use `--datasets all` only when you intentionally want to fetch every remote source.
+
+### 5. Run High-Performance Load Benchmark
 Execute the high-throughput `wrk` / `wrk2` load benchmark with dataset prompts:
 ```bash
 # Default run (Concurrency = 4, Duration = 15s)
-sudo benchmarks/run_wrk_benchmark.sh
+make wrk
 
 # Custom run (e.g. Concurrency = 8, Duration = 20s)
-sudo CONCURRENCY=8 DURATION=20s benchmarks/run_wrk_benchmark.sh
+sudo CONCURRENCY=8 DURATION=20s benchmarks/run_routing_performance.sh
 ```
 
-Benchmark results are saved automatically to `results/wrk-keyword-routing/latest.md`.
+Performance results are saved automatically to `results/routing-performance/latest.md`.
 
 ## File Structure
 ```
@@ -149,12 +158,17 @@ Benchmark results are saved automatically to `results/wrk-keyword-routing/latest
 │   ├── xdp_router.bpf.c
 │   └── xdp_signals.bpf.h
 ├── benchmarks/
-│   ├── benchmark_keyword_routing.py
-│   ├── export_dataset_prompts.py
 │   ├── mock_backend.c
-│   ├── prompts.lua
-│   ├── run_all_keyword_benchmarks.sh
-│   └── run_wrk_benchmark.sh
+│   ├── run_routing_correctness.sh
+│   ├── run_routing_performance.sh
+│   ├── routing_correctness/
+│   │   ├── benchmark.py
+│   │   └── run.sh
+│   └── routing_wrk/
+│       ├── benchmark.sh
+│       ├── export_prompts.py
+│       ├── prompts.lua
+│       └── sweep.sh
 ├── config/
 │   ├── policy_bm25.yaml
 │   ├── policy_exact.yaml
@@ -164,7 +178,8 @@ Benchmark results are saved automatically to `results/wrk-keyword-routing/latest
 ├── models/
 │   └── xdp_ngram_model_fnv.json
 ├── results/
-│   └── wrk-keyword-routing/
+│   ├── routing-correctness/
+│   └── routing-performance/
 ├── scripts/
 │   └── generate_ngram_header.py
 ├── Makefile

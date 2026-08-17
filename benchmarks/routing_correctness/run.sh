@@ -2,11 +2,11 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+ROOT_DIR="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
 METHODS=("ngram")
 CONCURRENCIES=(1 4 8 16)
-REPORT_ROOT="reports/keyword-routing"
+REPORT_ROOT="results/routing-correctness"
 BENCHMARK_MODES="${BENCHMARK_MODES:-direct-netns,xdp,vllm-sr}"
 
 if [ "$EUID" -ne 0 ]; then
@@ -17,7 +17,7 @@ fi
 cd "${ROOT_DIR}"
 
 echo "================================================================="
-echo " Starting Keyword Routing Benchmarks"
+echo " Starting Routing Correctness Benchmarks"
 echo " Methods: ${METHODS[*]}"
 echo " Concurrency: ${CONCURRENCIES[*]}"
 echo " Modes: ${BENCHMARK_MODES}"
@@ -48,8 +48,8 @@ for METHOD in "${METHODS[@]}"; do
 
     echo ""
     echo "   - concurrency=${CONCURRENCY}"
-    echo "     output=${REPORT_DIR}/keyword_${METHOD}.md"
-    python3 tests/benchmark_keyword_routing.py \
+    echo "     output=${REPORT_DIR}/routing_correctness_benchmark.md"
+    python3 "${SCRIPT_DIR}/benchmark.py" \
       "$@" \
       --config "$CONFIG" \
       --concurrency "$CONCURRENCY" \
@@ -61,14 +61,14 @@ for METHOD in "${METHODS[@]}"; do
 done
 
 echo "================================================================="
-echo " All keyword benchmarks completed successfully!"
+echo " All routing correctness benchmarks completed successfully!"
 echo " Generated report files:"
 for CONCURRENCY in "${CONCURRENCIES[@]}"; do
   REPORT_DIR="${REPORT_ROOT}/concurrency_${CONCURRENCY}"
   echo "  - ${REPORT_DIR}/"
   for METHOD in "${METHODS[@]}"; do
-    if [ -f "${REPORT_DIR}/keyword_${METHOD}.md" ]; then
-      echo "      keyword_${METHOD}.md"
+    if [ -f "${REPORT_DIR}/routing_correctness_benchmark.md" ]; then
+      echo "      routing_correctness_benchmark.md"
     fi
   done
 done

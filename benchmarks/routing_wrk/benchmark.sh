@@ -2,12 +2,12 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+ROOT_DIR="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
 WRK_BIN="${WRK_BIN:-wrk2}"
-DURATION="${DURATION:-15s}"
-THREADS="${THREADS:-4}"
-CONCURRENCY="${CONCURRENCY:-4}"
+DURATION="${DURATION:-30s}"
+BASE_THREADS="${THREADS:-4}"
+DEFAULT_CONCURRENCIES=(1 2 4 8 10 16 32 64 96)
 RATE="${RATE:-10000}"
 XDP_PORT="${XDP_PORT:-18081}"
 CODING_BACKEND_PORT="${CODING_BACKEND_PORT:-18391}"
@@ -19,35 +19,41 @@ IFNAME="${IFNAME:-veth0}"
 NETNS="${NETNS:-ns1}"
 XDP_PEER_IF="${XDP_PEER_IF:-veth1}"
 XDP_URL="${XDP_URL:-http://10.10.0.1:${XDP_PORT}/v1/chat/completions}"
+# Use a marker backend directly over the same ns1/veth path as the routers.
+DIRECT_BACKEND_URL="${DIRECT_BACKEND_URL:-http://10.10.0.1:${CODING_BACKEND_PORT}/v1/chat/completions}"
 # Exercise both routers from the same client namespace across the veth pair.
 # This preserves end-to-end router differences while removing the loopback vs.
 # veth client-path confounder.
 VLLM_URL="${VLLM_URL:-http://10.10.0.1:8899/v1/chat/completions}"
-REPORT_DIR="${ROOT_DIR}/results/wrk-keyword-routing"
-TIMESTAMP="$(date +%Y%m%d_%H%M%S)"
-REPORT_FILE="${REPORT_DIR}/wrk_benchmark_${TIMESTAMP}.md"
+REPORT_DIR="${ROOT_DIR}/results/routing-performance"
 LATEST_FILE="${REPORT_DIR}/latest.md"
 
 if [ "$EUID" -ne 0 ]; then
     echo "Routing benchmark uses sudo for cleanup and firewall setup. Elevating..."
-    exec sudo env \
-        WRK_BIN="$WRK_BIN" \
-        DURATION="$DURATION" \
-        THREADS="$THREADS" \
-        CONCURRENCY="$CONCURRENCY" \
-        RATE="$RATE" \
-        XDP_PORT="$XDP_PORT" \
-        CODING_BACKEND_PORT="$CODING_BACKEND_PORT" \
-        MATH_BACKEND_PORT="$MATH_BACKEND_PORT" \
-        OTHERS_BACKEND_PORT="$OTHERS_BACKEND_PORT" \
-        VLLM_BACKEND_PORT="$VLLM_BACKEND_PORT" \
-        START_VLLM_MOCK="$START_VLLM_MOCK" \
-        IFNAME="$IFNAME" \
-        NETNS="$NETNS" \
-        XDP_PEER_IF="$XDP_PEER_IF" \
-        XDP_URL="$XDP_URL" \
-        VLLM_URL="$VLLM_URL" \
-        "$0" "$@"
+    sudo_env=(
+        WRK_BIN="$WRK_BIN"
+        DURATION="$DURATION"
+        THREADS="$BASE_THREADS"
+        RATE="$RATE"
+        XDP_PORT="$XDP_PORT"
+        CODING_BACKEND_PORT="$CODING_BACKEND_PORT"
+        MATH_BACKEND_PORT="$MATH_BACKEND_PORT"
+        OTHERS_BACKEND_PORT="$OTHERS_BACKEND_PORT"
+        VLLM_BACKEND_PORT="$VLLM_BACKEND_PORT"
+        START_VLLM_MOCK="$START_VLLM_MOCK"
+        IFNAME="$IFNAME"
+        NETNS="$NETNS"
+        XDP_PEER_IF="$XDP_PEER_IF"
+        XDP_URL="$XDP_URL"
+        DIRECT_BACKEND_URL="$DIRECT_BACKEND_URL"
+        VLLM_URL="$VLLM_URL"
+    )
+    # Only propagate CONCURRENCY when the caller supplied it. Otherwise the
+    # elevated invocation must retain the default full sweep.
+    if [ "${CONCURRENCY+x}" = "x" ]; then
+        sudo_env+=(CONCURRENCY="$CONCURRENCY")
+    fi
+    exec sudo env "${sudo_env[@]}" "$0" "$@"
 fi
 
 cd "$ROOT_DIR"
@@ -63,11 +69,6 @@ if ! command -v "$WRK_BIN" &> /dev/null; then
     fi
 fi
 
-# Ensure threads is not greater than concurrency (wrk requirement)
-if [ "$THREADS" -gt "$CONCURRENCY" ]; then
-    THREADS="$CONCURRENCY"
-fi
-
 # Kill any stale mock_backend or router processes
 pkill -9 mock_backend >/dev/null 2>&1 || true
 pkill -9 xdp_router >/dev/null 2>&1 || true
@@ -76,7 +77,7 @@ pkill -9 sk_router >/dev/null 2>&1 || true
 # Generate prompt dataset if missing or from the older no-route-metadata format.
 if [ ! -f "benchmarks/dataset_prompts.jsonl" ] || ! head -n 1 benchmarks/dataset_prompts.jsonl | grep -q '"x_expected_route"'; then
     echo "Generating dataset_prompts.jsonl..."
-    python3 benchmarks/export_dataset_prompts.py
+    python3 "${SCRIPT_DIR}/export_prompts.py"
 fi
 
 # Build mock backend and routers if missing
@@ -125,11 +126,7 @@ if [ "$START_VLLM_MOCK" = "1" ]; then
     VLLM_MOCK_PID=$!
 fi
 
-# Start routing proxy in background. Set SK_ROUTER_MODE=sockmap to exercise the
-# experimental kernel SOCKMAP path instead.
-echo "Starting routing proxy..."
-./sk_router > /tmp/sk_router_wrk.log 2>&1 &
-ROUTER_PID=$!
+ROUTER_PID=""
 
 wait_for_port() {
     local port="$1"
@@ -156,11 +153,12 @@ wait_for_port() {
 cleanup() {
     echo ""
     echo "Cleaning up processes and network rules..."
-    kill -9 "$ROUTER_PID" >/dev/null 2>&1 || true
-    kill -9 "$CODING_MOCK_PID" >/dev/null 2>&1 || true
-    kill -9 "$MATH_MOCK_PID" >/dev/null 2>&1 || true
-    kill -9 "$OTHERS_MOCK_PID" >/dev/null 2>&1 || true
-    kill -9 "$VLLM_MOCK_PID" >/dev/null 2>&1 || true
+    for pid in "$ROUTER_PID" "$CODING_MOCK_PID" "$MATH_MOCK_PID" "$OTHERS_MOCK_PID" "$VLLM_MOCK_PID"; do
+        if [ -n "$pid" ]; then
+            kill -9 "$pid" >/dev/null 2>&1 || true
+            wait "$pid" 2>/dev/null || true
+        fi
+    done
     iptables -D INPUT -p tcp --dport "${XDP_PORT}" -j ACCEPT >/dev/null 2>&1 || true
     iptables -D INPUT -p tcp --dport "${CODING_BACKEND_PORT}" -j ACCEPT >/dev/null 2>&1 || true
     iptables -D INPUT -p tcp --dport "${MATH_BACKEND_PORT}" -j ACCEPT >/dev/null 2>&1 || true
@@ -172,8 +170,35 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# Wait for socket bind.
-wait_for_port "$XDP_PORT" "routing frontend"
+detach_xdp() {
+    # A prior benchmark may have left an XDP program attached after its
+    # userspace router exited. The direct control must not traverse it.
+    if ! ip link set dev "$IFNAME" xdp off; then
+        echo "Error: could not detach XDP from ${IFNAME}; refusing to run a non-control baseline."
+        return 1
+    fi
+    if ip -details link show dev "$IFNAME" | grep -q 'prog/xdp'; then
+        echo "Error: XDP remains attached to ${IFNAME}; refusing to run a non-control baseline."
+        return 1
+    fi
+}
+
+start_routing_proxy() {
+    # Start routing proxy in background. Set SK_ROUTER_MODE=sockmap to exercise
+    # the experimental kernel SOCKMAP path instead.
+    echo "Starting routing proxy..."
+    ./sk_router > /tmp/sk_router_wrk.log 2>&1 &
+    ROUTER_PID=$!
+    wait_for_port "$XDP_PORT" "routing frontend"
+}
+
+stop_routing_proxy() {
+    if [ -n "$ROUTER_PID" ]; then
+        kill -9 "$ROUTER_PID" >/dev/null 2>&1 || true
+        wait "$ROUTER_PID" 2>/dev/null || true
+        ROUTER_PID=""
+    fi
+}
 
 run_benchmark() {
     echo "# High-Performance ${WRK_BIN} Benchmark Results"
@@ -192,31 +217,73 @@ run_benchmark() {
     echo ""
     echo "- Routing backend ports: coding=\`${CODING_BACKEND_PORT}\`, math=\`${MATH_BACKEND_PORT}\`, others=\`${OTHERS_BACKEND_PORT}\`"
     echo ""
-    echo "## [1/2] XDP Route"
+    echo "## [1/3] Direct Backend"
     echo "\`\`\`"
-    VERIFY_BACKEND_MARKERS=1 ip netns exec "$NETNS" "$WRK_BIN" -t"$THREADS" -c"$CONCURRENCY" -d"$DURATION" $RATE_ARG -s benchmarks/prompts.lua "$XDP_URL"
+    # No route decision occurs for the control, so prompts.lua must not check
+    # response markers. XDP was detached before this benchmark began.
+    VERIFY_BACKEND_MARKERS=0 ip netns exec "$NETNS" "$WRK_BIN" -t"$THREADS" -c"$CONCURRENCY" -d"$DURATION" $RATE_ARG -s "${SCRIPT_DIR}/prompts.lua" "$DIRECT_BACKEND_URL"
     echo "\`\`\`"
     echo ""
-    echo "## [2/2] vLLM-SR Route"
+
+    start_routing_proxy
+
+    echo "## [2/3] XSR/XDP Route"
+    echo "\`\`\`"
+    VERIFY_BACKEND_MARKERS=1 ip netns exec "$NETNS" "$WRK_BIN" -t"$THREADS" -c"$CONCURRENCY" -d"$DURATION" $RATE_ARG -s "${SCRIPT_DIR}/prompts.lua" "$XDP_URL"
+    echo "\`\`\`"
+    echo ""
+    echo "## [3/3] vLLM-SR Route"
     echo "\`\`\`"
     if socket_check=$(ip netns exec "$NETNS" curl -s -m 1 "$VLLM_URL" 2>&1); [[ ! "$socket_check" =~ "Failed to connect" ]]; then
-        VERIFY_BACKEND_MARKERS=1 ip netns exec "$NETNS" "$WRK_BIN" -t"$THREADS" -c"$CONCURRENCY" -d"$DURATION" $RATE_ARG -s benchmarks/prompts.lua "$VLLM_URL"
+        VERIFY_BACKEND_MARKERS=1 ip netns exec "$NETNS" "$WRK_BIN" -t"$THREADS" -c"$CONCURRENCY" -d"$DURATION" $RATE_ARG -s "${SCRIPT_DIR}/prompts.lua" "$VLLM_URL"
     else
         echo "vLLM-SR endpoint ($VLLM_URL) unreachable, skipping vLLM-SR run."
     fi
     echo "\`\`\`"
 }
 
-run_benchmark | tee "$REPORT_FILE"
-cp "$REPORT_FILE" "$LATEST_FILE"
+if [ "${CONCURRENCY+x}" = "x" ]; then
+    CONCURRENCIES=("$CONCURRENCY")
+else
+    CONCURRENCIES=("${DEFAULT_CONCURRENCIES[@]}")
+fi
+
+for CONCURRENCY in "${CONCURRENCIES[@]}"; do
+    # Restore the configured thread count for every sweep entry: a low initial
+    # concurrency must not clamp the thread count of subsequent runs.
+    THREADS="$BASE_THREADS"
+    if [ "$THREADS" -gt "$CONCURRENCY" ]; then
+        THREADS="$CONCURRENCY"
+    fi
+
+    TIMESTAMP="$(date +%Y%m%d_%H%M%S)"
+    REPORT_FILE="${REPORT_DIR}/routing_performance_c${CONCURRENCY}_${TIMESTAMP}.md"
+
+    # The preceding XSR run leaves a classifier and router behind. Remove both
+    # before each direct control measurement.
+    stop_routing_proxy
+    detach_xdp
+    # Capture tee's PID before run_benchmark starts sk_router in the
+    # background, which would otherwise overwrite $!.  Keep the write end in
+    # an explicit descriptor so it can be closed after the router exits.
+    exec {report_fd}> >(tee "$REPORT_FILE")
+    tee_pid=$!
+    run_benchmark >&"$report_fd"
+    # sk_router inherits the report pipe; terminate it before closing the
+    # descriptor and waiting for tee, otherwise tee never observes EOF.
+    stop_routing_proxy
+    exec {report_fd}>&-
+    wait "$tee_pid"
+    cp "$REPORT_FILE" "$LATEST_FILE"
+
+    echo ""
+    echo "================================================================="
+    echo " Benchmark complete! Results saved to:"
+    echo "   - ${REPORT_FILE}"
+    echo "   - ${LATEST_FILE}"
+    echo "================================================================="
+done
 
 if [ -n "$SUDO_USER" ]; then
     chown -R "$SUDO_USER:" "$REPORT_DIR" 2>/dev/null || true
 fi
-
-echo ""
-echo "================================================================="
-echo " Benchmark complete! Results saved to:"
-echo "   - ${REPORT_FILE}"
-echo "   - ${LATEST_FILE}"
-echo "================================================================="
