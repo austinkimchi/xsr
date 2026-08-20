@@ -234,6 +234,21 @@ static int route_to_backend_port(__u32 route) {
   return BACKEND_OTHERS_PORT;
 }
 
+static int populate_xdp_tail_calls(struct bpf_object *obj) {
+  int map_fd = bpf_object__find_map_fd_by_name(obj, "xdp_tail_calls");
+  struct bpf_program *decoder =
+      bpf_object__find_program_by_name(obj, "xdp_decode_classify");
+  __u32 key = 0;
+  int prog_fd;
+
+  if (map_fd < 0 || !decoder)
+    return -1;
+  prog_fd = bpf_program__fd(decoder);
+  if (prog_fd < 0)
+    return -1;
+  return bpf_map_update_elem(map_fd, &key, &prog_fd, BPF_ANY);
+}
+
 static int start_xdp_classifier(struct xdp_classifier_runtime *runtime) {
   const char *ifname = getenv("XDP_IFNAME");
   struct bpf_program *prog = NULL;
@@ -261,6 +276,11 @@ static int start_xdp_classifier(struct xdp_classifier_runtime *runtime) {
 
   if (bpf_object__load(runtime->obj) != 0) {
     fprintf(stderr, "failed to load %s\n", XDP_BPF_OBJECT_FILE);
+    return -1;
+  }
+
+  if (populate_xdp_tail_calls(runtime->obj) != 0) {
+    perror("populate_xdp_tail_calls");
     return -1;
   }
 
