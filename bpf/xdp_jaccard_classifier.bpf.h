@@ -63,7 +63,7 @@ static __always_inline unsigned char xdp_jaccard_lower(unsigned char c) { return
 static __always_inline int xdp_jaccard_word_char(unsigned char c) { return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '-'; }
 static __always_inline __u32 xdp_jaccard_pack3(unsigned char a, unsigned char b, unsigned char c) { return ((__u32)a << 16) | ((__u32)b << 8) | c; }
 
-static __always_inline void xdp_jaccard_reset_word(struct xdp_jaccard_state *s) {
+static __noinline void xdp_jaccard_reset_word(struct xdp_jaccard_state *s) {
   /* A fresh token scopes temporary gram counts to this one ASCII word. */
   s->token = ((__u64)bpf_get_prandom_u32() << 32) | bpf_get_prandom_u32();
   s->query_total = 0;
@@ -75,7 +75,7 @@ static __always_inline void xdp_jaccard_reset_word(struct xdp_jaccard_state *s) 
 }
 
 /* Preserve occurrence counts: ngrammatic's grams map stores each gram's multiplicity. */
-static __always_inline void xdp_jaccard_add_gram(struct xdp_jaccard_state *s, __u32 gram) {
+static __noinline void xdp_jaccard_add_gram(struct xdp_jaccard_state *s, __u32 gram) {
   struct xdp_jaccard_query_key key = {.token = s->token, .gram = gram};
   struct xdp_jaccard_gram_key mask_key = {.gram = gram};
   struct xdp_jaccard_gram_vector *vector;
@@ -133,7 +133,7 @@ static long xdp_jaccard_match_keyword_callback(__u32 keyword_id, void *data) {
   return 0;
 }
 
-static __always_inline void xdp_jaccard_match_current(struct xdp_jaccard_state *s) {
+static __noinline void xdp_jaccard_match_current(struct xdp_jaccard_state *s) {
   __u32 config_key = 0;
   struct xdp_jaccard_policy_config *config = bpf_map_lookup_elem(&xdp_jaccard_config, &config_key);
   struct xdp_jaccard_match_ctx ctx = {};
@@ -146,7 +146,7 @@ static __always_inline void xdp_jaccard_match_current(struct xdp_jaccard_state *
   bpf_loop(XDP_JACCARD_MAX_KEYWORDS, xdp_jaccard_match_keyword_callback, &ctx, 0);
 }
 
-static __always_inline void xdp_jaccard_finish_word(struct xdp_jaccard_state *s) {
+static __noinline void xdp_jaccard_finish_word(struct xdp_jaccard_state *s) {
   if (!s->word_len)
     return;
   if (s->word_len == 1)
@@ -158,13 +158,13 @@ static __always_inline void xdp_jaccard_finish_word(struct xdp_jaccard_state *s)
   xdp_jaccard_match_current(s);
 }
 
-static __always_inline void xdp_jaccard_init(struct xdp_jaccard_state *s) {
+static __noinline void xdp_jaccard_init(struct xdp_jaccard_state *s) {
   s->matched_keywords = 0;
   s->rule_match_counts = 0;
   xdp_jaccard_reset_word(s);
 }
 
-static __always_inline void xdp_jaccard_score_char(struct xdp_jaccard_state *s, unsigned char c) {
+static __noinline void xdp_jaccard_score_char(struct xdp_jaccard_state *s, unsigned char c) {
   if (!xdp_jaccard_word_char(c)) {
     xdp_jaccard_finish_word(s);
     xdp_jaccard_reset_word(s);
@@ -188,7 +188,7 @@ static __always_inline void xdp_jaccard_score_char(struct xdp_jaccard_state *s, 
   }
 }
 
-static __always_inline __u32 xdp_jaccard_route(struct xdp_jaccard_state *s) {
+static __noinline __u32 xdp_jaccard_route(struct xdp_jaccard_state *s) {
   __u32 config_key = 0, best_route = XDP_ROUTE_GENERAL, best_priority = 0;
   struct xdp_jaccard_policy_config *config = bpf_map_lookup_elem(&xdp_jaccard_config, &config_key);
   if (!config)
@@ -211,6 +211,6 @@ static __always_inline __u32 xdp_jaccard_route(struct xdp_jaccard_state *s) {
   }
   return best_route;
 }
-static __always_inline __u8 xdp_jaccard_rule_matches(struct xdp_jaccard_state *s, __u32 route) { return xdp_jaccard_route(s) == route; }
+static __noinline __u8 xdp_jaccard_rule_matches(struct xdp_jaccard_state *s, __u32 route) { return xdp_jaccard_route(s) == route; }
 #endif
 #endif

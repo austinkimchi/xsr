@@ -54,6 +54,14 @@ struct {
   __type(value, struct xdp_flow_decision);
 } xdp_flow_decisions SEC(".maps");
 
+#define XDP_TAIL_DECODE 0
+struct {
+  __uint(type, BPF_MAP_TYPE_PROG_ARRAY);
+  __uint(max_entries, 1);
+  __type(key, __u32);
+  __type(value, __u32);
+} xdp_tail_calls SEC(".maps");
+
 static __always_inline void increment_counter(__u32 key) {
   __u64 *value = bpf_map_lookup_elem(&counters, &key);
 
@@ -80,8 +88,9 @@ emit_route_event(__u32 route, __u32 model_id, __u32 content_length,
       .model_id = model_id,
       .content_length = content_length,
       .src_port = src_port,
-      .matched_coding = xdp_classifier_matched_coding(classifier),
-      .matched_math = xdp_classifier_matched_math(classifier),
+      /* Route is already final; avoid two full rule scans solely for debug. */
+      .matched_coding = route == XDP_ROUTE_CODING,
+      .matched_math = route == XDP_ROUTE_MATH,
       .elapsed_ns = elapsed_ns,
   };
 
@@ -136,6 +145,111 @@ static __always_inline int find_http_body_offset(struct xdp_md *xdp,
     return 0;
   *body_offset = scan.body_offset;
   return 1;
+}
+
+static __noinline void
+complete_route(struct xdp_flow_key *key,
+               struct xdp_classifier_state *classifier, __u32 content_length,
+               __u64 elapsed_ns) {
+  xdp_classifier_finish(classifier);
+  __u32 route = xdp_classifier_route(classifier);
+  __u64 signals = 0;
+
+  if (route == XDP_ROUTE_CODING)
+    signals |= XDP_SIGNAL_DOMAIN_CODING;
+  else if (route == XDP_ROUTE_GENERAL)
+    signals |= XDP_SIGNAL_DOMAIN_OTHERS;
+  else if (route == XDP_ROUTE_MATH)
+    signals |= XDP_SIGNAL_DOMAIN_MATH;
+
+  __u32 model_id = xdp_decision_eval(signals);
+  struct xdp_flow_decision decision = {
+      .route = route,
+      .model_id = model_id,
+      .content_length = content_length,
+  };
+
+  bpf_map_update_elem(&xdp_flow_decisions, key, &decision, BPF_ANY);
+#ifdef XDP_DEBUG
+  emit_route_event(route, model_id, content_length, key->src_port, classifier,
+                   elapsed_ns);
+#endif
+  increment_counter(COUNT_CONTENT_FOUND);
+  increment_route_counter(route);
+  bpf_map_delete_elem(&http_flows, key);
+}
+
+/* Escaped JSON strings take a separate verifier budget from the common path. */
+SEC("xdp")
+int xdp_decode_classify(struct xdp_md *ctx) {
+#ifdef XDP_PROFILE
+  __u64 start_ns = bpf_ktime_get_ns();
+#endif
+  void *data = (void *)(long)ctx->data;
+  void *data_end = (void *)(long)ctx->data_end;
+  struct ethhdr *eth = data;
+  struct xdp_flow_key key = {};
+  __u32 content_length = 0;
+
+  if ((void *)(eth + 1) > data_end || eth->h_proto != bpf_htons(ETH_P_IP))
+    return XDP_PASS;
+  struct iphdr *ip = (void *)(eth + 1);
+  if ((void *)(ip + 1) > data_end || ip->version != 4 ||
+      ip->protocol != IPPROTO_TCP)
+    return XDP_PASS;
+  __u32 ip_header_length = ip->ihl * 4;
+  if (ip_header_length < sizeof(*ip))
+    return XDP_PASS;
+  struct tcphdr *tcp = (void *)ip + ip_header_length;
+  if ((void *)(tcp + 1) > data_end)
+    return XDP_PASS;
+  __u32 tcp_header_length = tcp->doff * 4;
+  if (tcp_header_length < sizeof(*tcp) ||
+      (void *)tcp + tcp_header_length > data_end ||
+      bpf_ntohs(tcp->dest) != 18081)
+    return XDP_PASS;
+  unsigned char *payload = (void *)tcp + tcp_header_length;
+  if (payload >= (unsigned char *)data_end)
+    return XDP_PASS;
+  bool close_flow = tcp->fin || tcp->rst;
+
+  build_flow_key(ip, tcp, &key);
+  struct http_flow_state *flow = bpf_map_lookup_elem(&http_flows, &key);
+  if (!flow)
+    return XDP_PASS;
+
+  __u32 tcp_seq = bpf_ntohl(tcp->seq);
+  __u32 payload_length = (unsigned char *)data_end - payload;
+  if (tcp_seq < flow->next_seq)
+    return XDP_PASS;
+  if (tcp_seq > flow->next_seq) {
+    flow->next_seq = tcp_seq + payload_length;
+    increment_counter(COUNT_CONTENT_PARTIAL);
+    return XDP_PASS;
+  }
+
+  int result = decode_content_stream(ctx, data, payload, payload_length,
+                                     &flow->content, &flow->classifier,
+                                     &content_length);
+  if (result != CONTENT_OVERSIZE)
+    flow->next_seq = tcp_seq + payload_length;
+
+  if (result == CONTENT_COMPLETE) {
+    __u64 elapsed_ns = 0;
+#ifdef XDP_PROFILE
+    elapsed_ns = bpf_ktime_get_ns() - start_ns;
+#endif
+    complete_route(&key, &flow->classifier, content_length, elapsed_ns);
+  } else if (result == CONTENT_PARTIAL) {
+    increment_counter(COUNT_CONTENT_PARTIAL);
+  } else {
+    increment_counter(COUNT_FRAGMENT);
+    bpf_map_delete_elem(&http_flows, &key);
+  }
+
+  if (close_flow)
+    bpf_map_delete_elem(&http_flows, &key);
+  return XDP_PASS;
 }
 
 SEC("xdp")
@@ -209,6 +323,7 @@ int xdp_router(struct xdp_md *ctx) {
     increment_counter(COUNT_NO_PAYLOAD);
     return XDP_PASS;
   }
+  bool close_flow = tcp->fin || tcp->rst;
 
   // -- HTTP --
   __u32 payload_length = data_end - payload;
@@ -229,31 +344,37 @@ int xdp_router(struct xdp_md *ctx) {
     return XDP_PASS;
 
   bool is_post = p[0] == 'P' && p[1] == 'O' && p[2] == 'S' && p[3] == 'T';
-  struct content_flow_state stack_content = {};
-  struct xdp_classifier_state stack_classifier = {};
 
   if (is_post) {
     __u32 body_offset = 0;
     bool found_body = find_http_body_offset(ctx, data, p, &body_offset);
+    struct http_flow_state new_flow = {
+        .next_seq = tcp_seq,
+        .body_seq = found_body ? tcp_seq + body_offset : 0,
+    };
 
-    xdp_classifier_init(&stack_classifier);
+    xdp_classifier_init(&new_flow.classifier);
+    bpf_map_update_elem(&http_flows, &key, &new_flow, BPF_ANY);
+    flow = bpf_map_lookup_elem(&http_flows, &key);
+    if (!flow)
+      return XDP_PASS;
+
     if (found_body && body_offset < payload_length) {
       result = scan_content_stream(ctx, data, p + body_offset,
-                                   payload_length - body_offset, &stack_content,
-                                   &stack_classifier, &content_length);
+                                   payload_length - body_offset, &flow->content,
+                                   &flow->classifier, &content_length);
+      if (result == CONTENT_NEEDS_DECODE)
+        flow->content.decode_offset += body_offset;
     } else {
       result = CONTENT_PARTIAL;
     }
 
-    if (result == CONTENT_PARTIAL) {
-      struct http_flow_state new_flow = {
-          .next_seq = tcp_seq + payload_length,
-          .body_seq = found_body ? tcp_seq + body_offset : 0,
-          .content = stack_content,
-          .classifier = stack_classifier,
-      };
-
-      bpf_map_update_elem(&http_flows, &key, &new_flow, BPF_ANY);
+    if (result == CONTENT_NEEDS_DECODE) {
+      bpf_tail_call(ctx, &xdp_tail_calls, XDP_TAIL_DECODE);
+      flow->next_seq = tcp_seq + payload_length;
+      result = CONTENT_PARTIAL;
+    } else if (result == CONTENT_PARTIAL) {
+      flow->next_seq = tcp_seq + payload_length;
     }
   } else {
     flow = bpf_map_lookup_elem(&http_flows, &key);
@@ -271,48 +392,29 @@ int xdp_router(struct xdp_md *ctx) {
       return XDP_PASS;
     }
 
-    result = scan_content_stream(ctx, data, p, payload_length, &flow->content,
-                                 &flow->classifier, &content_length);
+    if (flow->content.needs_json_decode) {
+      bpf_tail_call(ctx, &xdp_tail_calls, XDP_TAIL_DECODE);
+      flow->next_seq = tcp_seq + payload_length;
+      result = CONTENT_PARTIAL;
+    } else {
+      result = scan_content_stream(ctx, data, p, payload_length, &flow->content,
+                                   &flow->classifier, &content_length);
+      if (result == CONTENT_NEEDS_DECODE) {
+        bpf_tail_call(ctx, &xdp_tail_calls, XDP_TAIL_DECODE);
+        flow->next_seq = tcp_seq + payload_length;
+        result = CONTENT_PARTIAL;
+      }
+    }
     if (result != CONTENT_OVERSIZE)
       flow->next_seq = tcp_seq + payload_length;
   }
 
   if (result == CONTENT_COMPLETE) {
-    struct xdp_classifier_state *classifier =
-        is_post ? &stack_classifier : &flow->classifier;
-    xdp_classifier_finish(classifier);
-    __u32 route = xdp_classifier_route(classifier);
-    __u64 signals = 0;
-
-    if (route == XDP_ROUTE_CODING)
-      signals |= XDP_SIGNAL_DOMAIN_CODING;
-    else if (route == XDP_ROUTE_GENERAL)
-      signals |= XDP_SIGNAL_DOMAIN_OTHERS;
-    else if (route == XDP_ROUTE_MATH)
-      signals |= XDP_SIGNAL_DOMAIN_MATH;
-
-    __u32 model_id = xdp_decision_eval(signals);
-    struct xdp_flow_decision decision = {
-        .route = route,
-        .model_id = model_id,
-        .content_length = content_length,
-    };
-
-    bpf_map_update_elem(&xdp_flow_decisions, &key, &decision, BPF_ANY);
-
-#ifdef XDP_DEBUG
     __u64 elapsed_ns = 0;
 #ifdef XDP_PROFILE
     elapsed_ns = bpf_ktime_get_ns() - start_ns;
 #endif
-    emit_route_event(route, model_id, content_length, key.src_port, classifier,
-                     elapsed_ns);
-#endif
-
-    increment_counter(COUNT_CONTENT_FOUND);
-    increment_route_counter(route);
-    if (!is_post && flow)
-      bpf_map_delete_elem(&http_flows, &key);
+    complete_route(&key, &flow->classifier, content_length, elapsed_ns);
   } else if (result == CONTENT_PARTIAL) {
     increment_counter(COUNT_CONTENT_PARTIAL);
   } else if (result == CONTENT_OVERSIZE) {
@@ -320,7 +422,7 @@ int xdp_router(struct xdp_md *ctx) {
     bpf_map_delete_elem(&http_flows, &key);
   }
 
-  if (tcp->fin || tcp->rst)
+  if (close_flow)
     bpf_map_delete_elem(&http_flows, &key);
 
   return XDP_PASS;

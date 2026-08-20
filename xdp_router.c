@@ -159,6 +159,21 @@ static int populate_decision_rules(struct bpf_object *obj) {
   return 0;
 }
 
+static int populate_tail_calls(struct bpf_object *obj) {
+  int map_fd = bpf_object__find_map_fd_by_name(obj, "xdp_tail_calls");
+  struct bpf_program *decoder =
+      bpf_object__find_program_by_name(obj, "xdp_decode_classify");
+  __u32 key = 0;
+  int prog_fd;
+
+  if (map_fd < 0 || !decoder)
+    return -1;
+  prog_fd = bpf_program__fd(decoder);
+  if (prog_fd < 0)
+    return -1;
+  return bpf_map_update_elem(map_fd, &key, &prog_fd, BPF_ANY);
+}
+
 int main(void) {
   struct bpf_object *obj;
   struct bpf_program *prog;
@@ -194,6 +209,10 @@ int main(void) {
   }
   if (populate_decision_rules(obj) != 0) {
     perror("populate_decision_rules");
+    return 1;
+  }
+  if (populate_tail_calls(obj) != 0) {
+    perror("populate_tail_calls");
     return 1;
   }
 
