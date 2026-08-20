@@ -19,6 +19,10 @@ XDP_PEER_IF ?= veth1
 XDP_HOST_ADDR ?= 10.10.0.1/24
 XDP_PEER_ADDR ?= 10.10.0.2/24
 KEYWORD_POLICY ?= config/policy_ngram.yaml
+VSR_BACKEND_PORTS ?= 18391 18392 18393
+# Optional arguments forwarded by `make correctness`, for example:
+# sudo make correctness args="--dataset dataset-name"
+args ?=
 
 .DEFAULT_GOAL := all
 
@@ -32,11 +36,27 @@ prod: USER_CFLAGS += -O3
 prod: BPF_CFLAGS += -O2
 prod: clean all
 
+define require_sudo
+	@if [ "$$(id -u)" -ne 0 ]; then \
+		echo "Error: run this benchmark as: sudo make $@" >&2; \
+		exit 1; \
+	fi
+endef
+
 correctness:
-	sudo ./benchmarks/run_routing_correctness.sh
+	$(require_sudo)
+	$(MAKE) iproutes
+	./benchmarks/run_routing_correctness.sh $(args)
+
+performance:
+	$(require_sudo)
+	$(MAKE) iproutes
+	./benchmarks/run_routing_performance.sh
 
 wrk:
-	sudo ./benchmarks/run_routing_performance.sh
+	$(require_sudo)
+	$(MAKE) iproutes
+	./benchmarks/run_routing_performance.sh
 
 xdp_router: xdp_router.c xdp_router.h bpf/xdp_jaccard_classifier.bpf.h bpf/xdp_jaccard_policy.generated.h
 	$(CC) $(USER_CFLAGS) $< -o $@ $(LIBBPF_FLAGS)
@@ -92,4 +112,13 @@ setup:
 	@ip netns exec $(XDP_NETNS) ip link set lo up
 	@echo "setup complete: $(XDP_HOST_IF)=$(XDP_HOST_ADDR), $(XDP_NETNS)/$(XDP_PEER_IF)=$(XDP_PEER_ADDR)"
 
-.PHONY: all dev prod correctness wrk clean clean-setup setup
+# Permit vLLM-SR's Docker bridge to reach the three marker backends used by
+# the routing benchmark.  INPUT is commonly DROP on development hosts.
+iproutes:
+	@for port in $(VSR_BACKEND_PORTS); do \
+		iptables -C INPUT -p tcp --dport $$port -j ACCEPT 2>/dev/null || \
+		iptables -I INPUT 1 -p tcp --dport $$port -j ACCEPT; \
+	done
+	@echo "benchmark backend ports allowed: $(VSR_BACKEND_PORTS)"
+
+.PHONY: all dev prod correctness performance wrk clean clean-setup setup iproutes
