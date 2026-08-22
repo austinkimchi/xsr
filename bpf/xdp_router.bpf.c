@@ -360,7 +360,12 @@ int xdp_router(struct xdp_md *ctx) {
       return XDP_PASS;
 
     if (found_body && body_offset < payload_length) {
-      result = scan_content_stream(ctx, data, p + body_offset,
+      unsigned char *body = p + (__u64)body_offset;
+
+      if (body >= (unsigned char *)data_end)
+        return XDP_PASS;
+
+      result = scan_content_stream(ctx, data, body,
                                    payload_length - body_offset, &flow->content,
                                    &flow->classifier, &content_length);
       if (result == CONTENT_NEEDS_DECODE)
