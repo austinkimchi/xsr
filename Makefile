@@ -10,7 +10,8 @@ BPF_CFLAGS := -O2 -g -target bpf \
 	-I. -Ibpf \
 	-I/usr/include/$(ARCH)-linux-gnu
 
-USER_CFLAGS := -Wall -O2
+OPT_CFLAGS := -O2
+USER_CFLAGS := -Wall $(OPT_CFLAGS)
 DEV_DEFS := -DXDP_DEBUG=1 -DXDP_PROFILE=1
 LIBBPF_FLAGS := $(shell $(PKG_CONFIG) --cflags --libs libbpf)
 XDP_NETNS ?= ns1
@@ -26,14 +27,36 @@ args ?=
 
 .DEFAULT_GOAL := all
 
+help:
+	@echo "XDP router commands:"
+	@echo "  make                     Build all router, BPF, and benchmark binaries"
+	@echo "  make all                 Build all router, BPF, and benchmark binaries"
+	@echo "  make dev                 Clean and build with debug/profile instrumentation"
+	@echo "  make prod                Clean and build optimized binaries"
+	@echo "  make check               Check required build and network dependencies"
+	@echo "  make check-performance   Check dependencies plus wrk/wrk2"
+	@echo "  sudo make setup          Create or repair ns1 and the veth0/veth1 pair"
+	@echo "  sudo make iproutes       Allow benchmark backend ports through INPUT"
+	@echo "  sudo make correctness [args=\"...\"]"
+	@echo "                           Set up and run routing correctness checks"
+	@echo "  sudo make performance [args=\"CONCURRENCY=1 DURATION=30s ...\"]"
+	@echo "                           Set up and run direct, XSR, and vLLM-SR benchmarks"
+	@echo "  sudo make wrk [args=\"...\"]"
+	@echo "                           Alias for performance"
+	@echo "  make clean               Remove built binaries and generated policy headers"
+	@echo "  sudo make clean-setup    Remove ns1 and veth0"
+	@echo ""
+	@echo "Performance options: VLLM_IP, VLLM_HOST, VLLM_PORT, CONCURRENCY,"
+	@echo "                     DURATION, WRK_BIN, and RATE."
+
 all: xdp_router sk_router xdp_router.bpf.o sk_router.bpf.o benchmarks/mock_backend
 
 dev: USER_CFLAGS += $(DEV_DEFS)
 dev: BPF_CFLAGS += $(DEV_DEFS)
 dev: clean all
 
-prod: USER_CFLAGS += -O3
-prod: BPF_CFLAGS += -O2
+prod: OPT_CFLAGS := -O3
+prod: USER_CFLAGS := -Wall $(OPT_CFLAGS)
 prod: clean all
 
 define require_sudo
@@ -45,18 +68,32 @@ endef
 
 correctness:
 	$(require_sudo)
+	$(MAKE) check
+	$(MAKE) setup
 	$(MAKE) iproutes
 	./benchmarks/run_routing_correctness.sh $(args)
 
 performance:
 	$(require_sudo)
+	$(MAKE) check-performance
+	$(MAKE) setup
 	$(MAKE) iproutes
-	./benchmarks/run_routing_performance.sh
+	./benchmarks/run_routing_performance.sh $(args)
 
-wrk:
-	$(require_sudo)
-	$(MAKE) iproutes
-	./benchmarks/run_routing_performance.sh
+wrk: performance
+
+check:
+	@command -v "$(CC)" >/dev/null || { echo "Error: compiler '$(CC)' is required." >&2; exit 1; }
+	@command -v "$(BPF_CLANG)" >/dev/null || { echo "Error: clang is required for BPF builds." >&2; exit 1; }
+	@command -v "$(PKG_CONFIG)" >/dev/null || { echo "Error: pkg-config is required." >&2; exit 1; }
+	@command -v "$(PYTHON)" >/dev/null || { echo "Error: python3 is required." >&2; exit 1; }
+	@$(PYTHON) -c 'import yaml' >/dev/null 2>&1 || { echo "Error: Python yaml module is required (install python3-yaml)." >&2; exit 1; }
+	@$(PKG_CONFIG) --exists libbpf || { echo "Error: libbpf development files are required (pkg-config libbpf)." >&2; exit 1; }
+	@command -v ip >/dev/null || { echo "Error: iproute2 (ip) is required." >&2; exit 1; }
+	@command -v iptables >/dev/null || { echo "Error: iptables is required." >&2; exit 1; }
+
+check-performance: check
+	@command -v wrk2 >/dev/null || command -v wrk >/dev/null || { echo "Error: wrk or wrk2 is required for performance benchmarks." >&2; exit 1; }
 
 xdp_router: xdp_router.c xdp_router.h bpf/xdp_jaccard_classifier.bpf.h bpf/xdp_jaccard_policy.generated.h
 	$(CC) $(USER_CFLAGS) $< -o $@ $(LIBBPF_FLAGS)
@@ -70,10 +107,10 @@ benchmarks/mock_backend: benchmarks/mock_backend.c
 bpf/xdp_jaccard_policy.generated.h: $(KEYWORD_POLICY) scripts/generate_jaccard_policy_header.py scripts/generate_keyword_header.py
 	$(PYTHON) scripts/generate_jaccard_policy_header.py $(KEYWORD_POLICY) $@
 
-xdp_router.bpf.o: bpf/xdp_router.bpf.c xdp_router.h bpf/xdp_http_parser.bpf.h bpf/xdp_classifier.bpf.h bpf/xdp_jaccard_classifier.bpf.h
+xdp_router.bpf.o: bpf/xdp_router.bpf.c xdp_router.h bpf/xdp_http_parser.bpf.h bpf/xdp_classifier.bpf.h bpf/xdp_jaccard_classifier.bpf.h bpf/xdp_jaccard_policy.generated.h
 	$(BPF_CLANG) $(BPF_CFLAGS) -c $< -o $@
 
-sk_router.bpf.o: bpf/sk_router.bpf.c xdp_router.h bpf/xdp_decision.bpf.h bpf/xdp_signals.bpf.h bpf/xdp_classifier.bpf.h bpf/xdp_jaccard_classifier.bpf.h
+sk_router.bpf.o: bpf/sk_router.bpf.c xdp_router.h bpf/xdp_decision.bpf.h bpf/xdp_signals.bpf.h bpf/xdp_classifier.bpf.h bpf/xdp_jaccard_classifier.bpf.h bpf/xdp_jaccard_policy.generated.h
 	$(BPF_CLANG) $(BPF_CFLAGS) -c $< -o $@
 
 clean:
@@ -121,4 +158,4 @@ iproutes:
 	done
 	@echo "benchmark backend ports allowed: $(VSR_BACKEND_PORTS)"
 
-.PHONY: all dev prod correctness performance wrk clean clean-setup setup iproutes
+.PHONY: help all dev prod correctness performance wrk check check-performance clean clean-setup setup iproutes
