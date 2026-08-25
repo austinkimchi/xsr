@@ -12,6 +12,8 @@ from pathlib import Path
 ROUTES = {
     "coding": "XDP_KEYWORD_ROUTE_CODING",
     "math": "XDP_KEYWORD_ROUTE_MATH",
+    "qa": "XDP_KEYWORD_ROUTE_QA",
+    "writing": "XDP_KEYWORD_ROUTE_WRITING",
     "others": "XDP_KEYWORD_ROUTE_GENERAL",
 }
 
@@ -131,7 +133,7 @@ def decision_keyword_routes(policy: dict[str, object]) -> tuple[dict[str, str], 
         if not isinstance(decision, dict):
             continue
         decision_name = str(decision.get("name", ""))
-        if decision_name not in {"coding", "math"}:
+        if decision_name not in {"coding", "math", "qa", "writing"}:
             continue
         priority = int(decision.get("priority", 0))
         rules = decision.get("rules")
@@ -164,7 +166,11 @@ def signal_route_name(signal: dict[str, object], decision_routes: dict[str, str]
         return "coding"
     if name.startswith("math_"):
         return "math"
-    raise ValueError(f"keyword signal {name!r} must define route: coding|math")
+    if name.startswith("qa_"):
+        return "qa"
+    if name.startswith("writing_"):
+        return "writing"
+    raise ValueError(f"keyword signal {name!r} must define route: coding|math|qa|writing")
 
 
 def validate_policy(policy: dict[str, object]) -> tuple[bool, list[dict[str, object]]]:
@@ -180,8 +186,8 @@ def validate_policy(policy: dict[str, object]) -> tuple[bool, list[dict[str, obj
         if not isinstance(route, dict):
             raise ValueError("each keyword signal must be an object")
         name = signal_route_name(route, decision_routes)
-        if name not in {"coding", "math"}:
-            raise ValueError(f"unsupported route {name!r}; use coding or math")
+        if name not in {"coding", "math", "qa", "writing"}:
+            raise ValueError(f"unsupported route {name!r}; use coding, math, qa, or writing")
         signal_name = str(route.get("name", name))
         operator = str(route.get("operator", "OR")).upper()
         if operator not in {"OR", "AND", "NOR"}:

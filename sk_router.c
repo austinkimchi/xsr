@@ -38,11 +38,15 @@
 #define BACKEND_CODING_PORT 18391
 #define BACKEND_MATH_PORT 18392
 #define BACKEND_OTHERS_PORT 18393
+#define BACKEND_QA_PORT 18394
+#define BACKEND_WRITING_PORT 18395
 
 #define SK_ROUTER_FLAG_BACKEND 1
 #define SK_MODEL_CODING 1
 #define SK_MODEL_MATH 2
 #define SK_MODEL_OTHERS 3
+#define SK_MODEL_QA 4
+#define SK_MODEL_WRITING 5
 #define MAX_SOCK_SLOTS 4096
 #define MAX_HTTP_MESSAGE (256 * 1024)
 
@@ -59,6 +63,8 @@ struct sk_route_entry {
   __u32 coding_slot;
   __u32 math_slot;
   __u32 others_slot;
+  __u32 qa_slot;
+  __u32 writing_slot;
   __u32 flags;
 };
 
@@ -75,6 +81,19 @@ static void bump_memlock_rlimit(void);
 static void handle_signal(int sig) {
   (void)sig;
   running = 0;
+}
+
+static int install_signal_handlers(void) {
+  struct sigaction action = {
+      .sa_handler = handle_signal,
+  };
+
+  sigemptyset(&action.sa_mask);
+  /* Do not request SA_RESTART: accept() must return EINTR so the main loop
+   * can observe running == 0 immediately. */
+  if (sigaction(SIGINT, &action, NULL) != 0)
+    return -1;
+  return sigaction(SIGTERM, &action, NULL);
 }
 
 static int set_reuse_and_nodelay(int fd) {
@@ -154,7 +173,7 @@ static int update_route(int routes_fd, int sock_fd,
 }
 
 static int populate_decision_rules(int rules_fd) {
-  struct xdp_decision_rule rules[3] = {
+  struct xdp_decision_rule rules[5] = {
       {.require_any = XDP_SIGNAL_DOMAIN_CODING,
        .model_id = SK_MODEL_CODING,
        .enabled = 1},
@@ -164,14 +183,20 @@ static int populate_decision_rules(int rules_fd) {
       {.require_any = XDP_SIGNAL_DOMAIN_OTHERS,
        .model_id = SK_MODEL_OTHERS,
        .enabled = 1},
+      {.require_any = XDP_SIGNAL_DOMAIN_QA,
+       .model_id = SK_MODEL_QA,
+       .enabled = 1},
+      {.require_any = XDP_SIGNAL_DOMAIN_WRITING,
+       .model_id = SK_MODEL_WRITING,
+       .enabled = 1},
   };
 
-  for (__u32 i = 0; i < 3; i++) {
+  for (__u32 i = 0; i < 5; i++) {
     if (bpf_map_update_elem(rules_fd, &i, &rules[i], BPF_ANY) != 0)
       return -1;
   }
 
-  for (__u32 i = 0; i < 3; i++) {
+  for (__u32 i = 0; i < 5; i++) {
     struct xdp_decision_rule check = {};
 
     if (bpf_map_lookup_elem(rules_fd, &i, &check) != 0 || !check.enabled ||
@@ -231,6 +256,10 @@ static int route_to_backend_port(__u32 route) {
     return BACKEND_CODING_PORT;
   if (route == XDP_ROUTE_MATH)
     return BACKEND_MATH_PORT;
+  if (route == XDP_ROUTE_QA)
+    return BACKEND_QA_PORT;
+  if (route == XDP_ROUTE_WRITING)
+    return BACKEND_WRITING_PORT;
   return BACKEND_OTHERS_PORT;
 }
 
@@ -601,8 +630,8 @@ static int run_proxy_router(void) {
 
   printf("XDP-classified routing proxy listening on 0.0.0.0:%d\n",
          FRONTEND_PORT);
-  printf("routes: coding=%d math=%d others=%d\n", BACKEND_CODING_PORT,
-         BACKEND_MATH_PORT, BACKEND_OTHERS_PORT);
+  printf("routes: coding=%d math=%d others=%d qa=%d writing=%d\n", BACKEND_CODING_PORT,
+         BACKEND_MATH_PORT, BACKEND_OTHERS_PORT, BACKEND_QA_PORT, BACKEND_WRITING_PORT);
   fflush(stdout);
 
   while (running) {
@@ -655,15 +684,21 @@ static int add_connection_set(int sock_map_fd, int routes_fd, int client_fd,
   int coding_fd = -1;
   int math_fd = -1;
   int others_fd = -1;
+  int qa_fd = -1;
+  int writing_fd = -1;
   __u32 client_slot = (*next_slot)++;
   __u32 coding_slot = (*next_slot)++;
   __u32 math_slot = (*next_slot)++;
   __u32 others_slot = (*next_slot)++;
+  __u32 qa_slot = (*next_slot)++;
+  __u32 writing_slot = (*next_slot)++;
   struct sk_route_entry client_entry = {
       .client_slot = client_slot,
       .coding_slot = coding_slot,
       .math_slot = math_slot,
       .others_slot = others_slot,
+      .qa_slot = qa_slot,
+      .writing_slot = writing_slot,
       .flags = 0,
   };
   struct sk_route_entry backend_entry = {
@@ -671,6 +706,8 @@ static int add_connection_set(int sock_map_fd, int routes_fd, int client_fd,
       .coding_slot = coding_slot,
       .math_slot = math_slot,
       .others_slot = others_slot,
+      .qa_slot = qa_slot,
+      .writing_slot = writing_slot,
       .flags = SK_ROUTER_FLAG_BACKEND,
   };
 
@@ -682,7 +719,9 @@ static int add_connection_set(int sock_map_fd, int routes_fd, int client_fd,
   coding_fd = connect_backend(BACKEND_CODING_PORT);
   math_fd = connect_backend(BACKEND_MATH_PORT);
   others_fd = connect_backend(BACKEND_OTHERS_PORT);
-  if (coding_fd < 0 || math_fd < 0 || others_fd < 0)
+  qa_fd = connect_backend(BACKEND_QA_PORT);
+  writing_fd = connect_backend(BACKEND_WRITING_PORT);
+  if (coding_fd < 0 || math_fd < 0 || others_fd < 0 || qa_fd < 0 || writing_fd < 0)
     goto fail;
 
   if (update_route(routes_fd, client_fd, &client_entry) != 0) {
@@ -699,6 +738,14 @@ static int add_connection_set(int sock_map_fd, int routes_fd, int client_fd,
   }
   if (update_route(routes_fd, others_fd, &backend_entry) != 0) {
     perror("update others route");
+    goto fail;
+  }
+  if (update_route(routes_fd, qa_fd, &backend_entry) != 0) {
+    perror("update qa route");
+    goto fail;
+  }
+  if (update_route(routes_fd, writing_fd, &backend_entry) != 0) {
+    perror("update writing route");
     goto fail;
   }
 
@@ -718,9 +765,25 @@ static int add_connection_set(int sock_map_fd, int routes_fd, int client_fd,
     perror("update others sockmap");
     goto fail;
   }
+  if (update_sock_map(sock_map_fd, qa_slot, qa_fd) != 0) {
+    perror("update qa sockmap");
+    goto fail;
+  }
+  if (update_sock_map(sock_map_fd, writing_slot, writing_fd) != 0) {
+    perror("update writing sockmap");
+    goto fail;
+  }
 
-  printf("accepted client slot=%u backends={coding:%u,math:%u,others:%u}\n",
-         client_slot, coding_slot, math_slot, others_slot);
+  /* A client can send its first request while the backend connections
+   * are being established.  Ask the socket layer to re-evaluate queued data
+   * after the SOCKMAP programs have been attached, without consuming it. */
+  {
+    unsigned char byte;
+    (void)recv(client_fd, &byte, sizeof(byte), MSG_PEEK | MSG_DONTWAIT);
+  }
+
+  printf("accepted client slot=%u backends={coding:%u,math:%u,others:%u,qa:%u,writing:%u}\n",
+         client_slot, coding_slot, math_slot, others_slot, qa_slot, writing_slot);
   fflush(stdout);
   return 0;
 
@@ -731,6 +794,10 @@ fail:
     close(math_fd);
   if (others_fd >= 0)
     close(others_fd);
+  if (qa_fd >= 0)
+    close(qa_fd);
+  if (writing_fd >= 0)
+    close(writing_fd);
   return -1;
 }
 
@@ -744,16 +811,17 @@ static int run_sockmap_router(void) {
   int listener_fd = -1;
   __u32 next_slot = 0;
 
-  signal(SIGINT, handle_signal);
-  signal(SIGTERM, handle_signal);
   bump_memlock_rlimit();
 
   if (verify_backend_available(BACKEND_CODING_PORT) != 0 ||
       verify_backend_available(BACKEND_MATH_PORT) != 0 ||
-      verify_backend_available(BACKEND_OTHERS_PORT) != 0) {
+      verify_backend_available(BACKEND_OTHERS_PORT) != 0 ||
+      verify_backend_available(BACKEND_QA_PORT) != 0 ||
+      verify_backend_available(BACKEND_WRITING_PORT) != 0) {
     fprintf(stderr,
-            "required backends missing; expected coding=%d math=%d others=%d\n",
-            BACKEND_CODING_PORT, BACKEND_MATH_PORT, BACKEND_OTHERS_PORT);
+            "required backends missing; expected coding=%d math=%d others=%d qa=%d writing=%d\n",
+            BACKEND_CODING_PORT, BACKEND_MATH_PORT, BACKEND_OTHERS_PORT,
+            BACKEND_QA_PORT, BACKEND_WRITING_PORT);
     return 1;
   }
 
@@ -807,8 +875,8 @@ static int run_sockmap_router(void) {
   }
 
   printf("SK_SKB router listening on 0.0.0.0:%d\n", FRONTEND_PORT);
-  printf("routes: coding=%d math=%d others=%d\n", BACKEND_CODING_PORT,
-         BACKEND_MATH_PORT, BACKEND_OTHERS_PORT);
+  printf("routes: coding=%d math=%d others=%d qa=%d writing=%d\n", BACKEND_CODING_PORT,
+         BACKEND_MATH_PORT, BACKEND_OTHERS_PORT, BACKEND_QA_PORT, BACKEND_WRITING_PORT);
   fflush(stdout);
 
   while (running) {
@@ -838,15 +906,20 @@ static int run_sockmap_router(void) {
 int main(void) {
   const char *mode;
 
-  signal(SIGINT, handle_signal);
-  signal(SIGTERM, handle_signal);
+  if (install_signal_handlers() != 0) {
+    perror("install signal handlers");
+    return 1;
+  }
 
   if (verify_backend_available(BACKEND_CODING_PORT) != 0 ||
       verify_backend_available(BACKEND_MATH_PORT) != 0 ||
-      verify_backend_available(BACKEND_OTHERS_PORT) != 0) {
+      verify_backend_available(BACKEND_OTHERS_PORT) != 0 ||
+      verify_backend_available(BACKEND_QA_PORT) != 0 ||
+      verify_backend_available(BACKEND_WRITING_PORT) != 0) {
     fprintf(stderr,
-            "required backends missing; expected coding=%d math=%d others=%d\n",
-            BACKEND_CODING_PORT, BACKEND_MATH_PORT, BACKEND_OTHERS_PORT);
+            "required backends missing; expected coding=%d math=%d others=%d qa=%d writing=%d\n",
+            BACKEND_CODING_PORT, BACKEND_MATH_PORT, BACKEND_OTHERS_PORT,
+            BACKEND_QA_PORT, BACKEND_WRITING_PORT);
     return 1;
   }
 

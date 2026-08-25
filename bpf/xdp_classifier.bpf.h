@@ -32,4 +32,12 @@ static __always_inline __u8 xdp_classifier_matched_math(struct xdp_classifier_st
   return xdp_jaccard_rule_matches(&state->jaccard, XDP_ROUTE_MATH);
 }
 
+static __always_inline __u8 xdp_classifier_matched_qa(struct xdp_classifier_state *state) {
+  return xdp_jaccard_rule_matches(&state->jaccard, XDP_ROUTE_QA);
+}
+
+static __always_inline __u8 xdp_classifier_matched_writing(struct xdp_classifier_state *state) {
+  return xdp_jaccard_rule_matches(&state->jaccard, XDP_ROUTE_WRITING);
+}
+
 #endif

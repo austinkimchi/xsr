@@ -13,28 +13,42 @@ providers:
       provider_model_id: coding
       backend_refs:
         - name: benchmark
-          endpoint: host.docker.internal:18391
+          endpoint: 172.21.0.1:18391
           protocol: http
           weight: 100
     - name: math
       provider_model_id: math
       backend_refs:
         - name: benchmark
-          endpoint: host.docker.internal:18392
+          endpoint: 172.21.0.1:18392
           protocol: http
           weight: 100
     - name: others
       provider_model_id: others
       backend_refs:
         - name: benchmark
-          endpoint: host.docker.internal:18393
+          endpoint: 172.21.0.1:18393
+          protocol: http
+          weight: 100
+    - name: qa
+      provider_model_id: qa
+      backend_refs:
+        - name: benchmark
+          endpoint: 172.21.0.1:18394
+          protocol: http
+          weight: 100
+    - name: writing
+      provider_model_id: writing
+      backend_refs:
+        - name: benchmark
+          endpoint: 172.21.0.1:18395
           protocol: http
           weight: 100
     - name: benchmark-model
       provider_model_id: benchmark-model
       backend_refs:
         - name: benchmark
-          endpoint: host.docker.internal:18393
+          endpoint: 172.21.0.1:18393
           protocol: http
           weight: 100
 
@@ -46,6 +60,10 @@ routing:
       modality: text
     - name: others
       modality: text
+    - name: qa
+      modality: text
+    - name: writing
+      modality: text
     - name: benchmark-model
       modality: text
   signals:
@@ -53,14 +71,28 @@ routing:
       - name: code_keywords
         operator: OR
         method: ngram
-        keywords: ["code", "function", "debug", "algorithm", "refactor"]
+        keywords: ["code", "function", "program", "implement"]
         ngram_threshold: 0.8
         ngram_arity: 3
         case_sensitive: false
       - name: math_keywords
         operator: OR
         method: ngram
-        keywords: ["solve", "equation", "derivative", "integral", "matrix", "probability", "geometry", "calculate"]
+        keywords: ["solve", "equation", "derivative", "calculate"]
+        ngram_threshold: 0.8
+        ngram_arity: 3
+        case_sensitive: false
+      - name: qa_keywords
+        operator: OR
+        method: ngram
+        keywords: ["question", "answer", "explain", "define"]
+        ngram_threshold: 0.8
+        ngram_arity: 3
+        case_sensitive: false
+      - name: writing_keywords
+        operator: OR
+        method: ngram
+        keywords: ["write", "essay", "draft", "compose"]
         ngram_threshold: 0.8
         ngram_arity: 3
         case_sensitive: false
@@ -86,6 +118,28 @@ routing:
             name: math_keywords
       modelRefs:
         - model: math
+          use_reasoning: false
+    - name: qa
+      description: Route question-answering prompts from SPEED-Bench.
+      priority: 80
+      rules:
+        operator: AND
+        conditions:
+          - type: keyword
+            name: qa_keywords
+      modelRefs:
+        - model: qa
+          use_reasoning: false
+    - name: writing
+      description: Route writing prompts from SPEED-Bench.
+      priority: 70
+      rules:
+        operator: AND
+        conditions:
+          - type: keyword
+            name: writing_keywords
+      modelRefs:
+        - model: writing
           use_reasoning: false
 
 global:

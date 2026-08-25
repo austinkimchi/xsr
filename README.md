@@ -77,15 +77,15 @@ client
   -> plaintext TCP connection on :18081
   -> XDP/eBPF ngram classification on veth0
   -> routing proxy reads XDP flow decision
-  -> coding (:18391), math (:18392), or others (:18393)
+  -> coding (:18391), math (:18392), qa (:18394), writing (:18395), or others (:18393)
 ```
 
-The default `sk_router` control process fails startup unless all three backends
+The default `sk_router` control process fails startup unless all five backends
 are reachable and the XDP classifier can attach to `veth0`. The experimental
 SOCKMAP mode can be selected with `SK_ROUTER_MODE=sockmap`; it populates the
 decision map before attaching BPF.
 
-The checked-in vLLM-SR policy configs also map coding, math, and others to
+The checked-in vLLM-SR policy config also maps coding, math, qa, writing, and others to
 separate marker backend ports so `wrk` can profile physical backend responses.
 Restart or reload vLLM-SR after changing these configs; otherwise its response
 markers can still reflect an older single-backend configuration.
@@ -126,13 +126,14 @@ Expected backend markers are:
 ```
 
 ### 4. Run Routing Correctness Benchmark
-Run the routing-agreement sweep across the configured concurrencies:
+Run the routing-agreement sweep across the configured concurrencies. The default modes include the direct control, SOCKMAP, and vLLM-SR; SOCKMAP is the default in-kernel forwarding path under test. Set `BENCHMARK_MODES=direct-netns,xdp,sockmap,vllm-sr` to include the legacy XDP router comparison.
 ```bash
 make correctness
 ```
 
-Results are saved under `results/routing-correctness/`.
-The default corpus is the local `benchmarks/dataset_prompts.jsonl`, so this run does not depend on the Hugging Face rows API. Use `--datasets all` only when you intentionally want to fetch every remote source.
+Results are saved under `results/routing-correctness/` as one Markdown file per
+concurrency level (for example, `routing_correctness_benchmark_concurrency_4.md`).
+The correctness suite fetches all 880 rows from the `nvidia/SPEED-Bench` qualitative/test split. Its `coding`, `math`, `qa`, and `writing` labels map directly to router routes; the other seven SPEED-Bench categories map to `others`.
 
 ### 5. Run High-Performance Load Benchmark
 Execute the high-throughput `wrk` / `wrk2` load benchmark with dataset prompts:
@@ -144,7 +145,9 @@ make wrk
 sudo CONCURRENCY=8 DURATION=20s benchmarks/run_routing_performance.sh
 ```
 
-Performance results are saved automatically to `results/routing-performance/latest.md`.
+Performance results are saved under `results/routing-performance/` as
+`routing_performance_<concurrency>.md`; a new run at the same concurrency
+overwrites its previous report.
 
 ## File Structure
 ```

@@ -25,6 +25,8 @@
 #define XDP_MODEL_CODING 1
 #define XDP_MODEL_MATH 2
 #define XDP_MODEL_OTHERS 3
+#define XDP_MODEL_QA 4
+#define XDP_MODEL_WRITING 5
 
 struct xdp_decision_rule {
   __u64 require_any;
@@ -44,6 +46,8 @@ static const struct route_counter route_counters[] = {
     {COUNT_ROUTE_CODING, "coding", "coding-model"},
     {COUNT_ROUTE_OTHERS, "others", "default-route"},
     {COUNT_ROUTE_MATH, "math", "math-model"},
+    {COUNT_ROUTE_QA, "qa", "qa-model"},
+    {COUNT_ROUTE_WRITING, "writing", "writing-model"},
 };
 
 #ifdef XDP_DEBUG
@@ -55,6 +59,10 @@ static const char *route_name(__u32 route) {
     return "others";
   case 2:
     return "math";
+  case 3:
+    return "qa";
+  case 4:
+    return "writing";
   default:
     return "unknown";
   }
@@ -70,11 +78,13 @@ static int handle_route_event(void *ctx, void *data, size_t data_sz) {
 
   printf("{\"event\":\"route\",\"src_port\":%u,\"route_name\":\"%s\",\"route\":%u,"
          "\"model_id\":%u,\"content_length\":%u,"
-         "\"matched_keywords\":{\"coding\":%s,\"math\":%s},"
+         "\"matched_keywords\":{\"coding\":%s,\"math\":%s,\"qa\":%s,\"writing\":%s},"
          "\"xdp_elapsed_ns\":%llu}\n",
          event->src_port, route_name(event->route), event->route, event->model_id,
          event->content_length, event->matched_coding ? "true" : "false",
          event->matched_math ? "true" : "false",
+         event->matched_qa ? "true" : "false",
+         event->matched_writing ? "true" : "false",
          (unsigned long long)event->elapsed_ns);
   return 0;
 }
@@ -136,12 +146,18 @@ static int populate_jaccard_policy(struct bpf_object *obj) {
 
 static int populate_decision_rules(struct bpf_object *obj) {
   int rules_fd = bpf_object__find_map_fd_by_name(obj, "xdp_decision_rules");
-  struct xdp_decision_rule rules[3] = {
+  struct xdp_decision_rule rules[5] = {
       {.require_any = XDP_SIGNAL_DOMAIN_CODING,
        .model_id = XDP_MODEL_CODING,
        .enabled = 1},
       {.require_any = XDP_SIGNAL_DOMAIN_MATH,
        .model_id = XDP_MODEL_MATH,
+       .enabled = 1},
+      {.require_any = XDP_SIGNAL_DOMAIN_QA,
+       .model_id = XDP_MODEL_QA,
+       .enabled = 1},
+      {.require_any = XDP_SIGNAL_DOMAIN_WRITING,
+       .model_id = XDP_MODEL_WRITING,
        .enabled = 1},
       {.require_any = XDP_SIGNAL_DOMAIN_OTHERS,
        .model_id = XDP_MODEL_OTHERS,
@@ -151,7 +167,7 @@ static int populate_decision_rules(struct bpf_object *obj) {
   if (rules_fd < 0)
     return -1;
 
-  for (__u32 i = 0; i < 3; i++) {
+  for (__u32 i = 0; i < 5; i++) {
     if (bpf_map_update_elem(rules_fd, &i, &rules[i], BPF_ANY) != 0)
       return -1;
   }

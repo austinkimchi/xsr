@@ -7,7 +7,8 @@ ROOT_DIR="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 METHODS=("ngram")
 CONCURRENCIES=(1 4 8 16)
 REPORT_ROOT="results/routing-correctness"
-BENCHMARK_MODES="${BENCHMARK_MODES:-direct-netns,xdp,vllm-sr}"
+BENCHMARK_MODES="${BENCHMARK_MODES:-direct-netns,sockmap,vllm-sr}"
+SPEED_BENCH_ARGS=(--dataset speed-bench --scan-limit 880)
 
 if [ "$EUID" -ne 0 ]; then
   echo "XDP benchmark requires root privileges. Elevating with sudo..."
@@ -21,6 +22,7 @@ echo " Starting Routing Correctness Benchmarks"
 echo " Methods: ${METHODS[*]}"
 echo " Concurrency: ${CONCURRENCIES[*]}"
 echo " Modes: ${BENCHMARK_MODES}"
+echo " Dataset: SPEED-Bench qualitative/test (880 rows)"
 echo " Report root: ${REPORT_ROOT}"
 echo "================================================================="
 
@@ -43,17 +45,20 @@ for METHOD in "${METHODS[@]}"; do
   echo " [2/2] Running benchmark suite for method: ${METHOD}"
   echo "-----------------------------------------------------------------"
   for CONCURRENCY in "${CONCURRENCIES[@]}"; do
-    REPORT_DIR="${REPORT_ROOT}/concurrency_${CONCURRENCY}"
-    mkdir -p "$REPORT_DIR"
+    REPORT_DIR="${REPORT_ROOT}"
+    REPORT_NAME="routing_correctness_benchmark_concurrency_${CONCURRENCY}.md"
+    mkdir -p "${REPORT_DIR}"
 
     echo ""
     echo "   - concurrency=${CONCURRENCY}"
-    echo "     output=${REPORT_DIR}/routing_correctness_benchmark.md"
+    echo "     output=${REPORT_DIR}/${REPORT_NAME}"
     python3 "${SCRIPT_DIR}/benchmark.py" \
+      "${SPEED_BENCH_ARGS[@]}" \
       "$@" \
       --config "$CONFIG" \
       --concurrency "$CONCURRENCY" \
       --report-dir "$REPORT_DIR" \
+      --report-name "$REPORT_NAME" \
       --modes "$BENCHMARK_MODES" \
       --no-build
   done
@@ -64,11 +69,10 @@ echo "================================================================="
 echo " All routing correctness benchmarks completed successfully!"
 echo " Generated report files:"
 for CONCURRENCY in "${CONCURRENCIES[@]}"; do
-  REPORT_DIR="${REPORT_ROOT}/concurrency_${CONCURRENCY}"
-  echo "  - ${REPORT_DIR}/"
+  REPORT_NAME="routing_correctness_benchmark_concurrency_${CONCURRENCY}.md"
   for METHOD in "${METHODS[@]}"; do
-    if [ -f "${REPORT_DIR}/routing_correctness_benchmark.md" ]; then
-      echo "      routing_correctness_benchmark.md"
+    if [ -f "${REPORT_ROOT}/${REPORT_NAME}" ]; then
+      echo "  - ${REPORT_ROOT}/${REPORT_NAME}"
     fi
   done
 done

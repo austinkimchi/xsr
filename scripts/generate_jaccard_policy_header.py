@@ -18,7 +18,12 @@ MAX_KEYWORDS = 16
 MAX_RULES = 8
 MAX_GRAMS = 16
 MAX_ARITY = 3
-ROUTES = {"coding": "XDP_ROUTE_CODING", "math": "XDP_ROUTE_MATH"}
+ROUTES = {
+    "coding": "XDP_ROUTE_CODING",
+    "math": "XDP_ROUTE_MATH",
+    "qa": "XDP_ROUTE_QA",
+    "writing": "XDP_ROUTE_WRITING",
+}
 OPERATORS = {"OR": "XDP_JACCARD_OR", "AND": "XDP_JACCARD_AND", "NOR": "XDP_JACCARD_NOR"}
 
 
@@ -79,7 +84,7 @@ def parse(path: Path) -> tuple[list[dict[str, object]], list[dict[str, object]]]
         name = str(signal.get("name", ""))
         route_name = signal_route_name(signal, decision_routes)
         if route_name not in ROUTES:
-            raise ValueError(f"{name}: route must be coding or math")
+            raise ValueError(f"{name}: route must be coding, math, qa, or writing")
         operator = str(signal.get("operator", "OR")).upper()
         if operator not in OPERATORS:
             raise ValueError(f"{name}: operator must be OR, AND, or NOR")

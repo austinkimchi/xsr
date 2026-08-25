@@ -20,9 +20,9 @@ XDP_PEER_IF ?= veth1
 XDP_HOST_ADDR ?= 10.10.0.1/24
 XDP_PEER_ADDR ?= 10.10.0.2/24
 KEYWORD_POLICY ?= config/policy_ngram.yaml
-VSR_BACKEND_PORTS ?= 18391 18392 18393
+VSR_BACKEND_PORTS ?= 18391 18392 18393 18394 18395
 # Optional arguments forwarded by `make correctness`, for example:
-# sudo make correctness args="--dataset dataset-name"
+# sudo make correctness args="--modes direct-netns,xdp"
 args ?=
 
 .DEFAULT_GOAL := all
@@ -39,10 +39,14 @@ help:
 	@echo "  sudo make iproutes       Allow benchmark backend ports through INPUT"
 	@echo "  sudo make correctness [args=\"...\"]"
 	@echo "                           Set up and run routing correctness checks"
+	@echo "  sudo make sockmap-smoke"
+	@echo "                           Verify SOCKMAP routing, including first-request delivery"
 	@echo "  sudo make performance [args=\"CONCURRENCY=1 DURATION=30s ...\"]"
-	@echo "                           Set up and run direct, XSR, and vLLM-SR benchmarks"
+	@echo "                           Set up and run direct, XSR, SOCKMAP, and vLLM-SR benchmarks"
 	@echo "  sudo make wrk [args=\"...\"]"
 	@echo "                           Alias for performance"
+	@echo "  make results"
+	@echo "                           Compile raw benchmark reports into results/wrk_benchmark.md"
 	@echo "  make clean               Remove built binaries and generated policy headers"
 	@echo "  sudo make clean-setup    Remove ns1 and veth0"
 	@echo ""
@@ -73,6 +77,10 @@ correctness:
 	$(MAKE) iproutes
 	./benchmarks/run_routing_correctness.sh $(args)
 
+sockmap-smoke:
+	$(require_sudo)
+	$(PYTHON) tests/probe_sk_router_smoke.py
+
 performance:
 	$(require_sudo)
 	$(MAKE) check-performance
@@ -81,6 +89,9 @@ performance:
 	./benchmarks/run_routing_performance.sh $(args)
 
 wrk: performance
+
+results:
+	$(PYTHON) benchmarks/compile_results.py
 
 check:
 	@command -v "$(CC)" >/dev/null || { echo "Error: compiler '$(CC)' is required." >&2; exit 1; }
@@ -149,7 +160,7 @@ setup:
 	@ip netns exec $(XDP_NETNS) ip link set lo up
 	@echo "setup complete: $(XDP_HOST_IF)=$(XDP_HOST_ADDR), $(XDP_NETNS)/$(XDP_PEER_IF)=$(XDP_PEER_ADDR)"
 
-# Permit vLLM-SR's Docker bridge to reach the three marker backends used by
+# Permit vLLM-SR's Docker bridge to reach the five marker backends used by
 # the routing benchmark.  INPUT is commonly DROP on development hosts.
 iproutes:
 	@for port in $(VSR_BACKEND_PORTS); do \
@@ -158,4 +169,4 @@ iproutes:
 	done
 	@echo "benchmark backend ports allowed: $(VSR_BACKEND_PORTS)"
 
-.PHONY: help all dev prod correctness performance wrk check check-performance clean clean-setup setup iproutes
+.PHONY: help all dev prod correctness sockmap-smoke performance wrk results check check-performance clean clean-setup setup iproutes

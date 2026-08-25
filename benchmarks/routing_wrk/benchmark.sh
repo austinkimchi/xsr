@@ -28,7 +28,9 @@ XDP_PORT="${XDP_PORT:-18081}"
 CODING_BACKEND_PORT="${CODING_BACKEND_PORT:-18391}"
 MATH_BACKEND_PORT="${MATH_BACKEND_PORT:-18392}"
 OTHERS_BACKEND_PORT="${OTHERS_BACKEND_PORT:-18393}"
-VLLM_BACKEND_PORT="${VLLM_BACKEND_PORT:-18394}"
+QA_BACKEND_PORT="${QA_BACKEND_PORT:-18394}"
+WRITING_BACKEND_PORT="${WRITING_BACKEND_PORT:-18395}"
+VLLM_BACKEND_PORT="${VLLM_BACKEND_PORT:-18396}"
 START_VLLM_MOCK="${START_VLLM_MOCK:-0}"
 VLLM_HOST="${VLLM_HOST:-vllm-sr-envoy-container}"
 VLLM_PORT="${VLLM_PORT:-8899}"
@@ -44,7 +46,6 @@ DIRECT_BACKEND_URL="${DIRECT_BACKEND_URL:-http://10.10.0.1:${CODING_BACKEND_PORT
 # reaches that address through veth0 with destination-scoped NAT below.
 VLLM_URL="${VLLM_URL:-}"
 REPORT_DIR="${ROOT_DIR}/results/routing-performance"
-LATEST_FILE="${REPORT_DIR}/latest.md"
 
 if [ "$EUID" -ne 0 ]; then
     echo "Routing benchmark uses sudo for cleanup and firewall setup. Elevating..."
@@ -57,6 +58,8 @@ if [ "$EUID" -ne 0 ]; then
         CODING_BACKEND_PORT="$CODING_BACKEND_PORT"
         MATH_BACKEND_PORT="$MATH_BACKEND_PORT"
         OTHERS_BACKEND_PORT="$OTHERS_BACKEND_PORT"
+        QA_BACKEND_PORT="$QA_BACKEND_PORT"
+        WRITING_BACKEND_PORT="$WRITING_BACKEND_PORT"
         VLLM_BACKEND_PORT="$VLLM_BACKEND_PORT"
         START_VLLM_MOCK="$START_VLLM_MOCK"
         VLLM_HOST="$VLLM_HOST"
@@ -95,6 +98,11 @@ if ! command -v "$WRK_BIN" &> /dev/null; then
     fi
 fi
 
+if ! command -v curl &> /dev/null; then
+    echo "Error: curl is required to verify vLLM-SR backend routing." >&2
+    exit 1
+fi
+
 # Kill any stale mock_backend or router processes
 pkill -9 mock_backend >/dev/null 2>&1 || true
 pkill -9 xdp_router >/dev/null 2>&1 || true
@@ -116,6 +124,8 @@ iptables -D INPUT -p tcp --dport "${XDP_PORT}" -j ACCEPT >/dev/null 2>&1 || true
 iptables -D INPUT -p tcp --dport "${CODING_BACKEND_PORT}" -j ACCEPT >/dev/null 2>&1 || true
 iptables -D INPUT -p tcp --dport "${MATH_BACKEND_PORT}" -j ACCEPT >/dev/null 2>&1 || true
 iptables -D INPUT -p tcp --dport "${OTHERS_BACKEND_PORT}" -j ACCEPT >/dev/null 2>&1 || true
+iptables -D INPUT -p tcp --dport "${QA_BACKEND_PORT}" -j ACCEPT >/dev/null 2>&1 || true
+iptables -D INPUT -p tcp --dport "${WRITING_BACKEND_PORT}" -j ACCEPT >/dev/null 2>&1 || true
 iptables -D INPUT -p tcp --dport "${VLLM_BACKEND_PORT}" -j ACCEPT >/dev/null 2>&1 || true
 
 # Add iptables rules
@@ -123,6 +133,8 @@ iptables -I INPUT 1 -p tcp --dport "${XDP_PORT}" -j ACCEPT >/dev/null 2>&1 || tr
 iptables -I INPUT 1 -p tcp --dport "${CODING_BACKEND_PORT}" -j ACCEPT >/dev/null 2>&1 || true
 iptables -I INPUT 1 -p tcp --dport "${MATH_BACKEND_PORT}" -j ACCEPT >/dev/null 2>&1 || true
 iptables -I INPUT 1 -p tcp --dport "${OTHERS_BACKEND_PORT}" -j ACCEPT >/dev/null 2>&1 || true
+iptables -I INPUT 1 -p tcp --dport "${QA_BACKEND_PORT}" -j ACCEPT >/dev/null 2>&1 || true
+iptables -I INPUT 1 -p tcp --dport "${WRITING_BACKEND_PORT}" -j ACCEPT >/dev/null 2>&1 || true
 iptables -I INPUT 1 -p tcp --dport "${VLLM_BACKEND_PORT}" -j ACCEPT >/dev/null 2>&1 || true
 
 # Keep XDP exposed to ordinary MTU-sized TCP segments during benchmark runs.
@@ -143,6 +155,14 @@ MATH_MOCK_PID=$!
 echo "Starting others backend on port ${OTHERS_BACKEND_PORT}..."
 ./benchmarks/mock_backend "${OTHERS_BACKEND_PORT}" others > /dev/null 2>&1 &
 OTHERS_MOCK_PID=$!
+
+echo "Starting QA backend on port ${QA_BACKEND_PORT}..."
+./benchmarks/mock_backend "${QA_BACKEND_PORT}" qa > /dev/null 2>&1 &
+QA_MOCK_PID=$!
+
+echo "Starting writing backend on port ${WRITING_BACKEND_PORT}..."
+./benchmarks/mock_backend "${WRITING_BACKEND_PORT}" writing > /dev/null 2>&1 &
+WRITING_MOCK_PID=$!
 
 VLLM_MOCK_PID=""
 if [ "$START_VLLM_MOCK" = "1" ]; then
@@ -259,10 +279,33 @@ setup_vllm_route() {
     wait_for_ns_port "$VLLM_IP" "$VLLM_PORT" "vLLM-SR Envoy (${VLLM_HOST})"
 }
 
+verify_vllm_backend_routing() {
+    local expected prompt response
+
+    echo "Verifying vLLM-SR routes reach distinct marker backends..."
+    while IFS='|' read -r expected prompt; do
+        response=$(ip netns exec "$NETNS" curl --silent --show-error --fail \
+            --max-time 10 -H 'Content-Type: application/json' \
+            --data "{\"model\":\"MoM\",\"messages\":[{\"role\":\"user\",\"content\":\"${prompt}\"}]}" \
+            "$VLLM_URL") || {
+            echo "Error: vLLM-SR preflight request for ${expected} failed." >&2
+            return 1
+        }
+        if ! grep -Fq "\"backend\":\"${expected}\"" <<<"$response"; then
+            echo "Error: vLLM-SR preflight expected backend=${expected}, got: ${response}" >&2
+            return 1
+        fi
+    done <<'EOF'
+coding|write a python function
+math|calculate the derivative of x squared
+others|tell me a short story
+EOF
+}
+
 cleanup() {
     echo ""
     echo "Cleaning up processes and network rules..."
-    for pid in "$ROUTER_PID" "$CODING_MOCK_PID" "$MATH_MOCK_PID" "$OTHERS_MOCK_PID" "$VLLM_MOCK_PID"; do
+    for pid in "$ROUTER_PID" "$CODING_MOCK_PID" "$MATH_MOCK_PID" "$OTHERS_MOCK_PID" "$QA_MOCK_PID" "$WRITING_MOCK_PID" "$VLLM_MOCK_PID"; do
         if [ -n "$pid" ]; then
             kill -9 "$pid" >/dev/null 2>&1 || true
             wait "$pid" 2>/dev/null || true
@@ -272,6 +315,8 @@ cleanup() {
     iptables -D INPUT -p tcp --dport "${CODING_BACKEND_PORT}" -j ACCEPT >/dev/null 2>&1 || true
     iptables -D INPUT -p tcp --dport "${MATH_BACKEND_PORT}" -j ACCEPT >/dev/null 2>&1 || true
     iptables -D INPUT -p tcp --dport "${OTHERS_BACKEND_PORT}" -j ACCEPT >/dev/null 2>&1 || true
+    iptables -D INPUT -p tcp --dport "${QA_BACKEND_PORT}" -j ACCEPT >/dev/null 2>&1 || true
+    iptables -D INPUT -p tcp --dport "${WRITING_BACKEND_PORT}" -j ACCEPT >/dev/null 2>&1 || true
     iptables -D INPUT -p tcp --dport "${VLLM_BACKEND_PORT}" -j ACCEPT >/dev/null 2>&1 || true
     if [ "$VLLM_NAT_ADDED" = "1" ]; then
         iptables -t nat -D POSTROUTING -s 10.10.0.0/24 -d "$VLLM_IP" -o "$VLLM_IF" -j MASQUERADE >/dev/null 2>&1 || true
@@ -311,10 +356,14 @@ detach_xdp() {
 }
 
 start_routing_proxy() {
-    # Start routing proxy in background. Set SK_ROUTER_MODE=sockmap to exercise
-    # the experimental kernel SOCKMAP path instead.
-    echo "Starting routing proxy..."
-    ./sk_router > /tmp/sk_router_wrk.log 2>&1 &
+    local mode="${1:-proxy}"
+
+    echo "Starting routing proxy (${mode})..."
+    if [ "$mode" = "sockmap" ]; then
+        SK_ROUTER_MODE=sockmap ./sk_router > /tmp/sk_router_wrk.log 2>&1 &
+    else
+        ./sk_router > /tmp/sk_router_wrk.log 2>&1 &
+    fi
     ROUTER_PID=$!
     wait_for_port "$XDP_PORT" "routing frontend"
     if ! wait_for_ns_port "10.10.0.1" "$XDP_PORT" "routing frontend"; then
@@ -322,6 +371,30 @@ start_routing_proxy() {
         cat /tmp/sk_router_wrk.log >&2
         return 1
     fi
+}
+
+verify_router_backend_routing() {
+    local name="$1"
+    local expected prompt response
+
+    echo "Verifying ${name} reaches distinct marker backends..."
+    while IFS='|' read -r expected prompt; do
+        response=$(ip netns exec "$NETNS" curl --silent --show-error --fail \
+            --max-time 10 -H 'Content-Type: application/json' \
+            --data "{\"model\":\"MoM\",\"messages\":[{\"role\":\"user\",\"content\":\"${prompt}\"}]}" \
+            "$XDP_URL") || {
+            echo "Error: ${name} preflight request for ${expected} failed." >&2
+            return 1
+        }
+        if ! grep -Fq "\"backend\":\"${expected}\"" <<<"$response"; then
+            echo "Error: ${name} preflight expected backend=${expected}, got: ${response}" >&2
+            return 1
+        fi
+    done <<'EOF'
+coding|write a python function
+math|calculate the derivative of x squared
+others|tell me a short story
+EOF
 }
 
 stop_routing_proxy() {
@@ -364,9 +437,9 @@ run_benchmark() {
         RATE_ARG=""
     fi
     echo ""
-    echo "- Routing backend ports: coding=\`${CODING_BACKEND_PORT}\`, math=\`${MATH_BACKEND_PORT}\`, others=\`${OTHERS_BACKEND_PORT}\`"
+    echo "- Routing backend ports: coding=\`${CODING_BACKEND_PORT}\`, math=\`${MATH_BACKEND_PORT}\`, qa=\`${QA_BACKEND_PORT}\`, writing=\`${WRITING_BACKEND_PORT}\`, others=\`${OTHERS_BACKEND_PORT}\`"
     echo ""
-    echo "## [1/3] Direct Backend"
+    echo "## [1/4] Direct Backend"
     echo "\`\`\`"
     # No route decision occurs for the control, so prompts.lua must not check
     # response markers. XDP was detached before this benchmark began.
@@ -374,14 +447,25 @@ run_benchmark() {
     echo "\`\`\`"
     echo ""
 
-    start_routing_proxy
+    start_routing_proxy proxy
 
-    echo "## [2/3] XSR/XDP Route"
+    echo "## [2/4] XSR/XDP Route"
     echo "\`\`\`"
     run_wrk 1 "$XDP_URL" "XSR/XDP route"
     echo "\`\`\`"
     echo ""
-    echo "## [3/3] vLLM-SR Route"
+    stop_routing_proxy
+
+    start_routing_proxy sockmap
+    verify_router_backend_routing "SOCKMAP"
+    echo "## [3/4] SOCKMAP Route"
+    echo "\`\`\`"
+    run_wrk 1 "$XDP_URL" "SOCKMAP route"
+    echo "\`\`\`"
+    echo ""
+    stop_routing_proxy
+
+    echo "## [4/4] vLLM-SR Route"
     echo "\`\`\`"
     run_wrk 1 "$VLLM_URL" "vLLM-SR route"
     echo "\`\`\`"
@@ -401,8 +485,7 @@ for CONCURRENCY in "${CONCURRENCIES[@]}"; do
         THREADS="$CONCURRENCY"
     fi
 
-    TIMESTAMP="$(date +%Y%m%d_%H%M%S)"
-    REPORT_FILE="${REPORT_DIR}/routing_performance_c${CONCURRENCY}_${TIMESTAMP}.md"
+    REPORT_FILE="${REPORT_DIR}/routing_performance_${CONCURRENCY}.md"
 
     # The preceding XSR run leaves a classifier and router behind. Remove both
     # before each direct control measurement.
@@ -411,7 +494,10 @@ for CONCURRENCY in "${CONCURRENCIES[@]}"; do
     wait_for_ns_port "10.10.0.1" "$CODING_BACKEND_PORT" "coding mock backend"
     wait_for_ns_port "10.10.0.1" "$MATH_BACKEND_PORT" "math mock backend"
     wait_for_ns_port "10.10.0.1" "$OTHERS_BACKEND_PORT" "others mock backend"
+    wait_for_ns_port "10.10.0.1" "$QA_BACKEND_PORT" "QA mock backend"
+    wait_for_ns_port "10.10.0.1" "$WRITING_BACKEND_PORT" "writing mock backend"
     setup_vllm_route
+    verify_vllm_backend_routing
     # Capture tee's PID before run_benchmark starts sk_router in the
     # background, which would otherwise overwrite $!.  Keep the write end in
     # an explicit descriptor so it can be closed after the router exits.
@@ -423,13 +509,11 @@ for CONCURRENCY in "${CONCURRENCIES[@]}"; do
     stop_routing_proxy
     exec {report_fd}>&-
     wait "$tee_pid"
-    cp "$REPORT_FILE" "$LATEST_FILE"
 
     echo ""
     echo "================================================================="
     echo " Benchmark complete! Results saved to:"
     echo "   - ${REPORT_FILE}"
-    echo "   - ${LATEST_FILE}"
     echo "================================================================="
 done
 

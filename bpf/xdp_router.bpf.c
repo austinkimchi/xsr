@@ -76,6 +76,10 @@ static __always_inline void increment_route_counter(__u32 route) {
     increment_counter(COUNT_ROUTE_OTHERS);
   else if (route == XDP_ROUTE_MATH)
     increment_counter(COUNT_ROUTE_MATH);
+  else if (route == XDP_ROUTE_QA)
+    increment_counter(COUNT_ROUTE_QA);
+  else if (route == XDP_ROUTE_WRITING)
+    increment_counter(COUNT_ROUTE_WRITING);
 }
 
 #ifdef XDP_DEBUG
@@ -91,6 +95,8 @@ emit_route_event(__u32 route, __u32 model_id, __u32 content_length,
       /* Route is already final; avoid two full rule scans solely for debug. */
       .matched_coding = route == XDP_ROUTE_CODING,
       .matched_math = route == XDP_ROUTE_MATH,
+      .matched_qa = route == XDP_ROUTE_QA,
+      .matched_writing = route == XDP_ROUTE_WRITING,
       .elapsed_ns = elapsed_ns,
   };
 
@@ -161,6 +167,10 @@ complete_route(struct xdp_flow_key *key,
     signals |= XDP_SIGNAL_DOMAIN_OTHERS;
   else if (route == XDP_ROUTE_MATH)
     signals |= XDP_SIGNAL_DOMAIN_MATH;
+  else if (route == XDP_ROUTE_QA)
+    signals |= XDP_SIGNAL_DOMAIN_QA;
+  else if (route == XDP_ROUTE_WRITING)
+    signals |= XDP_SIGNAL_DOMAIN_WRITING;
 
   __u32 model_id = xdp_decision_eval(signals);
   struct xdp_flow_decision decision = {

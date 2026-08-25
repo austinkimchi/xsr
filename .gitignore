@@ -22,14 +22,9 @@ tests/mock_backend
 !/models/xdp_ngram_model_fnv.json
 tests/vllm-sr-bert-stack/
 
-# Generated Benchmark Results (Keep wrk-keyword-routing and master wrk_benchmark.md)
-results/
-!results/wrk-keyword-routing/
-!results/wrk-keyword-routing/*
-!results/wrk-keyword-routing/**
+# Generated Benchmark Results (keep the curated summary only)
+results/*
 !results/wrk_benchmark.md
-!results/latency_comparison.png
 
-# Other scripts and helper files
-scripts/
-tests/
+# Generated policy headers
+bpf/xdp_jaccard_policy.generated.h
