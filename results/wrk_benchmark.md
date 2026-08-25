@@ -1,32 +1,26 @@
 # XDP vs. vLLM-SR benchmark summary
 
-- Ran on August 22, 2026 at 10:17:16 PM PDT
+- Ran on August 25, 2026 at 02:11:40 PM PDT
 - Duration of test: 100s per concurrency level
+- Routing path: XSR (SOCKMAP)
 
-| Concurrency | XDP requests/s | XDP average latency | vLLM-SR requests/s | vLLM-SR average latency | XDP throughput advantage | XDP latency advantage |
+| Concurrency | XSR requests/s | XSR average latency | vLLM-SR requests/s | vLLM-SR average latency | XSR throughput advantage | XSR latency advantage |
 | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| 1 | 2,480.75 | 385.90 us | 420.20 | 2.34 ms | 5.9x | 6.1x |
-| 2 | 2,649.95 | 733.24 us | 716.21 | 2.76 ms | 3.7x | 3.8x |
-| 4 | 2,736.26 | 1.42 ms | 855.20 | 4.64 ms | 3.2x | 3.3x |
-| 8 | 3,086.36 | 2.54 ms | 766.01 | 10.40 ms | 4.0x | 4.1x |
-| 10 | 3,178.19 | 2.44 ms | 822.16 | 9.68 ms | 3.9x | 4.0x |
-| 16 | 3,045.78 | 5.20 ms | 786.13 | 20.31 ms | 3.9x | 3.9x |
-| 32 | 3,319.37 | 9.59 ms | 755.24 | 42.33 ms | 4.4x | 4.4x |
-| 64 | 3,323.58 | 19.19 ms | 759.93 | 84.18 ms | 4.4x | 4.4x |
-| 96 | 3,063.44 | 31.25 ms | 788.23 | 121.73 ms | 3.9x | 3.9x |
-
-## Routing-marker checks
-
-| Metric across the sweep | XDP | vLLM-SR |
-| --- | ---: | ---: |
-| Aggregate route-distribution agreement | 91.26%–91.27% | 91.27%–91.35% |
-| FIFO response-marker agreement | 72.92%–72.93% | 72.92%–72.97% |
+| 1 | 2,523.56 | 378.69 us | 330.61 | 2.99 ms | 7.6x | 7.9x |
+| 2 | 4,519.80 | 424.78 us | 504.75 | 3.93 ms | 9.0x | 9.3x |
+| 4 | 8,301.85 | 464.29 us | 510.81 | 7.78 ms | 16.3x | 16.8x |
+| 8 | 7,522.25 | 1.02 ms | 592.79 | 13.45 ms | 12.7x | 13.2x |
+| 10 | 8,339.12 | 0.92 ms | 557.86 | 14.29 ms | 14.9x | 15.5x |
+| 16 | 9,153.49 | 1.44 ms | 537.86 | 29.70 ms | 17.0x | 20.6x |
+| 32 | 8,708.15 | 2.36 ms | 554.46 | 57.68 ms | 15.7x | 24.4x |
+| 64 | 8,065.99 | 4.48 ms | 600.47 | 106.54 ms | 13.4x | 23.8x |
+| 96 | 8,901.90 | 5.85 ms | 577.53 | 166.05 ms | 15.4x | 28.4x |
 
 ## Routing-correctness checks
 
 - 880 prompts in SPEED-Bench
 
-| Concurrency | XDP avg ms | XDP p99 ms | XDP RPS | vLLM-SR avg ms | vLLM-SR p99 ms | vLLM-SR RPS | XSR ↔ VSR routing agreement |
+| Concurrency | XDP avg ms | XDP p99 ms | XDP RPS | vLLM-SR avg ms | vLLM-SR p99 ms | vLLM-SR RPS | XSR/VSR routing agreement |
 | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | 1 | 0.457 | 3.465 | 1,704.99 | 2.558 | 15.248 | 388.12 | 100.00% (880/880) |
 | 4 | 0.862 | 5.458 | 2,946.03 | 5.408 | 29.312 | 733.42 | 100.00% (880/880) |

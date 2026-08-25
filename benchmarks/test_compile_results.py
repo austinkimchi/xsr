@@ -61,6 +61,13 @@ class CompileResultsTests(unittest.TestCase):
         self.assertEqual(result.route_label, "XSR (legacy)")
         self.assertEqual(result.route_rps, 200.0)
 
+    def test_performance_parse_does_not_require_marker_checks(self) -> None:
+        result = self.parse_report(
+            "## [3/4] XSR Route\nLatency     1.00ms\nRequests/sec:   300.00\n"
+        )
+
+        self.assertEqual(result.route_rps, 300.0)
+
 
 if __name__ == "__main__":
     unittest.main()
