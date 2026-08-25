@@ -146,6 +146,10 @@ sudo CONCURRENCY=8 DURATION=20s benchmarks/run_routing_performance.sh
 
 # Include the legacy XDP-classified proxy for comparison
 sudo make performance args="INCLUDE_XDP=1"
+
+# Compile the SOCKMAP XSR result (default) or select the legacy result
+make results
+make results RESULT_ROUTE=legacy
 ```
 
 Performance results are saved under `results/routing-performance/` as

@@ -13,6 +13,16 @@ ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_RESULTS_DIR = ROOT / "results"
 PERFORMANCE_CONCURRENCIES = (1, 2, 4, 8, 10, 16, 32, 64, 96)
 CORRECTNESS_CONCURRENCIES = (1, 4, 8, 16)
+ROUTE_VARIANTS = {
+    "sockmap": (
+        "XSR (SOCKMAP)",
+        ("## [2/3] XSR Route", "## [3/4] XSR Route"),
+    ),
+    "legacy": (
+        "XSR (legacy)",
+        ("## [2/4] XSR (legacy) Route", "## [2/4] XSR/XDP Route"),
+    ),
+}
 
 
 @dataclass(frozen=True)
@@ -20,8 +30,9 @@ class PerformanceResult:
     concurrency: int
     timestamp: str
     duration: str
-    xdp_rps: float
-    xdp_latency: str
+    route_label: str
+    route_rps: float
+    route_latency: str
     vllm_rps: float
     vllm_latency: str
     xdp_marker_agreement: float
@@ -62,7 +73,7 @@ def section(text: str, headings: tuple[str, ...]) -> tuple[str, str]:
     return heading, text[start:] if end < 0 else text[start:end]
 
 
-def parse_route_section(text: str, headings: tuple[str, ...]) -> tuple[float, str, float, float]:
+def parse_route_section(text: str, headings: tuple[str, ...]) -> tuple[str, float, str, float, float]:
     heading, route = section(text, headings)
     latency = required_match(r"^\s*Latency\s+(\S+)", route, f"{heading} average latency").group(1)
     rps = float(required_match(r"^Requests/sec:\s+([0-9.]+)", route, f"{heading} requests/s").group(1))
@@ -74,25 +85,29 @@ def parse_route_section(text: str, headings: tuple[str, ...]) -> tuple[float, st
     fifo_matches, fifo_mismatches = int(marker.group(2)), int(marker.group(3))
     fifo_total = fifo_matches + fifo_mismatches
     fifo_agreement = fifo_matches / fifo_total if fifo_total else 0.0
-    return rps, latency, float(marker.group(1)), fifo_agreement
+    return heading, rps, latency, float(marker.group(1)), fifo_agreement
 
 
-def parse_performance(path: Path) -> PerformanceResult:
+def parse_performance(path: Path, route_variant: str = "auto") -> PerformanceResult:
     text = path.read_text()
     concurrency = int(required_match(r"^- Connections: `(\d+)`", text, "connection count").group(1))
     timestamp = required_match(r"^- Timestamp: `([^`]+)`", text, "timestamp").group(1)
     duration = required_match(r"^- Duration: `([^`]+)`", text, "duration").group(1)
-    xdp_rps, xdp_latency, xdp_marker, xdp_fifo = parse_route_section(
-        text,
-        ("## [2/3] XSR Route", "## [3/4] XSR Route", "## [2/4] XSR/XDP Route"),
+    if route_variant == "auto":
+        route_headings = ROUTE_VARIANTS["sockmap"][1] + ROUTE_VARIANTS["legacy"][1]
+    else:
+        route_headings = ROUTE_VARIANTS[route_variant][1]
+    route_heading, route_rps, route_latency, route_marker, route_fifo = parse_route_section(text, route_headings)
+    route_label = next(
+        label for label, headings in ROUTE_VARIANTS.values() if route_heading in headings
     )
-    vllm_rps, vllm_latency, vllm_marker, vllm_fifo = parse_route_section(
+    _, vllm_rps, vllm_latency, vllm_marker, vllm_fifo = parse_route_section(
         text,
         ("## [3/3] vLLM-SR Route", "## [4/4] vLLM-SR Route"),
     )
     return PerformanceResult(
-        concurrency, timestamp, duration, xdp_rps, xdp_latency, vllm_rps, vllm_latency,
-        xdp_marker, xdp_fifo, vllm_marker, vllm_fifo,
+        concurrency, timestamp, duration, route_label, route_rps, route_latency, vllm_rps,
+        vllm_latency, route_marker, route_fifo, vllm_marker, vllm_fifo,
     )
 
 
@@ -141,10 +156,13 @@ def percentage_range(values: list[float]) -> str:
     return f"{min(values) * 100:.2f}%–{max(values) * 100:.2f}%"
 
 
-def compile_report(results_dir: Path, output: Path) -> None:
+def compile_report(results_dir: Path, output: Path, route_variant: str = "auto") -> None:
     performance_dir = results_dir / "routing-performance"
     correctness_dir = results_dir / "routing-correctness"
-    performance = [parse_performance(performance_dir / f"routing_performance_{value}.md") for value in PERFORMANCE_CONCURRENCIES]
+    performance = [
+        parse_performance(performance_dir / f"routing_performance_{value}.md", route_variant)
+        for value in PERFORMANCE_CONCURRENCIES
+    ]
     correctness = [
         parse_correctness(correctness_dir / f"routing_correctness_benchmark_concurrency_{value}.md")
         for value in CORRECTNESS_CONCURRENCIES
@@ -153,32 +171,37 @@ def compile_report(results_dir: Path, output: Path) -> None:
     durations = {result.duration for result in performance}
     if len(durations) != 1:
         raise ValueError(f"performance reports use different durations: {', '.join(sorted(durations))}")
+    route_labels = {result.route_label for result in performance}
+    if len(route_labels) != 1:
+        raise ValueError("performance reports mix XSR variants; rerun a consistent sweep or set --route explicitly")
+    route_label = route_labels.pop()
 
     lines = [
         "# XDP vs. vLLM-SR benchmark summary",
         "",
         f"- Ran on {display_timestamp(performance[0].timestamp)}",
         f"- Duration of test: {durations.pop()} per concurrency level",
+        f"- Routing path: {route_label}",
         "",
-        "| Concurrency | XDP requests/s | XDP average latency | vLLM-SR requests/s | vLLM-SR average latency | XDP throughput advantage | XDP latency advantage |",
+        f"| Concurrency | {route_label} requests/s | {route_label} average latency | vLLM-SR requests/s | vLLM-SR average latency | {route_label} throughput advantage | {route_label} latency advantage |",
         "| ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
     ]
     for result in performance:
         lines.append(
-            f"| {result.concurrency} | {result.xdp_rps:,.2f} | {display_latency(result.xdp_latency)} | "
+            f"| {result.concurrency} | {result.route_rps:,.2f} | {display_latency(result.route_latency)} | "
             f"{result.vllm_rps:,.2f} | {display_latency(result.vllm_latency)} | "
-            f"{result.xdp_rps / result.vllm_rps:.1f}x | "
-            f"{latency_to_us(result.vllm_latency) / latency_to_us(result.xdp_latency):.1f}x |"
+            f"{result.route_rps / result.vllm_rps:.1f}x | "
+            f"{latency_to_us(result.vllm_latency) / latency_to_us(result.route_latency):.1f}x |"
         )
 
     lines += [
         "",
         "## Routing-marker checks",
         "",
-        "| Metric across the sweep | XDP | vLLM-SR |",
+        f"| Metric across the sweep | {route_label} | vLLM-SR |",
         "| --- | ---: | ---: |",
-        f"| Aggregate route-distribution agreement | {percentage_range([item.xdp_marker_agreement for item in performance])} | {percentage_range([item.vllm_marker_agreement for item in performance])} |",
-        f"| FIFO response-marker agreement | {percentage_range([item.xdp_fifo_agreement for item in performance])} | {percentage_range([item.vllm_fifo_agreement for item in performance])} |",
+        f"| Aggregate route-distribution agreement | {percentage_range([item.route_marker_agreement for item in performance])} | {percentage_range([item.vllm_marker_agreement for item in performance])} |",
+        f"| FIFO response-marker agreement | {percentage_range([item.route_fifo_agreement for item in performance])} | {percentage_range([item.vllm_fifo_agreement for item in performance])} |",
         "",
         "## Routing-correctness checks",
         "",
@@ -218,9 +241,10 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--results-dir", type=Path, default=DEFAULT_RESULTS_DIR)
     parser.add_argument("--output", type=Path, default=DEFAULT_RESULTS_DIR / "wrk_benchmark.md")
+    parser.add_argument("--route", choices=("auto", *ROUTE_VARIANTS), default="auto")
     args = parser.parse_args()
     try:
-        compile_report(args.results_dir, args.output)
+        compile_report(args.results_dir, args.output, args.route)
     except (OSError, ValueError) as error:
         parser.error(str(error))
     print(f"Wrote {args.output}")

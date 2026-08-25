@@ -21,6 +21,7 @@ XDP_HOST_ADDR ?= 10.10.0.1/24
 XDP_PEER_ADDR ?= 10.10.0.2/24
 KEYWORD_POLICY ?= config/policy_ngram.yaml
 VSR_BACKEND_PORTS ?= 18391 18392 18393 18394 18395
+RESULT_ROUTE ?= auto
 # Optional arguments forwarded by `make correctness`, for example:
 # sudo make correctness args="--modes direct-netns,xdp"
 args ?=
@@ -45,7 +46,7 @@ help:
 	@echo "                           Run direct, XSR (SOCKMAP), and vLLM-SR benchmarks"
 	@echo "  sudo make wrk [args=\"...\"]"
 	@echo "                           Alias for performance"
-	@echo "  make results"
+	@echo "  make results [RESULT_ROUTE=auto|sockmap|legacy]"
 	@echo "                           Compile raw benchmark reports into results/wrk_benchmark.md"
 	@echo "  make clean               Remove built binaries and generated policy headers"
 	@echo "  sudo make clean-setup    Remove ns1 and veth0"
@@ -91,7 +92,7 @@ performance:
 wrk: performance
 
 results:
-	$(PYTHON) benchmarks/compile_results.py
+	$(PYTHON) benchmarks/compile_results.py --route "$(RESULT_ROUTE)"
 
 check:
 	@command -v "$(CC)" >/dev/null || { echo "Error: compiler '$(CC)' is required." >&2; exit 1; }
