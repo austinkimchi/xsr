@@ -11,12 +11,12 @@
 
 #include <bpf/bpf_helpers.h>
 
-#include "xdp_decision.bpf.h"
 #include "xdp_classifier.bpf.h"
+#include "xdp_decision.bpf.h"
 #include "xdp_router.h"
 #include "xdp_signals.bpf.h"
 
-#define SK_ROUTER_MAX_SOCKS 4096
+#define SK_ROUTER_MAX_SOCKS 16384
 #define SK_ROUTER_MAX_SCAN 512
 #define SK_ROUTER_MAX_HEADER 2000
 #define SK_ROUTER_MAX_REQUEST (256 * 1024)
@@ -129,10 +129,28 @@ static __always_inline unsigned char content_length_char(__u32 pos) {
 
 static __always_inline unsigned char content_key_char(__u32 pos) {
   switch (pos) {
-  case 0: return '"'; case 1: return 'c'; case 2: return 'o';
-  case 3: return 'n'; case 4: return 't'; case 5: return 'e';
-  case 6: return 'n'; case 7: return 't'; case 8: return '"';
-  case 9: return ':'; default: return 0;
+  case 0:
+    return '"';
+  case 1:
+    return 'c';
+  case 2:
+    return 'o';
+  case 3:
+    return 'n';
+  case 4:
+    return 't';
+  case 5:
+    return 'e';
+  case 6:
+    return 'n';
+  case 7:
+    return 't';
+  case 8:
+    return '"';
+  case 9:
+    return ':';
+  default:
+    return 0;
   }
 }
 
@@ -215,10 +233,9 @@ static long scan_content_callback(__u32 i, void *data) {
       flow->unicode_value = (flow->unicode_value << 4) | hex;
       flow->unicode_remaining--;
       if (!flow->unicode_remaining) {
-        xdp_classifier_score_char(&flow->classifier,
-                                  flow->unicode_value <= 0x7f
-                                      ? flow->unicode_value
-                                      : ' ');
+        xdp_classifier_score_char(&flow->classifier, flow->unicode_value <= 0x7f
+                                                         ? flow->unicode_value
+                                                         : ' ');
         flow->unicode_value = 0;
       }
       return 0;
@@ -378,8 +395,8 @@ int sk_router_verdict(struct __sk_buff *skb) {
   bpf_map_delete_elem(&sk_route_decisions, &cookie);
   bpf_map_delete_elem(&sk_http_flows, &cookie);
   increment_counter(COUNT_CONTENT_FOUND);
-  result = bpf_sk_redirect_map(skb, &sk_sock_map, target_slot,
-                               SK_REDIRECT_FLAGS);
+  result =
+      bpf_sk_redirect_map(skb, &sk_sock_map, target_slot, SK_REDIRECT_FLAGS);
   if (result != SK_PASS)
     increment_counter(COUNT_NO_PAYLOAD);
   return result;

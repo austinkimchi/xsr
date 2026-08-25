@@ -25,10 +25,10 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
-#include "xdp_router.h"
 #include "bpf/xdp_jaccard_classifier.bpf.h"
 #include "bpf/xdp_jaccard_policy.generated.h"
 #include "bpf/xdp_signals.bpf.h"
+#include "xdp_router.h"
 
 #define BPF_OBJECT_FILE "sk_router.bpf.o"
 #define XDP_BPF_OBJECT_FILE "xdp_router.bpf.o"
@@ -47,7 +47,7 @@
 #define SK_MODEL_OTHERS 3
 #define SK_MODEL_QA 4
 #define SK_MODEL_WRITING 5
-#define MAX_SOCK_SLOTS 4096
+#define MAX_SOCK_SLOTS 16384
 #define MAX_HTTP_MESSAGE (256 * 1024)
 
 struct xdp_decision_rule {
@@ -213,7 +213,8 @@ static int populate_decision_rules(int rules_fd) {
 static int populate_jaccard_policy(struct bpf_object *obj) {
   int config_fd = bpf_object__find_map_fd_by_name(obj, "xdp_jaccard_config");
   int rules_fd = bpf_object__find_map_fd_by_name(obj, "xdp_jaccard_rules");
-  int keywords_fd = bpf_object__find_map_fd_by_name(obj, "xdp_jaccard_keywords");
+  int keywords_fd =
+      bpf_object__find_map_fd_by_name(obj, "xdp_jaccard_keywords");
   int grams_fd = bpf_object__find_map_fd_by_name(obj, "xdp_jaccard_gram_masks");
   __u32 key = 0;
 
@@ -234,7 +235,9 @@ static int populate_jaccard_policy(struct bpf_object *obj) {
     for (__u32 gram_index = 0;
          gram_index < xdp_jaccard_generated_keywords[key].count; gram_index++)
       for (__u8 occurrence = 1;
-           occurrence <= xdp_jaccard_generated_keywords[key].gram_counts[gram_index]; occurrence++) {
+           occurrence <=
+           xdp_jaccard_generated_keywords[key].gram_counts[gram_index];
+           occurrence++) {
         struct xdp_jaccard_gram_key gram_key = {
             .gram = xdp_jaccard_generated_keywords[key].grams[gram_index],
             .occurrence = occurrence,
@@ -318,15 +321,15 @@ static int start_xdp_classifier(struct xdp_classifier_runtime *runtime) {
     return -1;
   }
 
-  rules_fd = bpf_object__find_map_fd_by_name(runtime->obj,
-                                             "xdp_decision_rules");
+  rules_fd =
+      bpf_object__find_map_fd_by_name(runtime->obj, "xdp_decision_rules");
   if (rules_fd < 0 || populate_decision_rules(rules_fd) != 0) {
     perror("populate_decision_rules");
     return -1;
   }
 
-  runtime->decisions_fd = bpf_object__find_map_fd_by_name(
-      runtime->obj, "xdp_flow_decisions");
+  runtime->decisions_fd =
+      bpf_object__find_map_fd_by_name(runtime->obj, "xdp_flow_decisions");
   if (runtime->decisions_fd < 0) {
     fprintf(stderr, "failed to find xdp_flow_decisions map\n");
     return -1;
@@ -518,9 +521,8 @@ static int select_backend_port_from_xdp(int decisions_fd, int client_fd) {
 
   inet_ntop(AF_INET, &key.src_ip, src, sizeof(src));
   inet_ntop(AF_INET, &key.dst_ip, dst, sizeof(dst));
-  fprintf(stderr,
-          "timed out waiting for XDP decision for %s:%u -> %s:%u\n", src,
-          key.src_port, dst, key.dst_port);
+  fprintf(stderr, "timed out waiting for XDP decision for %s:%u -> %s:%u\n",
+          src, key.src_port, dst, key.dst_port);
   errno = ETIMEDOUT;
   return -1;
 }
@@ -548,12 +550,13 @@ static void *proxy_client_thread(void *arg) {
     size_t response_len = 0;
     int backend_port;
     int backend_fd;
-    int read_result = read_http_message(client_fd, request, MAX_HTTP_MESSAGE,
-                                        &request_len);
+    int read_result =
+        read_http_message(client_fd, request, MAX_HTTP_MESSAGE, &request_len);
 
     if (read_result <= 0) {
 #ifdef XDP_DEBUG
-      fprintf(stderr, "failed to read complete HTTP request: result=%d errno=%d\n",
+      fprintf(stderr,
+              "failed to read complete HTTP request: result=%d errno=%d\n",
               read_result, errno);
 #endif
       break;
@@ -584,8 +587,7 @@ static void *proxy_client_thread(void *arg) {
     if (read_http_message(backend_fd, response, MAX_HTTP_MESSAGE,
                           &response_len) <= 0) {
 #ifdef XDP_DEBUG
-      fprintf(stderr, "failed to read backend response: %s\n",
-              strerror(errno));
+      fprintf(stderr, "failed to read backend response: %s\n", strerror(errno));
 #endif
       close(backend_fd);
       break;
@@ -630,8 +632,9 @@ static int run_proxy_router(void) {
 
   printf("XDP-classified routing proxy listening on 0.0.0.0:%d\n",
          FRONTEND_PORT);
-  printf("routes: coding=%d math=%d others=%d qa=%d writing=%d\n", BACKEND_CODING_PORT,
-         BACKEND_MATH_PORT, BACKEND_OTHERS_PORT, BACKEND_QA_PORT, BACKEND_WRITING_PORT);
+  printf("routes: coding=%d math=%d others=%d qa=%d writing=%d\n",
+         BACKEND_CODING_PORT, BACKEND_MATH_PORT, BACKEND_OTHERS_PORT,
+         BACKEND_QA_PORT, BACKEND_WRITING_PORT);
   fflush(stdout);
 
   while (running) {
@@ -721,7 +724,8 @@ static int add_connection_set(int sock_map_fd, int routes_fd, int client_fd,
   others_fd = connect_backend(BACKEND_OTHERS_PORT);
   qa_fd = connect_backend(BACKEND_QA_PORT);
   writing_fd = connect_backend(BACKEND_WRITING_PORT);
-  if (coding_fd < 0 || math_fd < 0 || others_fd < 0 || qa_fd < 0 || writing_fd < 0)
+  if (coding_fd < 0 || math_fd < 0 || others_fd < 0 || qa_fd < 0 ||
+      writing_fd < 0)
     goto fail;
 
   if (update_route(routes_fd, client_fd, &client_entry) != 0) {
@@ -782,8 +786,10 @@ static int add_connection_set(int sock_map_fd, int routes_fd, int client_fd,
     (void)recv(client_fd, &byte, sizeof(byte), MSG_PEEK | MSG_DONTWAIT);
   }
 
-  printf("accepted client slot=%u backends={coding:%u,math:%u,others:%u,qa:%u,writing:%u}\n",
-         client_slot, coding_slot, math_slot, others_slot, qa_slot, writing_slot);
+  printf("accepted client slot=%u "
+         "backends={coding:%u,math:%u,others:%u,qa:%u,writing:%u}\n",
+         client_slot, coding_slot, math_slot, others_slot, qa_slot,
+         writing_slot);
   fflush(stdout);
   return 0;
 
@@ -819,7 +825,8 @@ static int run_sockmap_router(void) {
       verify_backend_available(BACKEND_QA_PORT) != 0 ||
       verify_backend_available(BACKEND_WRITING_PORT) != 0) {
     fprintf(stderr,
-            "required backends missing; expected coding=%d math=%d others=%d qa=%d writing=%d\n",
+            "required backends missing; expected coding=%d math=%d others=%d "
+            "qa=%d writing=%d\n",
             BACKEND_CODING_PORT, BACKEND_MATH_PORT, BACKEND_OTHERS_PORT,
             BACKEND_QA_PORT, BACKEND_WRITING_PORT);
     return 1;
@@ -875,8 +882,9 @@ static int run_sockmap_router(void) {
   }
 
   printf("SK_SKB router listening on 0.0.0.0:%d\n", FRONTEND_PORT);
-  printf("routes: coding=%d math=%d others=%d qa=%d writing=%d\n", BACKEND_CODING_PORT,
-         BACKEND_MATH_PORT, BACKEND_OTHERS_PORT, BACKEND_QA_PORT, BACKEND_WRITING_PORT);
+  printf("routes: coding=%d math=%d others=%d qa=%d writing=%d\n",
+         BACKEND_CODING_PORT, BACKEND_MATH_PORT, BACKEND_OTHERS_PORT,
+         BACKEND_QA_PORT, BACKEND_WRITING_PORT);
   fflush(stdout);
 
   while (running) {
@@ -917,7 +925,8 @@ int main(void) {
       verify_backend_available(BACKEND_QA_PORT) != 0 ||
       verify_backend_available(BACKEND_WRITING_PORT) != 0) {
     fprintf(stderr,
-            "required backends missing; expected coding=%d math=%d others=%d qa=%d writing=%d\n",
+            "required backends missing; expected coding=%d math=%d others=%d "
+            "qa=%d writing=%d\n",
             BACKEND_CODING_PORT, BACKEND_MATH_PORT, BACKEND_OTHERS_PORT,
             BACKEND_QA_PORT, BACKEND_WRITING_PORT);
     return 1;

@@ -10,15 +10,15 @@
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <strings.h>
 #include <string.h>
+#include <strings.h>
 #include <sys/socket.h>
 #include <sys/time.h>
 #include <unistd.h>
 
 #define DEFAULT_PORT 18081
 #define DEFAULT_BACKEND "others"
-#define NUM_WORKERS 256
+#define NUM_WORKERS 512
 
 static int server_fd = -1;
 static volatile int running = 1;
@@ -174,7 +174,8 @@ static void *worker_thread(void *arg) {
         size_t line_len = next - line;
         if (line_len >= 15 && strncasecmp(line, "Content-Length:", 15) == 0) {
           content_length = (size_t)strtoull(line + 15, NULL, 10);
-        } else if (line_len >= 11 && strncasecmp(line, "Connection:", 11) == 0) {
+        } else if (line_len >= 11 &&
+                   strncasecmp(line, "Connection:", 11) == 0) {
           if (contains_close_token(line + 11, line_len - 11)) {
             keep_alive = 0;
           }
@@ -184,7 +185,8 @@ static void *worker_thread(void *arg) {
 
       size_t total_req_len = header_len + content_length;
 
-      // Read remaining body bytes if payload is larger than what we have read so far
+      // Read remaining body bytes if payload is larger than what we have read
+      // so far
       while (running && buf_used < total_req_len) {
         size_t want = sizeof(buf) - 1 - buf_used;
         if (want == 0)
