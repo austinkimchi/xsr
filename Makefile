@@ -2,6 +2,7 @@ CC ?= gcc
 BPF_CLANG ?= clang
 PKG_CONFIG ?= pkg-config
 PYTHON ?= python3
+NOFILE_LIMIT ?= 16384
 
 ARCH := $(shell uname -m)
 BPF_CFLAGS := -O2 -g -target bpf \
@@ -87,7 +88,9 @@ performance:
 	$(MAKE) check-performance
 	$(MAKE) setup
 	$(MAKE) iproutes
-	./benchmarks/run_routing_performance.sh $(args)
+	@ulimit -n $(NOFILE_LIMIT) || { echo "Error: unable to set open-file limit to $(NOFILE_LIMIT)." >&2; exit 1; }; \
+		echo "Effective open-file limit: $$(ulimit -n)"; \
+		./benchmarks/run_routing_performance.sh $(args)
 
 wrk: performance
 
