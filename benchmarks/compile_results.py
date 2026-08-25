@@ -51,16 +51,19 @@ def required_match(pattern: str, text: str, description: str) -> re.Match[str]:
     return match
 
 
-def section(text: str, heading: str) -> str:
-    start = text.find(heading)
-    if start < 0:
-        raise ValueError(f"missing section {heading!r}")
+def section(text: str, headings: tuple[str, ...]) -> tuple[str, str]:
+    for heading in headings:
+        start = text.find(heading)
+        if start >= 0:
+            break
+    else:
+        raise ValueError(f"missing section: {' or '.join(headings)}")
     end = text.find("\n## ", start + len(heading))
-    return text[start:] if end < 0 else text[start:end]
+    return heading, text[start:] if end < 0 else text[start:end]
 
 
-def parse_route_section(text: str, heading: str) -> tuple[float, str, float, float]:
-    route = section(text, heading)
+def parse_route_section(text: str, headings: tuple[str, ...]) -> tuple[float, str, float, float]:
+    heading, route = section(text, headings)
     latency = required_match(r"^\s*Latency\s+(\S+)", route, f"{heading} average latency").group(1)
     rps = float(required_match(r"^Requests/sec:\s+([0-9.]+)", route, f"{heading} requests/s").group(1))
     marker = required_match(
@@ -79,8 +82,14 @@ def parse_performance(path: Path) -> PerformanceResult:
     concurrency = int(required_match(r"^- Connections: `(\d+)`", text, "connection count").group(1))
     timestamp = required_match(r"^- Timestamp: `([^`]+)`", text, "timestamp").group(1)
     duration = required_match(r"^- Duration: `([^`]+)`", text, "duration").group(1)
-    xdp_rps, xdp_latency, xdp_marker, xdp_fifo = parse_route_section(text, "## [2/4] XSR/XDP Route")
-    vllm_rps, vllm_latency, vllm_marker, vllm_fifo = parse_route_section(text, "## [4/4] vLLM-SR Route")
+    xdp_rps, xdp_latency, xdp_marker, xdp_fifo = parse_route_section(
+        text,
+        ("## [2/3] XSR Route", "## [3/4] XSR Route", "## [2/4] XSR/XDP Route"),
+    )
+    vllm_rps, vllm_latency, vllm_marker, vllm_fifo = parse_route_section(
+        text,
+        ("## [3/3] vLLM-SR Route", "## [4/4] vLLM-SR Route"),
+    )
     return PerformanceResult(
         concurrency, timestamp, duration, xdp_rps, xdp_latency, vllm_rps, vllm_latency,
         xdp_marker, xdp_fifo, vllm_marker, vllm_fifo,

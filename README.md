@@ -138,11 +138,14 @@ The correctness suite fetches all 880 rows from the `nvidia/SPEED-Bench` qualita
 ### 5. Run High-Performance Load Benchmark
 Execute the high-throughput `wrk` / `wrk2` load benchmark with dataset prompts:
 ```bash
-# Default run (Concurrency = 4, Duration = 15s)
+# Default run: Direct Backend, XSR (SOCKMAP), and vLLM-SR
 make wrk
 
 # Custom run (e.g. Concurrency = 8, Duration = 20s)
 sudo CONCURRENCY=8 DURATION=20s benchmarks/run_routing_performance.sh
+
+# Include the legacy XDP-classified proxy for comparison
+sudo make performance args="INCLUDE_XDP=1"
 ```
 
 Performance results are saved under `results/routing-performance/` as

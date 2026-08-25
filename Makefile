@@ -42,7 +42,7 @@ help:
 	@echo "  sudo make sockmap-smoke"
 	@echo "                           Verify SOCKMAP routing, including first-request delivery"
 	@echo "  sudo make performance [args=\"CONCURRENCY=1 DURATION=30s ...\"]"
-	@echo "                           Set up and run direct, XSR, SOCKMAP, and vLLM-SR benchmarks"
+	@echo "                           Run direct, XSR (SOCKMAP), and vLLM-SR benchmarks"
 	@echo "  sudo make wrk [args=\"...\"]"
 	@echo "                           Alias for performance"
 	@echo "  make results"
@@ -51,7 +51,7 @@ help:
 	@echo "  sudo make clean-setup    Remove ns1 and veth0"
 	@echo ""
 	@echo "Performance options: VLLM_IP, VLLM_HOST, VLLM_PORT, CONCURRENCY,"
-	@echo "                     DURATION, WRK_BIN, and RATE."
+	@echo "                     DURATION, WRK_BIN, RATE, and INCLUDE_XDP=1 (legacy XSR)."
 
 all: xdp_router sk_router xdp_router.bpf.o sk_router.bpf.o benchmarks/mock_backend
 

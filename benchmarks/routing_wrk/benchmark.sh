@@ -13,6 +13,7 @@ for benchmark_arg in "$@"; do
         DURATION=*) DURATION="${benchmark_arg#DURATION=}" ;;
         WRK_BIN=*) WRK_BIN="${benchmark_arg#WRK_BIN=}" ;;
         RATE=*) RATE="${benchmark_arg#RATE=}" ;;
+        INCLUDE_XDP=*) INCLUDE_XDP="${benchmark_arg#INCLUDE_XDP=}" ;;
     esac
 done
 
@@ -24,6 +25,7 @@ DURATION="${DURATION:-30s}"
 BASE_THREADS="${THREADS:-4}"
 DEFAULT_CONCURRENCIES=(1 2 4 8 10 16 32 64 96)
 RATE="${RATE:-10000}"
+INCLUDE_XDP="${INCLUDE_XDP:-0}"
 XDP_PORT="${XDP_PORT:-18081}"
 CODING_BACKEND_PORT="${CODING_BACKEND_PORT:-18391}"
 MATH_BACKEND_PORT="${MATH_BACKEND_PORT:-18392}"
@@ -54,6 +56,7 @@ if [ "$EUID" -ne 0 ]; then
         DURATION="$DURATION"
         THREADS="$BASE_THREADS"
         RATE="$RATE"
+        INCLUDE_XDP="$INCLUDE_XDP"
         XDP_PORT="$XDP_PORT"
         CODING_BACKEND_PORT="$CODING_BACKEND_PORT"
         MATH_BACKEND_PORT="$MATH_BACKEND_PORT"
@@ -82,6 +85,11 @@ fi
 
 cd "$ROOT_DIR"
 mkdir -p "$REPORT_DIR"
+
+if [ "$INCLUDE_XDP" != "0" ] && [ "$INCLUDE_XDP" != "1" ]; then
+    echo "Error: INCLUDE_XDP must be 0 or 1." >&2
+    exit 1
+fi
 
 if ! ip netns exec "$NETNS" ip link show dev "$XDP_PEER_IF" >/dev/null 2>&1; then
     echo "Error: ${NETNS}/${XDP_PEER_IF} is missing. Run 'make setup' first." >&2
@@ -423,6 +431,13 @@ run_wrk() {
 }
 
 run_benchmark() {
+    local route_count=3
+    local step=1
+
+    if [ "$INCLUDE_XDP" = "1" ]; then
+        route_count=4
+    fi
+
     echo "# High-Performance ${WRK_BIN} Benchmark Results"
     echo ""
     echo "- Timestamp: \`$(date)\`"
@@ -439,33 +454,38 @@ run_benchmark() {
     echo ""
     echo "- Routing backend ports: coding=\`${CODING_BACKEND_PORT}\`, math=\`${MATH_BACKEND_PORT}\`, qa=\`${QA_BACKEND_PORT}\`, writing=\`${WRITING_BACKEND_PORT}\`, others=\`${OTHERS_BACKEND_PORT}\`"
     echo ""
-    echo "## [1/4] Direct Backend"
+    echo "## [${step}/${route_count}] Direct Backend"
     echo "\`\`\`"
     # No route decision occurs for the control, so prompts.lua must not check
     # response markers. XDP was detached before this benchmark began.
     run_wrk 0 "$DIRECT_BACKEND_URL" "direct backend"
     echo "\`\`\`"
     echo ""
+    step=$((step + 1))
 
-    start_routing_proxy proxy
+    if [ "$INCLUDE_XDP" = "1" ]; then
+        start_routing_proxy proxy
 
-    echo "## [2/4] XSR/XDP Route"
-    echo "\`\`\`"
-    run_wrk 1 "$XDP_URL" "XSR/XDP route"
-    echo "\`\`\`"
-    echo ""
-    stop_routing_proxy
+        echo "## [${step}/${route_count}] XSR (legacy) Route"
+        echo "\`\`\`"
+        run_wrk 1 "$XDP_URL" "XSR (legacy) route"
+        echo "\`\`\`"
+        echo ""
+        stop_routing_proxy
+        step=$((step + 1))
+    fi
 
     start_routing_proxy sockmap
-    verify_router_backend_routing "SOCKMAP"
-    echo "## [3/4] SOCKMAP Route"
+    verify_router_backend_routing "XSR"
+    echo "## [${step}/${route_count}] XSR Route"
     echo "\`\`\`"
-    run_wrk 1 "$XDP_URL" "SOCKMAP route"
+    run_wrk 1 "$XDP_URL" "XSR route"
     echo "\`\`\`"
     echo ""
     stop_routing_proxy
+    step=$((step + 1))
 
-    echo "## [4/4] vLLM-SR Route"
+    echo "## [${step}/${route_count}] vLLM-SR Route"
     echo "\`\`\`"
     run_wrk 1 "$VLLM_URL" "vLLM-SR route"
     echo "\`\`\`"
@@ -487,8 +507,8 @@ for CONCURRENCY in "${CONCURRENCIES[@]}"; do
 
     REPORT_FILE="${REPORT_DIR}/routing_performance_${CONCURRENCY}.md"
 
-    # The preceding XSR run leaves a classifier and router behind. Remove both
-    # before each direct control measurement.
+    # The preceding routing run leaves a classifier and router behind. Remove
+    # both before each direct control measurement.
     stop_routing_proxy
     detach_xdp
     wait_for_ns_port "10.10.0.1" "$CODING_BACKEND_PORT" "coding mock backend"
