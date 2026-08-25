@@ -416,16 +416,16 @@ stop_routing_proxy() {
 run_wrk() {
     local output status
     set +e
-    output=$(VERIFY_BACKEND_MARKERS="$1" ip netns exec "$NETNS" "$WRK_BIN" -t"$THREADS" -c"$CONCURRENCY" -d"$DURATION" $RATE_ARG -s "${SCRIPT_DIR}/prompts.lua" "$2" 2>&1)
+    output=$(ip netns exec "$NETNS" "$WRK_BIN" -t"$THREADS" -c"$CONCURRENCY" -d"$DURATION" $RATE_ARG -s "${SCRIPT_DIR}/prompts.lua" "$1" 2>&1)
     status=$?
     set -e
     printf '%s\n' "$output"
     if [ "$status" -ne 0 ]; then
-        echo "Error: ${WRK_BIN} failed for $3 (exit ${status})." >&2
+        echo "Error: ${WRK_BIN} failed for $2 (exit ${status})." >&2
         return "$status"
     fi
     if ! grep -Eq '[[:space:]]*[1-9][0-9]* requests in ' <<<"$output"; then
-        echo "Error: ${WRK_BIN} completed $3 with zero requests; refusing to record an invalid measurement." >&2
+        echo "Error: ${WRK_BIN} completed $2 with zero requests; refusing to record an invalid measurement." >&2
         return 1
     fi
 }
@@ -456,9 +456,9 @@ run_benchmark() {
     echo ""
     echo "## [${step}/${route_count}] Direct Backend"
     echo "\`\`\`"
-    # No route decision occurs for the control, so prompts.lua must not check
-    # response markers. XDP was detached before this benchmark began.
-    run_wrk 0 "$DIRECT_BACKEND_URL" "direct backend"
+    # No route decision occurs for the control. XDP was detached before this
+    # measurement began.
+    run_wrk "$DIRECT_BACKEND_URL" "direct backend"
     echo "\`\`\`"
     echo ""
     step=$((step + 1))
@@ -468,7 +468,7 @@ run_benchmark() {
 
         echo "## [${step}/${route_count}] XSR (legacy) Route"
         echo "\`\`\`"
-        run_wrk 1 "$XDP_URL" "XSR (legacy) route"
+        run_wrk "$XDP_URL" "XSR (legacy) route"
         echo "\`\`\`"
         echo ""
         stop_routing_proxy
@@ -479,7 +479,7 @@ run_benchmark() {
     verify_router_backend_routing "XSR"
     echo "## [${step}/${route_count}] XSR Route"
     echo "\`\`\`"
-    run_wrk 1 "$XDP_URL" "XSR route"
+    run_wrk "$XDP_URL" "XSR route"
     echo "\`\`\`"
     echo ""
     stop_routing_proxy
@@ -487,7 +487,7 @@ run_benchmark() {
 
     echo "## [${step}/${route_count}] vLLM-SR Route"
     echo "\`\`\`"
-    run_wrk 1 "$VLLM_URL" "vLLM-SR route"
+    run_wrk "$VLLM_URL" "vLLM-SR route"
     echo "\`\`\`"
 }
 

@@ -23,7 +23,6 @@ def route_section(heading: str, rps: str) -> str:
 ```
     Latency     1.00ms
 Requests/sec:   {rps}
-[Lua] aggregate route agreement: 0.900000 (90/100); fifo_matches=80 fifo_mismatches=20
 ```
 """
 
@@ -61,7 +60,7 @@ class CompileResultsTests(unittest.TestCase):
         self.assertEqual(result.route_label, "XSR (legacy)")
         self.assertEqual(result.route_rps, 200.0)
 
-    def test_performance_parse_does_not_require_marker_checks(self) -> None:
+    def test_performance_parse_does_not_require_lua_route_checks(self) -> None:
         result = self.parse_report(
             "## [3/4] XSR Route\nLatency     1.00ms\nRequests/sec:   300.00\n"
         )
