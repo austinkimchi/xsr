@@ -11,7 +11,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_RESULTS_DIR = ROOT / "results"
-PERFORMANCE_CONCURRENCIES = (1, 2, 4, 8, 16, 32, 64, 96, 128, 160, 192, 256, 512)
+PERFORMANCE_CONCURRENCIES = (1, 2, 4, 8, 16, 32, 64, 96, 128, 192, 256, 512)
 CORRECTNESS_CONCURRENCIES = (1, 4, 8, 16)
 ROUTE_VARIANTS = {
     "sockmap": (
