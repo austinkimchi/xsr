@@ -4,7 +4,7 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/../.." && pwd)"
-CONCURRENCIES=(1 2 4 8 10 16 32 64 96)
+CONCURRENCIES=(1 2 4 8 16 32 64 96)
 
 if [ "$EUID" -ne 0 ]; then
   echo "Routing performance sweep requires root privileges. Elevating with sudo..."

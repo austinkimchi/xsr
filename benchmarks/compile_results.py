@@ -11,7 +11,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_RESULTS_DIR = ROOT / "results"
-PERFORMANCE_CONCURRENCIES = (1, 2, 4, 8, 10, 16, 32, 64, 96, 128, 160, 192, 256, 512)
+PERFORMANCE_CONCURRENCIES = (1, 2, 4, 8, 16, 32, 64, 96, 128, 160, 192, 256, 512)
 CORRECTNESS_CONCURRENCIES = (1, 4, 8, 16)
 ROUTE_VARIANTS = {
     "sockmap": (
@@ -33,8 +33,16 @@ class PerformanceResult:
     route_label: str
     route_rps: float
     route_latency: str
+    route_avg_rps: float
+    route_p50_latency: str
+    route_p95_latency: str
+    route_p99_latency: str
     vllm_rps: float
     vllm_latency: str
+    vllm_avg_rps: float
+    vllm_p50_latency: str
+    vllm_p95_latency: str
+    vllm_p99_latency: str
 
 
 @dataclass(frozen=True)
@@ -69,11 +77,27 @@ def section(text: str, headings: tuple[str, ...]) -> tuple[str, str]:
     return heading, text[start:] if end < 0 else text[start:end]
 
 
-def parse_route_section(text: str, headings: tuple[str, ...]) -> tuple[str, float, str]:
+def parse_scaled_number(value: str) -> float:
+    match = required_match(r"^([0-9.]+)([kMG]?)$", value, "scaled number")
+    amount, suffix = match.groups()
+    return float(amount) * {"": 1, "k": 1_000, "M": 1_000_000, "G": 1_000_000_000}[suffix]
+
+
+def parse_route_section(
+    text: str, headings: tuple[str, ...]
+) -> tuple[str, float, str, float, str, str, str]:
     heading, route = section(text, headings)
     latency = required_match(r"^\s*Latency\s+(\S+)", route, f"{heading} average latency").group(1)
     rps = float(required_match(r"^Requests/sec:\s+([0-9.]+)", route, f"{heading} requests/s").group(1))
-    return heading, rps, latency
+    avg_rps = parse_scaled_number(
+        required_match(r"^\s*Req/Sec\s+([0-9.]+[kMG]?)", route, f"{heading} average requests/s").group(1)
+    )
+    percentiles = required_match(
+        r"^\[Lua\] latency percentiles: p50=(\S+) p95=(\S+) p99=(\S+)",
+        route,
+        f"{heading} latency percentiles",
+    )
+    return heading, rps, latency, avg_rps, *percentiles.groups()
 
 
 def parse_performance(path: Path, route_variant: str = "auto") -> PerformanceResult:
@@ -85,17 +109,34 @@ def parse_performance(path: Path, route_variant: str = "auto") -> PerformanceRes
         route_headings = ROUTE_VARIANTS["sockmap"][1] + ROUTE_VARIANTS["legacy"][1]
     else:
         route_headings = ROUTE_VARIANTS[route_variant][1]
-    route_heading, route_rps, route_latency = parse_route_section(text, route_headings)
+    (
+        route_heading,
+        route_rps,
+        route_latency,
+        route_avg_rps,
+        route_p50_latency,
+        route_p95_latency,
+        route_p99_latency,
+    ) = parse_route_section(text, route_headings)
     route_label = next(
         label for label, headings in ROUTE_VARIANTS.values() if route_heading in headings
     )
-    _, vllm_rps, vllm_latency = parse_route_section(
+    (
+        _,
+        vllm_rps,
+        vllm_latency,
+        vllm_avg_rps,
+        vllm_p50_latency,
+        vllm_p95_latency,
+        vllm_p99_latency,
+    ) = parse_route_section(
         text,
         ("## [3/3] vLLM-SR Route", "## [4/4] vLLM-SR Route"),
     )
     return PerformanceResult(
-        concurrency, timestamp, duration, route_label, route_rps, route_latency, vllm_rps,
-        vllm_latency,
+        concurrency, timestamp, duration, route_label, route_rps, route_latency, route_avg_rps,
+        route_p50_latency, route_p95_latency, route_p99_latency, vllm_rps, vllm_latency,
+        vllm_avg_rps, vllm_p50_latency, vllm_p95_latency, vllm_p99_latency,
     )
 
 
@@ -177,6 +218,25 @@ def compile_report(results_dir: Path, output: Path, route_variant: str = "auto")
             f"{result.vllm_rps:,.2f} | {display_latency(result.vllm_latency)} | "
             f"{result.route_rps / result.vllm_rps:.1f}x | "
             f"{latency_to_us(result.vllm_latency) / latency_to_us(result.route_latency):.1f}x |"
+        )
+
+    lines += [
+        "",
+        "## Detailed performance summary",
+        "",
+        "Average Req/Sec is the per-thread average reported by wrk.",
+        "",
+        "| Concurrency | XSR avg latency | XSR avg Req/Sec | XSR p50 latency | XSR p95 latency | XSR p99 latency | VSR avg latency | VSR avg Req/Sec | VSR p50 latency | VSR p95 latency | VSR p99 latency |",
+        "| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+    ]
+    for result in performance:
+        lines.append(
+            f"| {result.concurrency} | {display_latency(result.route_latency)} | "
+            f"{result.route_avg_rps:,.2f} | {display_latency(result.route_p50_latency)} | "
+            f"{display_latency(result.route_p95_latency)} | {display_latency(result.route_p99_latency)} | "
+            f"{display_latency(result.vllm_latency)} | {result.vllm_avg_rps:,.2f} | "
+            f"{display_latency(result.vllm_p50_latency)} | {display_latency(result.vllm_p95_latency)} | "
+            f"{display_latency(result.vllm_p99_latency)} |"
         )
 
     lines += [
