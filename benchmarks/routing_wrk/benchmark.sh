@@ -34,6 +34,7 @@ DEFAULT_CONCURRENCIES=(1 2 4 8 16 32 64 96 128 192 256 512)
 RATE="${RATE:-10000}"
 RATES="${RATES:-100 250 500 750 900}"
 VALIDATE_LOAD="${VALIDATE_LOAD:-0}"
+TOPOLOGY_MODE="${TOPOLOGY_MODE:-host}"
 INCLUDE_XDP="${INCLUDE_XDP:-0}"
 XDP_PORT="${XDP_PORT:-18081}"
 CODING_BACKEND_PORT="${CODING_BACKEND_PORT:-18391}"
@@ -56,6 +57,9 @@ DIRECT_BACKEND_URL="${DIRECT_BACKEND_URL:-http://10.10.0.1:${CODING_BACKEND_PORT
 # VLLM_URL is assigned after resolving VLLM_HOST from the root namespace. ns1
 # reaches that address through veth0 with destination-scoped NAT below.
 VLLM_URL="${VLLM_URL:-}"
+ENVOY_ONLY_PORT="${ENVOY_ONLY_PORT:-8898}"
+ENVOY_ONLY_CONTAINER="${ENVOY_ONLY_CONTAINER:-xsr-benchmark-envoy-only-${RUN_ID:-$$}}"
+ENVOY_ONLY_URL="${ENVOY_ONLY_URL:-}"
 REPORT_DIR="${ROOT_DIR}/results/routing-performance"
 
 if [ "$EUID" -ne 0 ]; then
@@ -69,6 +73,7 @@ if [ "$EUID" -ne 0 ]; then
         RATE="$RATE"
         RATES="$RATES"
         VALIDATE_LOAD="$VALIDATE_LOAD"
+        TOPOLOGY_MODE="$TOPOLOGY_MODE"
         INCLUDE_XDP="$INCLUDE_XDP"
         XDP_PORT="$XDP_PORT"
         CODING_BACKEND_PORT="$CODING_BACKEND_PORT"
@@ -87,6 +92,9 @@ if [ "$EUID" -ne 0 ]; then
         XDP_URL="$XDP_URL"
         DIRECT_BACKEND_URL="$DIRECT_BACKEND_URL"
         VLLM_URL="$VLLM_URL"
+        ENVOY_ONLY_PORT="$ENVOY_ONLY_PORT"
+        ENVOY_ONLY_CONTAINER="$ENVOY_ONLY_CONTAINER"
+        ENVOY_ONLY_URL="$ENVOY_ONLY_URL"
     )
     # Only propagate CONCURRENCY when the caller supplied it. Otherwise the
     # elevated invocation must retain the default full sweep.
@@ -108,6 +116,14 @@ if [ "$INCLUDE_XDP" != "0" ] && [ "$INCLUDE_XDP" != "1" ]; then
 fi
 if [ "$VALIDATE_LOAD" != "0" ] && [ "$VALIDATE_LOAD" != "1" ]; then
     echo "Error: VALIDATE_LOAD must be 0 or 1." >&2
+    exit 1
+fi
+if [ "$TOPOLOGY_MODE" = "docker-parity" ]; then
+    echo "Error: TOPOLOGY_MODE=docker-parity is not supported; see benchmarks/routing_wrk/TOPOLOGY.md." >&2
+    exit 1
+fi
+if [ "$TOPOLOGY_MODE" != "host" ]; then
+    echo "Error: TOPOLOGY_MODE must be 'host' (docker-parity is intentionally rejected)." >&2
     exit 1
 fi
 
@@ -224,6 +240,13 @@ fi
 
 ROUTER_PID=""
 VLLM_IF=""
+ENVOY_ONLY_IP=""
+ENVOY_ONLY_IF=""
+ENVOY_ONLY_ROUTE_ADDED=0
+ENVOY_ONLY_NAT_ADDED=0
+ENVOY_ONLY_RAW_ACCEPT_ADDED=0
+ENVOY_ONLY_FORWARD_OUT_ADDED=0
+ENVOY_ONLY_FORWARD_RETURN_ADDED=0
 VLLM_ROUTE_ADDED=0
 VLLM_NAT_ADDED=0
 VLLM_RAW_ACCEPT_ADDED=0
@@ -330,6 +353,62 @@ setup_vllm_route() {
     wait_for_ns_port "$VLLM_IP" "$VLLM_PORT" "vLLM-SR Envoy (${VLLM_HOST})"
 }
 
+start_envoy_only() {
+    local network gateway image config
+    command -v docker >/dev/null 2>&1 || { echo "Error: Docker is required for the Envoy-only benchmark baseline." >&2; return 1; }
+    network="$(docker inspect -f '{{range $name, $_ := .NetworkSettings.Networks}}{{println $name}}{{end}}' "$VLLM_HOST" 2>/dev/null | head -n1)"
+    [ -n "$network" ] || { echo "Error: could not determine Docker network for ${VLLM_HOST}." >&2; return 1; }
+    gateway="$(docker network inspect -f '{{(index .IPAM.Config 0).Gateway}}' "$network" 2>/dev/null)"
+    [ -n "$gateway" ] || { echo "Error: could not determine Docker gateway for ${network}." >&2; return 1; }
+    image="${VLLM_ENVOY_IMAGE:-$(docker inspect -f '{{.Config.Image}}' "$VLLM_HOST" 2>/dev/null)}"
+    [ -n "$image" ] || { echo "Error: could not determine Envoy image for ${VLLM_HOST}." >&2; return 1; }
+    config="${RAW_DIR}/envoy-only.json"
+    python3 "${SCRIPT_DIR}/generate_envoy_only_config.py" --gateway "$gateway" --port "$ENVOY_ONLY_PORT" \
+        --coding-port "$CODING_BACKEND_PORT" --math-port "$MATH_BACKEND_PORT" --qa-port "$QA_BACKEND_PORT" \
+        --writing-port "$WRITING_BACKEND_PORT" --others-port "$OTHERS_BACKEND_PORT" --output "$config"
+    if grep -q 'ext_proc' "$config"; then
+        echo "Error: generated Envoy-only configuration unexpectedly contains ExtProc." >&2
+        return 1
+    fi
+    docker rm -f "$ENVOY_ONLY_CONTAINER" >/dev/null 2>&1 || true
+    docker run -d --name "$ENVOY_ONLY_CONTAINER" --network "$network" \
+        -v "${config}:/etc/envoy/envoy.yaml:ro" "$image" \
+        envoy --config-path /etc/envoy/envoy.yaml >/dev/null
+    if ! docker exec "$ENVOY_ONLY_CONTAINER" envoy --mode validate --config-path /etc/envoy/envoy.yaml >/dev/null 2>&1; then
+        docker logs "$ENVOY_ONLY_CONTAINER" >&2 || true
+        echo "Error: Envoy-only configuration validation failed." >&2
+        return 1
+    fi
+    ENVOY_ONLY_IP="$(docker inspect -f '{{range .NetworkSettings.Networks}}{{if .IPAddress}}{{.IPAddress}}{{end}}{{end}}' "$ENVOY_ONLY_CONTAINER")"
+    [ -n "$ENVOY_ONLY_IP" ] || { echo "Error: Envoy-only container has no bridge IP." >&2; return 1; }
+}
+
+setup_envoy_only_route() {
+    ENVOY_ONLY_IF="$(ip route get "$ENVOY_ONLY_IP" | awk '/ dev / { for (i = 1; i <= NF; i++) if ($i == "dev") { print $(i + 1); exit } }')"
+    [ -n "$ENVOY_ONLY_IF" ] || { echo "Error: could not determine interface to Envoy-only container." >&2; return 1; }
+    if ! ip netns exec "$NETNS" ip route show exact "${ENVOY_ONLY_IP}/32" | grep -q .; then
+        ip netns exec "$NETNS" ip route add "${ENVOY_ONLY_IP}/32" via 10.10.0.1 dev "$XDP_PEER_IF"
+        ENVOY_ONLY_ROUTE_ADDED=1
+    fi
+    iptables -t raw -C PREROUTING -i "$IFNAME" -s 10.10.0.0/24 -d "$ENVOY_ONLY_IP" -p tcp --dport "$ENVOY_ONLY_PORT" -j ACCEPT 2>/dev/null || { iptables -t raw -I PREROUTING 1 -i "$IFNAME" -s 10.10.0.0/24 -d "$ENVOY_ONLY_IP" -p tcp --dport "$ENVOY_ONLY_PORT" -j ACCEPT; ENVOY_ONLY_RAW_ACCEPT_ADDED=1; }
+    iptables -t nat -C POSTROUTING -s 10.10.0.0/24 -d "$ENVOY_ONLY_IP" -o "$ENVOY_ONLY_IF" -j MASQUERADE 2>/dev/null || { iptables -t nat -A POSTROUTING -s 10.10.0.0/24 -d "$ENVOY_ONLY_IP" -o "$ENVOY_ONLY_IF" -j MASQUERADE; ENVOY_ONLY_NAT_ADDED=1; }
+    iptables -C FORWARD -s 10.10.0.0/24 -d "$ENVOY_ONLY_IP" -o "$ENVOY_ONLY_IF" -p tcp --dport "$ENVOY_ONLY_PORT" -j ACCEPT 2>/dev/null || { iptables -I FORWARD 1 -s 10.10.0.0/24 -d "$ENVOY_ONLY_IP" -o "$ENVOY_ONLY_IF" -p tcp --dport "$ENVOY_ONLY_PORT" -j ACCEPT; ENVOY_ONLY_FORWARD_OUT_ADDED=1; }
+    iptables -C FORWARD -s "$ENVOY_ONLY_IP" -d 10.10.0.0/24 -i "$ENVOY_ONLY_IF" -p tcp --sport "$ENVOY_ONLY_PORT" -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT 2>/dev/null || { iptables -I FORWARD 1 -s "$ENVOY_ONLY_IP" -d 10.10.0.0/24 -i "$ENVOY_ONLY_IF" -p tcp --sport "$ENVOY_ONLY_PORT" -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT; ENVOY_ONLY_FORWARD_RETURN_ADDED=1; }
+    ENVOY_ONLY_URL="http://${ENVOY_ONLY_IP}:${ENVOY_ONLY_PORT}/v1/chat/completions"
+    wait_for_ns_port "$ENVOY_ONLY_IP" "$ENVOY_ONLY_PORT" "Envoy-only baseline"
+}
+
+verify_envoy_only_backend_routing() {
+    local expected response
+    echo "Verifying Envoy-only forwarding reaches every marker backend..."
+    for expected in coding math qa writing others; do
+        response=$(ip netns exec "$NETNS" curl --silent --show-error --fail --max-time 10 \
+            -H 'Content-Type: application/json' -H "x-benchmark-backend: ${expected}" \
+            --data '{"model":"MoM","messages":[{"role":"user","content":"benchmark"}]}' "$ENVOY_ONLY_URL") || return 1
+        grep -Fq "\"backend\":\"${expected}\"" <<<"$response" || { echo "Error: Envoy-only expected backend=${expected}, got: ${response}" >&2; return 1; }
+    done
+}
+
 verify_vllm_backend_routing() {
     local expected prompt response
 
@@ -386,6 +465,12 @@ cleanup() {
     if [ "$VLLM_ROUTE_ADDED" = "1" ]; then
         ip netns exec "$NETNS" ip route del "${VLLM_IP}/32" via 10.10.0.1 dev "$XDP_PEER_IF" >/dev/null 2>&1 || true
     fi
+    docker rm -f "$ENVOY_ONLY_CONTAINER" >/dev/null 2>&1 || true
+    [ "$ENVOY_ONLY_NAT_ADDED" = "1" ] && iptables -t nat -D POSTROUTING -s 10.10.0.0/24 -d "$ENVOY_ONLY_IP" -o "$ENVOY_ONLY_IF" -j MASQUERADE >/dev/null 2>&1 || true
+    [ "$ENVOY_ONLY_RAW_ACCEPT_ADDED" = "1" ] && iptables -t raw -D PREROUTING -i "$IFNAME" -s 10.10.0.0/24 -d "$ENVOY_ONLY_IP" -p tcp --dport "$ENVOY_ONLY_PORT" -j ACCEPT >/dev/null 2>&1 || true
+    [ "$ENVOY_ONLY_FORWARD_OUT_ADDED" = "1" ] && iptables -D FORWARD -s 10.10.0.0/24 -d "$ENVOY_ONLY_IP" -o "$ENVOY_ONLY_IF" -p tcp --dport "$ENVOY_ONLY_PORT" -j ACCEPT >/dev/null 2>&1 || true
+    [ "$ENVOY_ONLY_FORWARD_RETURN_ADDED" = "1" ] && iptables -D FORWARD -s "$ENVOY_ONLY_IP" -d 10.10.0.0/24 -i "$ENVOY_ONLY_IF" -p tcp --sport "$ENVOY_ONLY_PORT" -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT >/dev/null 2>&1 || true
+    [ "$ENVOY_ONLY_ROUTE_ADDED" = "1" ] && ip netns exec "$NETNS" ip route del "${ENVOY_ONLY_IP}/32" via 10.10.0.1 dev "$XDP_PEER_IF" >/dev/null 2>&1 || true
     if [ "$IP_FORWARD_CHANGED" = "1" ]; then
         sysctl -w "net.ipv4.ip_forward=${ORIGINAL_IP_FORWARD}" >/dev/null 2>&1 || true
     fi
@@ -492,7 +577,7 @@ run_wrk() {
 }
 
 run_benchmark() {
-    local route_count=3
+    local route_count=4
     local step=1
 
     if [ "$INCLUDE_XDP" = "1" ]; then
@@ -504,6 +589,7 @@ run_benchmark() {
     echo "- Timestamp: \`$(date)\`"
     echo "- Tool: \`${WRK_BIN}\`"
     echo "- Mode: \`${BENCHMARK_MODE}\`"
+    echo "- Topology: XSR (SK_SKB/SOCKMAP)=\`host-veth\`, direct=\`host-veth\`, Envoy-only=\`docker-bridge\`, VSR (Envoy ExtProc)=\`docker-bridge\`"
     echo "- Timed response-body validation: \`disabled\` (routing correctness is measured separately)"
     echo "- Threads: \`${THREADS}\`"
     echo "- Connections: \`${CONCURRENCY}\`"
@@ -526,6 +612,13 @@ run_benchmark() {
     echo ""
     step=$((step + 1))
 
+    echo "## [${step}/${route_count}] Envoy Only"
+    echo "\`\`\`"
+    run_wrk "$ENVOY_ONLY_URL" "Envoy-only route" "envoy-only"
+    echo "\`\`\`"
+    echo ""
+    step=$((step + 1))
+
     if [ "$INCLUDE_XDP" = "1" ]; then
         start_routing_proxy proxy
 
@@ -541,18 +634,18 @@ run_benchmark() {
     start_routing_proxy sockmap
     verify_router_backend_routing "XSR"
     validate_untimed_load "xsr" "$XDP_URL"
-    echo "## [${step}/${route_count}] XSR Route"
+    echo "## [${step}/${route_count}] XSR (SK_SKB/SOCKMAP)"
     echo "\`\`\`"
-    run_wrk "$XDP_URL" "XSR route" "xsr"
+    run_wrk "$XDP_URL" "XSR (SK_SKB/SOCKMAP)" "xsr"
     echo "\`\`\`"
     echo ""
     stop_routing_proxy
     step=$((step + 1))
 
-    echo "## [${step}/${route_count}] vLLM-SR Route"
+    echo "## [${step}/${route_count}] VSR (Envoy ExtProc)"
     echo "\`\`\`"
     validate_untimed_load "vsr" "$VLLM_URL"
-    run_wrk "$VLLM_URL" "vLLM-SR route" "vsr"
+    run_wrk "$VLLM_URL" "VSR (Envoy ExtProc)" "vsr"
     echo "\`\`\`"
 }
 
@@ -593,6 +686,9 @@ for CONCURRENCY in "${CONCURRENCIES[@]}"; do
     wait_for_ns_port "10.10.0.1" "$QA_BACKEND_PORT" "QA mock backend"
     wait_for_ns_port "10.10.0.1" "$WRITING_BACKEND_PORT" "writing mock backend"
     setup_vllm_route
+    start_envoy_only
+    setup_envoy_only_route
+    verify_envoy_only_backend_routing
     verify_vllm_backend_routing
     # Capture tee's PID before run_benchmark starts sk_router in the
     # background, which would otherwise overwrite $!.  Keep the write end in

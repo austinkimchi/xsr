@@ -162,6 +162,12 @@ completed requests; the raw output and failure reason remain under the run's
 `raw/` directory. Set `VALIDATE_LOAD=1` to run a small concurrent marker check
 outside the measured interval.
 
+Every run also includes an `Envoy only` router-only baseline on the same Docker
+bridge as VSR. `XSR (SK_SKB/SOCKMAP)` remains on its existing host-veth path;
+reports state this topology difference explicitly. `TOPOLOGY_MODE=docker-parity`
+is deliberately rejected because the current SOCKMAP socket ownership cannot be
+moved to a bridge container without an invalid cross-namespace socket map.
+
 Legacy examples:
 ```bash
 # Default run: Direct Backend, XSR (SOCKMAP), and vLLM-SR
