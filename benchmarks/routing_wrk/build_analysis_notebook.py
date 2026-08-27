@@ -267,8 +267,10 @@ cells = [
     ax.set_yscale("log")
     ax.margins(x=0.025)
     ax.legend(loc="lower center", bbox_to_anchor=(0.5, 1.01), ncol=2, frameon=False, columnspacing=1.6)
-    ax.grid(axis="y", which="major", color="#d9dee7", linewidth=0.8)
-    ax.grid(axis="y", which="minor", color="#edf0f4", linewidth=0.45)
+    # Keep the logarithmic scale readable without letting its dense minor grid
+    # compete with the series and confidence intervals.
+    ax.grid(False, axis="both", which="both")
+    ax.grid(axis="y", which="major", color="#d9dee7", linewidth=0.75)
     ax.set_axisbelow(True); fig.tight_layout()
     export_figure(fig, "saturation_throughput")
     saturation_throughput.to_csv(EXPORT_DIR / "plotted_saturation_data.csv", index=False)
