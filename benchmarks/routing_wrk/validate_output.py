@@ -16,6 +16,10 @@ ERROR_RE = re.compile(
 )
 HTTP_ERROR_RE = re.compile(r"Non-2xx or 3xx responses:\s*(?P<count>\d+)", re.IGNORECASE)
 REQUESTS_RE = re.compile(r"(?P<count>\d+)\s+requests?\s+in\s+", re.IGNORECASE)
+CONNECTIONS_RE = re.compile(
+    r"\b\d+\s+threads?\s+and\s+(?P<count>\d+)\s+connections?\b",
+    re.IGNORECASE,
+)
 
 
 def invalid_reasons(output: str) -> list[str]:
@@ -33,6 +37,15 @@ def invalid_reasons(output: str) -> list[str]:
         reasons.append("completed-request count was not reported")
     elif all(int(match.group("count")) == 0 for match in request_matches):
         reasons.append("zero completed requests")
+    else:
+        connection_matches = list(CONNECTIONS_RE.finditer(output))
+        if connection_matches:
+            completed = int(request_matches[-1].group("count"))
+            connections = int(connection_matches[-1].group("count"))
+            if completed < connections:
+                reasons.append(
+                    f"completed requests={completed} below connection count={connections}"
+                )
     return reasons
 
 

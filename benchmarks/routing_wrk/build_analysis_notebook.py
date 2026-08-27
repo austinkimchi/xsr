@@ -209,6 +209,9 @@ cells = [
     )
     paper_valid_results = saturation_results[saturation_results.configuration.isin(paper_configurations)].copy()
     diagnostic_results = saturation_results[saturation_results.concurrency.eq(STRESS_CONCURRENCY)].copy()
+    paper_concurrencies = sorted(paper_valid_results.concurrency.unique())
+    if not paper_concurrencies:
+        raise ValueError("No fully valid saturation configuration remains for paper figures")
     validity_summary = saturation_results[saturation_results.metric.eq("throughput_rps")].copy()
     validity_summary["paper_valid"] = validity_summary.configuration.isin(paper_configurations)
     validity_summary["exclusion_reason"] = validity_summary.configuration.map(
@@ -221,7 +224,7 @@ cells = [
     ])
     print("Excluded configurations:")
     display(excluded_configurations if not excluded_configurations.empty else pd.DataFrame([{"configuration": "None", "reason": "No exclusions"}]))
-    print(f"Primary comparison ends at {PAPER_MAX_CONCURRENCY}; c={STRESS_CONCURRENCY} is a diagnostic by policy and validity gate.")
+    print(f"Paper maximum is {PAPER_MAX_CONCURRENCY}; the fully valid comparison currently ends at {max(paper_concurrencies)}. c={STRESS_CONCURRENCY} is diagnostic-only.")
     """),
     markdown("## 5. Saturation throughput"),
     code("""
@@ -525,7 +528,7 @@ cells = [
         return float(frame.iloc[0][CENTRAL_STATISTIC]) if not frame.empty else None
 
     headline_metrics = {
-        "primary_domain": f"request concurrency 1–{PAPER_MAX_CONCURRENCY}",
+        "primary_domain": {"tested_request_concurrencies": [int(value) for value in paper_concurrencies]},
         "peak_xsr_throughput_rps": float(saturation_throughput[saturation_throughput.system.eq("XSR (SK_SKB/SOCKMAP)")][CENTRAL_STATISTIC].max()),
         "xsr_vsr_paired_throughput_speedup_range": ratio_range("XSR (SK_SKB/SOCKMAP)", "VSR (Envoy ExtProc)", "throughput_rps"),
         "xsr_vsr_paired_average_latency_improvement_range": ratio_range("VSR (Envoy ExtProc)", "XSR (SK_SKB/SOCKMAP)", "average_latency_us"),
@@ -546,7 +549,7 @@ cells = [
     (EXPORT_DIR / "paper_metrics.json").write_text(json.dumps(headline_metrics, indent=2) + "\\n", encoding="utf-8")
     summary_lines = [
         "# Routing benchmark paper summary", "",
-        f"Primary comparative figures include request concurrencies 1–{PAPER_MAX_CONCURRENCY}.",
+        "Primary comparative figures include only fully valid tested request concurrencies: " + ", ".join(str(int(value)) for value in paper_concurrencies) + ".",
         f"Concurrency {STRESS_CONCURRENCY} is reported separately because at least one comparison path did not complete the required valid trials.", "",
         f"- Highest fully valid common concurrency: {highest_common_concurrency}",
         f"- Peak XSR throughput: {headline_metrics['peak_xsr_throughput_rps']:.2f} requests/s",
@@ -565,7 +568,7 @@ cells = [
         "- saturation_latency is a 2×2 logarithmic grid for valid XSR/VSR Average, P50, P95, and P99 latency.\\n"
         "- Aggregate error bars are between-trial 95% confidence intervals.\\n"
         "- routing_path_decomposition uses paired per-trial ratios, geometric means, and log-scale 95% intervals because the positive ratios span several orders of magnitude.\\n"
-        "- The broad XSR c=256 throughput interval is data-driven: three paired trials are near zero while two retain about 6–7% of direct throughput.\\n",
+        "- Configurations with incomplete valid-trial coverage are excluded before plotting or calculating headline statistics.\\n",
         encoding="utf-8",
     )
     print(f"Exported paper-ready artifacts to {EXPORT_DIR}")
