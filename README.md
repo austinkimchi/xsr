@@ -136,7 +136,27 @@ concurrency level (for example, `routing_correctness_benchmark_concurrency_4.md`
 The correctness suite fetches all 880 rows from the `nvidia/SPEED-Bench` qualitative/test split. Its `coding`, `math`, `qa`, and `writing` labels map directly to router routes; the other seven SPEED-Bench categories map to `others`.
 
 ### 5. Run High-Performance Load Benchmark
-Execute the high-throughput `wrk` / `wrk2` load benchmark with dataset prompts:
+
+Saturation and fixed-rate experiments are deliberately separate: `wrk` measures
+closed-loop maximum throughput, while `wrk2` measures latency at a specified
+open-loop offered rate. The runner never substitutes one for the other.
+
+```bash
+# Saturation mode (default): standard wrk, closed-loop concurrency.
+sudo make performance
+
+# Fixed-rate mode: build the explicitly pinned local wrk2 first, then use the
+# same offered-rate list for every routing implementation.
+make install-wrk2
+sudo RATES="100 250 500 750 900" make performance-fixed-rate
+```
+
+The fixed-rate reports include the requested rate, achieved rate, average
+latency, P50/P95/P99, and the raw tool output. Performance reports do not
+inspect response bodies during timed execution; route correctness is validated
+by the separate correctness benchmark and preflight requests.
+
+Legacy examples:
 ```bash
 # Default run: Direct Backend, XSR (SOCKMAP), and vLLM-SR
 make wrk

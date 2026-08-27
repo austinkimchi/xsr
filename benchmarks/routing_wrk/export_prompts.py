@@ -247,7 +247,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Export dataset prompts to JSONL")
     parser.add_argument("--output", type=Path, default=ROOT / "benchmarks" / "dataset_prompts.jsonl")
     parser.add_argument("--config", type=Path, default=ROOT / "config" / "policy_ngram.yaml")
-    parser.add_argument("--dataset", choices=sorted(DATASETS), default="supralabs")
+    parser.add_argument("--dataset", choices=sorted(DATASETS), default="speed-bench")
     parser.add_argument("--scan-limit", type=int, default=2000)
     parser.add_argument("--per-route", type=int, default=50)
     parser.add_argument("--cache-dir", type=Path, default=DEFAULT_CACHE_DIR)
@@ -333,11 +333,11 @@ def main() -> None:
 
     labels = [label for _, label in reviewed_cases]
     counts = {route: labels.count(route) for route in ROUTES}
+    rendered_counts = ", ".join(f"{route}={counts[route]}" for route in ROUTES)
     print(
         f"Successfully exported {len(reviewed_cases)} prompts to {args.output} "
         f"(labeler={args.labeler}, ai_labeled={ai_count}, reviewed={review_count}, "
-        f"skipped={skip_count}, coding={counts['coding']}, "
-        f"math={counts['math']}, others={counts['others']})"
+        f"skipped={skip_count}, {rendered_counts})"
     )
 
 if __name__ == "__main__":

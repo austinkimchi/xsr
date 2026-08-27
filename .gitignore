@@ -26,5 +26,8 @@ tests/vllm-sr-bert-stack/
 results/*
 !results/wrk_benchmark.md
 
+# Explicit, repository-local benchmark tool installations
+.tools/
+
 # Generated policy headers
 bpf/xdp_jaccard_policy.generated.h

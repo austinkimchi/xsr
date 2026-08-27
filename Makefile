@@ -36,7 +36,9 @@ help:
 	@echo "  make dev                 Clean and build with debug/profile instrumentation"
 	@echo "  make prod                Clean and build optimized binaries"
 	@echo "  make check               Check required build and network dependencies"
-	@echo "  make check-performance   Check dependencies plus wrk/wrk2"
+	@echo "  make check-performance   Check dependencies plus saturation-mode wrk"
+	@echo "  make check-performance-fixed-rate  Check dependencies plus fixed-rate wrk2"
+	@echo "  make install-wrk2        Build the pinned wrk2 release in .tools/wrk2/"
 	@echo "  sudo make setup          Create or repair ns1 and the veth0/veth1 pair"
 	@echo "  sudo make iproutes       Allow benchmark backend ports through INPUT"
 	@echo "  sudo make correctness [args=\"...\"]"
@@ -44,7 +46,9 @@ help:
 	@echo "  sudo make sockmap-smoke"
 	@echo "                           Verify SOCKMAP routing, including first-request delivery"
 	@echo "  sudo make performance [args=\"CONCURRENCY=1 DURATION=30s ...\"]"
-	@echo "                           Run direct, XSR (SOCKMAP), and vLLM-SR benchmarks"
+	@echo "                           Run the saturation (wrk) benchmark"
+	@echo "  sudo make performance-fixed-rate [args=\"RATES='100 250 500' ...\"]"
+	@echo "                           Run the fixed-rate (wrk2) benchmark"
 	@echo "  sudo make wrk [args=\"...\"]"
 	@echo "                           Alias for performance"
 	@echo "  make results [RESULT_ROUTE=auto|sockmap|legacy]"
@@ -53,7 +57,7 @@ help:
 	@echo "  sudo make clean-setup    Remove ns1 and veth0"
 	@echo ""
 	@echo "Performance options: VLLM_IP, VLLM_HOST, VLLM_PORT, CONCURRENCY,"
-	@echo "                     DURATION, WRK_BIN, RATE, and INCLUDE_XDP=1 (legacy XSR)."
+	@echo "                     DURATION, WRK_BIN, WRK2_BIN, RATE/RATES, and INCLUDE_XDP=1 (legacy XSR)."
 
 all: xdp_router sk_router xdp_router.bpf.o sk_router.bpf.o benchmarks/mock_backend
 
@@ -90,7 +94,16 @@ performance:
 	$(MAKE) iproutes
 	@ulimit -n $(NOFILE_LIMIT) || { echo "Error: unable to set open-file limit to $(NOFILE_LIMIT)." >&2; exit 1; }; \
 		echo "Effective open-file limit: $$(ulimit -n)"; \
-		./benchmarks/run_routing_performance.sh $(args)
+		BENCHMARK_MODE=saturation ./benchmarks/run_routing_performance.sh $(args)
+
+performance-fixed-rate:
+	$(require_sudo)
+	$(MAKE) check-performance-fixed-rate
+	$(MAKE) setup
+	$(MAKE) iproutes
+	@ulimit -n $(NOFILE_LIMIT) || { echo "Error: unable to set open-file limit to $(NOFILE_LIMIT)." >&2; exit 1; }; \
+		echo "Effective open-file limit: $$(ulimit -n)"; \
+		BENCHMARK_MODE=fixed-rate ./benchmarks/run_routing_performance.sh $(args)
 
 wrk: performance
 
@@ -108,7 +121,13 @@ check:
 	@command -v iptables >/dev/null || { echo "Error: iptables is required." >&2; exit 1; }
 
 check-performance: check
-	@command -v wrk2 >/dev/null || command -v wrk >/dev/null || { echo "Error: wrk or wrk2 is required for performance benchmarks." >&2; exit 1; }
+	@command -v wrk >/dev/null || { echo "Error: saturation mode requires standard wrk. Install it with your package manager (for example: apt-get install wrk)." >&2; exit 1; }
+
+check-performance-fixed-rate: check
+	@test -x "$(CURDIR)/.tools/wrk2/wrk" || command -v "$${WRK2_BIN:-wrk2}" >/dev/null || { echo "Error: fixed-rate mode requires wrk2. Run 'make install-wrk2' or set WRK2_BIN=/path/to/wrk2." >&2; exit 1; }
+
+install-wrk2:
+	./benchmarks/routing_wrk/install_wrk2.sh
 
 xdp_router: xdp_router.c xdp_router.h bpf/xdp_jaccard_classifier.bpf.h bpf/xdp_jaccard_policy.generated.h
 	$(CC) $(USER_CFLAGS) $< -o $@ $(LIBBPF_FLAGS)
@@ -173,4 +192,4 @@ iproutes:
 	done
 	@echo "benchmark backend ports allowed: $(VSR_BACKEND_PORTS)"
 
-.PHONY: help all dev prod correctness sockmap-smoke performance wrk results check check-performance clean clean-setup setup iproutes
+.PHONY: help all dev prod correctness sockmap-smoke performance performance-fixed-rate wrk results check check-performance check-performance-fixed-rate install-wrk2 clean clean-setup setup iproutes

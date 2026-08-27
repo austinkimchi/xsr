@@ -12,7 +12,10 @@ for benchmark_arg in "$@"; do
         CONCURRENCY=*) CONCURRENCY="${benchmark_arg#CONCURRENCY=}" ;;
         DURATION=*) DURATION="${benchmark_arg#DURATION=}" ;;
         WRK_BIN=*) WRK_BIN="${benchmark_arg#WRK_BIN=}" ;;
+        WRK2_BIN=*) WRK2_BIN="${benchmark_arg#WRK2_BIN=}" ;;
+        BENCHMARK_MODE=*) BENCHMARK_MODE="${benchmark_arg#BENCHMARK_MODE=}" ;;
         RATE=*) RATE="${benchmark_arg#RATE=}" ;;
+        RATES=*) RATES="${benchmark_arg#RATES=}" ;;
         INCLUDE_XDP=*) INCLUDE_XDP="${benchmark_arg#INCLUDE_XDP=}" ;;
     esac
 done
@@ -20,11 +23,15 @@ done
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
-WRK_BIN="${WRK_BIN:-wrk2}"
+BENCHMARK_MODE="${BENCHMARK_MODE:-saturation}"
+WRK2_LOCAL_BIN="${ROOT_DIR}/.tools/wrk2/wrk"
+WRK2_BIN="${WRK2_BIN:-$WRK2_LOCAL_BIN}"
+WRK_BIN="${WRK_BIN:-}"
 DURATION="${DURATION:-30s}"
 BASE_THREADS="${THREADS:-4}"
 DEFAULT_CONCURRENCIES=(1 2 4 8 16 32 64 96 128 192 256 512)
 RATE="${RATE:-10000}"
+RATES="${RATES:-100 250 500 750 900}"
 INCLUDE_XDP="${INCLUDE_XDP:-0}"
 XDP_PORT="${XDP_PORT:-18081}"
 CODING_BACKEND_PORT="${CODING_BACKEND_PORT:-18391}"
@@ -53,9 +60,12 @@ if [ "$EUID" -ne 0 ]; then
     echo "Routing benchmark uses sudo for cleanup and firewall setup. Elevating..."
     sudo_env=(
         WRK_BIN="$WRK_BIN"
+        WRK2_BIN="$WRK2_BIN"
+        BENCHMARK_MODE="$BENCHMARK_MODE"
         DURATION="$DURATION"
         THREADS="$BASE_THREADS"
         RATE="$RATE"
+        RATES="$RATES"
         INCLUDE_XDP="$INCLUDE_XDP"
         XDP_PORT="$XDP_PORT"
         CODING_BACKEND_PORT="$CODING_BACKEND_PORT"
@@ -91,19 +101,42 @@ if [ "$INCLUDE_XDP" != "0" ] && [ "$INCLUDE_XDP" != "1" ]; then
     exit 1
 fi
 
+case "$BENCHMARK_MODE" in
+    saturation)
+        if [ -z "$WRK_BIN" ]; then WRK_BIN="wrk"; fi
+        if ! command -v "$WRK_BIN" >/dev/null 2>&1; then
+            echo "Error: saturation mode requires standard wrk; '${WRK_BIN}' is not available." >&2
+            echo "Install wrk with your package manager, then retry 'sudo make performance'." >&2
+            exit 1
+        fi
+        if [ "$(basename "$WRK_BIN")" = "wrk2" ]; then
+            echo "Error: saturation mode requires standard wrk and will not substitute wrk2." >&2
+            exit 1
+        fi
+        RATE_ARG=""
+        ;;
+    fixed-rate)
+        if [ ! -x "$WRK2_BIN" ]; then
+            if command -v "$WRK2_BIN" >/dev/null 2>&1; then
+                WRK2_BIN="$(command -v "$WRK2_BIN")"
+            else
+                echo "Error: fixed-rate mode requires wrk2; '${WRK2_BIN}' is not available." >&2
+                echo "Install the pinned local copy with: make install-wrk2" >&2
+                echo "Or set WRK2_BIN=/path/to/wrk2 and retry 'sudo make performance-fixed-rate'." >&2
+                exit 1
+            fi
+        fi
+        WRK_BIN="$WRK2_BIN"
+        ;;
+    *)
+        echo "Error: BENCHMARK_MODE must be 'saturation' or 'fixed-rate' (got '${BENCHMARK_MODE}')." >&2
+        exit 1
+        ;;
+esac
+
 if ! ip netns exec "$NETNS" ip link show dev "$XDP_PEER_IF" >/dev/null 2>&1; then
     echo "Error: ${NETNS}/${XDP_PEER_IF} is missing. Run 'make setup' first." >&2
     exit 1
-fi
-
-if ! command -v "$WRK_BIN" &> /dev/null; then
-    if command -v wrk &> /dev/null; then
-        WRK_BIN="wrk"
-    else
-        echo "Error: Neither wrk nor wrk2 is installed."
-        echo "Install via: apt-get install wrk (or compile wrk2 from source)"
-        exit 1
-    fi
 fi
 
 if ! command -v curl &> /dev/null; then
@@ -122,8 +155,8 @@ if [ ! -f "benchmarks/dataset_prompts.jsonl" ] || ! head -n 1 benchmarks/dataset
     python3 "${SCRIPT_DIR}/export_prompts.py"
 fi
 
-# Build from the configured development profile on every invocation. Its clean
-# build preserves the existing benchmark profile and picks up policy changes.
+# The quick profile uses development instrumentation; paper runs switch to the
+# production build in the repeated-trial runner added later.
 echo "Building routing proxy and mock backends..."
 make dev KEYWORD_POLICY=config/policy_ngram.yaml
 
@@ -438,14 +471,15 @@ run_benchmark() {
         route_count=4
     fi
 
-    echo "# High-Performance ${WRK_BIN} Benchmark Results"
+    echo "# Routing Performance Benchmark Results"
     echo ""
     echo "- Timestamp: \`$(date)\`"
     echo "- Tool: \`${WRK_BIN}\`"
+    echo "- Mode: \`${BENCHMARK_MODE}\`"
     echo "- Threads: \`${THREADS}\`"
     echo "- Connections: \`${CONCURRENCY}\`"
     echo "- Duration: \`${DURATION}\`"
-    if [ "$WRK_BIN" = "wrk2" ]; then
+    if [ "$BENCHMARK_MODE" = "fixed-rate" ]; then
         echo "- Target Rate: \`${RATE} RPS\`"
         RATE_ARG="-R ${RATE}"
     else
@@ -497,6 +531,13 @@ else
     CONCURRENCIES=("${DEFAULT_CONCURRENCIES[@]}")
 fi
 
+if [ "$BENCHMARK_MODE" = "fixed-rate" ]; then
+    RATE_VALUES=( $RATES )
+else
+    RATE_VALUES=( "$RATE" )
+fi
+
+for RATE in "${RATE_VALUES[@]}"; do
 for CONCURRENCY in "${CONCURRENCIES[@]}"; do
     # Restore the configured thread count for every sweep entry: a low initial
     # concurrency must not clamp the thread count of subsequent runs.
@@ -505,7 +546,11 @@ for CONCURRENCY in "${CONCURRENCIES[@]}"; do
         THREADS="$CONCURRENCY"
     fi
 
-    REPORT_FILE="${REPORT_DIR}/routing_performance_${CONCURRENCY}.md"
+    if [ "$BENCHMARK_MODE" = "fixed-rate" ]; then
+        REPORT_FILE="${REPORT_DIR}/routing_fixed_rate_${RATE}_concurrency_${CONCURRENCY}.md"
+    else
+        REPORT_FILE="${REPORT_DIR}/routing_performance_${CONCURRENCY}.md"
+    fi
 
     # The preceding routing run leaves a classifier and router behind. Remove
     # both before each direct control measurement.
@@ -535,6 +580,7 @@ for CONCURRENCY in "${CONCURRENCIES[@]}"; do
     echo " Benchmark complete! Results saved to:"
     echo "   - ${REPORT_FILE}"
     echo "================================================================="
+done
 done
 
 if [ -n "$SUDO_USER" ]; then
