@@ -616,6 +616,52 @@ cells = [
         "minimum_speedup": "{:.2f}×",
         "maximum_speedup": "{:.2f}×",
     }))
+
+    # Detail XSR's throughput advantage over VSR at each concurrency. The
+    # overall median and maximum use the per-concurrency paired-trial means,
+    # giving every tested concurrency equal weight.
+    xsr_vsr_throughput = throughput_speedups[
+        throughput_speedups.numerator.eq("XSR (SK_SKB/SOCKMAP)")
+        & throughput_speedups.denominator.eq("VSR (Envoy ExtProc)")
+    ].copy()
+    if xsr_vsr_throughput.empty:
+        raise ValueError("No valid paired XSR/VSR throughput trials are available for speedup analysis")
+
+    xsr_vsr_speedup_by_concurrency = (
+        xsr_vsr_throughput
+        .groupby("concurrency", as_index=False)
+        .agg(
+            paired_trial_count=("ratio", "size"),
+            mean_speedup=("ratio", "mean"),
+            median_speedup=("ratio", "median"),
+            geometric_mean_speedup=("ratio", lambda values: float(np.exp(np.log(values).mean()))),
+            minimum_speedup=("ratio", "min"),
+            maximum_speedup=("ratio", "max"),
+        )
+        .sort_values("concurrency")
+        .reset_index(drop=True)
+    )
+    peak_xsr_vsr_speedup = xsr_vsr_speedup_by_concurrency.loc[
+        xsr_vsr_speedup_by_concurrency.mean_speedup.idxmax()
+    ]
+    xsr_vsr_speedup_summary = pd.DataFrame([{
+        "median_per_concurrency_mean_speedup": xsr_vsr_speedup_by_concurrency.mean_speedup.median(),
+        "maximum_per_concurrency_mean_speedup": peak_xsr_vsr_speedup.mean_speedup,
+        "maximum_at_concurrency": int(peak_xsr_vsr_speedup.concurrency),
+    }])
+    print("XSR / VSR throughput speedup by concurrency")
+    display(xsr_vsr_speedup_by_concurrency.style.format({
+        "mean_speedup": "{:.2f}×",
+        "median_speedup": "{:.2f}×",
+        "geometric_mean_speedup": "{:.2f}×",
+        "minimum_speedup": "{:.2f}×",
+        "maximum_speedup": "{:.2f}×",
+    }))
+    print("XSR / VSR throughput speedup summary")
+    display(xsr_vsr_speedup_summary.style.format({
+        "median_per_concurrency_mean_speedup": "{:.2f}×",
+        "maximum_per_concurrency_mean_speedup": "{:.2f}×",
+    }))
     """),
 ]
 
