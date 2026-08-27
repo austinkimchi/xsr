@@ -15,6 +15,7 @@ from typing import Any
 
 
 ROOT = Path(__file__).resolve().parents[2]
+WRK2_CALIBRATION_PATCH = ROOT / "benchmarks/routing_wrk/wrk2-calibration-clock-reset.patch"
 
 
 def command(*args: str) -> str | None:
@@ -99,7 +100,10 @@ def main() -> None:
         "benchmark": {"mode": args.mode, "profile": args.profile, "trial_count": args.trials, "duration": args.duration,
                       "warmup_duration": args.warmup_duration, "concurrency": args.concurrency, "rates": args.rates,
                       "wrk": {"path": args.wrk_bin, "version": command(args.wrk_bin, "--version")},
-                      "wrk2": {"path": args.wrk2_bin, "pinned_revision": "44a94c17d8e6a0bac8559b53da76848e430cb7a7"}},
+                      "wrk2": {"path": args.wrk2_bin, "binary_sha256": sha256(Path(args.wrk2_bin)),
+                               "pinned_revision": "44a94c17d8e6a0bac8559b53da76848e430cb7a7",
+                               "calibration_patch": {"path": str(WRK2_CALIBRATION_PATCH),
+                                                     "sha256": sha256(WRK2_CALIBRATION_PATCH)}}},
         "environment": {"macos_host": unavailable(), "virtualization": unavailable(), "linux_distribution": os_release,
                         "kernel": platform.release(), "cpu_count": os.cpu_count(),
                         "memory": command("sh", "-c", "grep MemTotal /proc/meminfo"),

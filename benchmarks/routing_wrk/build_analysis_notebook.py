@@ -42,7 +42,8 @@ cells = [
     """),
     code("""
     SATURATION_RUN_ID = None
-    FIXED_RATE_RUN_ID = None
+    FIXED_RATE_RUN_ID = "20260827T061337Z-2865536"
+    FIXED_RATE_OVERRIDE_RUN_IDS = ("20260827T093621Z-2998111",)
 
     PAPER_MAX_CONCURRENCY = 256
     STRESS_CONCURRENCY = 512
@@ -116,6 +117,13 @@ cells = [
 
     SATURATION_DIR, saturation_summary = select_run("saturation", SATURATION_RUN_ID)
     FIXED_RATE_DIR, fixed_rate_summary = select_run("fixed-rate", FIXED_RATE_RUN_ID)
+    FIXED_RATE_OVERRIDES = []
+    for override_run_id in FIXED_RATE_OVERRIDE_RUN_IDS:
+        override_dir, override_summary = select_run("fixed-rate", override_run_id)
+        FIXED_RATE_OVERRIDES.append((override_dir, override_summary))
+    FIXED_RATE_RUN_LABEL = "__".join(
+        [FIXED_RATE_DIR.name] + [path.name for path, _ in FIXED_RATE_OVERRIDES]
+    ) if FIXED_RATE_DIR else None
     if SATURATION_DIR is None:
         raise FileNotFoundError("No saturation run is available; a saturation run is required for the paper figures.")
     """),
@@ -132,6 +140,9 @@ cells = [
 
     saturation_metadata = metadata_for(saturation_summary, SATURATION_DIR)
     fixed_rate_metadata = metadata_for(fixed_rate_summary, FIXED_RATE_DIR) if FIXED_RATE_DIR else None
+    fixed_rate_override_metadata = [
+        metadata_for(summary, path) for path, summary in FIXED_RATE_OVERRIDES
+    ]
 
     def provenance_row(run_id, metadata):
         benchmark = metadata.get("benchmark", {})
@@ -152,11 +163,16 @@ cells = [
             "routing_mode": xsr.get("routing_mode"),
         }
 
-    provenance = pd.DataFrame([provenance_row(SATURATION_DIR.name, saturation_metadata)] + (
-        [provenance_row(FIXED_RATE_DIR.name, fixed_rate_metadata)] if FIXED_RATE_DIR else []
-    ))
+    provenance = pd.DataFrame(
+        [provenance_row(SATURATION_DIR.name, saturation_metadata)]
+        + ([provenance_row(FIXED_RATE_DIR.name, fixed_rate_metadata)] if FIXED_RATE_DIR else [])
+        + [
+            provenance_row(path.name, metadata)
+            for (path, _), metadata in zip(FIXED_RATE_OVERRIDES, fixed_rate_override_metadata)
+        ]
+    )
     display(provenance.T)
-    if len(provenance) == 2:
+    if len(provenance) >= 2:
         checked = ["xsr_commit", "policy_sha256", "prompt_corpus_sha256", "vsr_image", "envoy_image"]
         mismatches = [field for field in checked if provenance[field].nunique(dropna=False) > 1]
         if mismatches:
@@ -185,6 +201,17 @@ cells = [
     saturation_results, saturation_trials = load_run(SATURATION_DIR, saturation_summary, "saturation")
     if FIXED_RATE_DIR:
         fixed_rate_results, fixed_rate_trials = load_run(FIXED_RATE_DIR, fixed_rate_summary, "fixed-rate")
+        for override_dir, override_summary in FIXED_RATE_OVERRIDES:
+            override_results, override_trials = load_run(override_dir, override_summary, "fixed-rate")
+            overridden_configurations = set(override_results.configuration)
+            fixed_rate_results = pd.concat([
+                fixed_rate_results[~fixed_rate_results.configuration.isin(overridden_configurations)],
+                override_results,
+            ], ignore_index=True)
+            fixed_rate_trials = pd.concat([
+                fixed_rate_trials[~fixed_rate_trials.configuration.isin(overridden_configurations)],
+                override_trials,
+            ], ignore_index=True)
     else:
         fixed_rate_results, fixed_rate_trials = pd.DataFrame(), pd.DataFrame()
     all_results = pd.concat([saturation_results, fixed_rate_results], ignore_index=True)
@@ -241,7 +268,7 @@ cells = [
         "axes.spines.top": False, "axes.spines.right": False,
         "pdf.fonttype": 42, "ps.fonttype": 42,
     })
-    OUTPUT_RUN_ID = SATURATION_DIR.name if FIXED_RATE_DIR is None else f"{SATURATION_DIR.name}__{FIXED_RATE_DIR.name}"
+    OUTPUT_RUN_ID = SATURATION_DIR.name if FIXED_RATE_DIR is None else f"{SATURATION_DIR.name}__{FIXED_RATE_RUN_LABEL}"
     EXPORT_DIR = REPO_ROOT / "results" / "charts" / OUTPUT_RUN_ID
     EXPORT_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -542,7 +569,11 @@ cells = [
         "vsr_average_latency_overhead_relative_to_envoy_only": ratio_range("VSR (Envoy ExtProc)", "Envoy only", "average_latency_us"),
         "highest_valid_common_concurrency": int(highest_common_concurrency),
         "excluded_configurations": saturation_exclusions,
-        "selected_run_ids": {"saturation": SATURATION_DIR.name, "fixed_rate": FIXED_RATE_DIR.name if FIXED_RATE_DIR else None},
+        "selected_run_ids": {
+            "saturation": SATURATION_DIR.name,
+            "fixed_rate_base": FIXED_RATE_DIR.name if FIXED_RATE_DIR else None,
+            "fixed_rate_overrides": [path.name for path, _ in FIXED_RATE_OVERRIDES],
+        },
         "provenance": provenance.to_dict("records"),
     }
     print(json.dumps(headline_metrics, indent=2))
@@ -559,7 +590,7 @@ cells = [
         f"- Highest fully valid common concurrency: {highest_common_concurrency}",
         f"- Peak XSR throughput: {headline_metrics['peak_xsr_throughput_rps']:.2f} requests/s",
         f"- Saturation run: `{SATURATION_DIR.name}`",
-        f"- Fixed-rate run: `{FIXED_RATE_DIR.name if FIXED_RATE_DIR else 'not available'}`",
+        f"- Fixed-rate run composition: `{FIXED_RATE_RUN_LABEL if FIXED_RATE_RUN_LABEL else 'not available'}`",
         "",
         "This summary reports measured comparisons only and does not infer causality.",
     ]

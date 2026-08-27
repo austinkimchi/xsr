@@ -230,25 +230,31 @@ def parse_wrk_output(text: str) -> dict[str, float | int | None]:
 
 def diagnostic_rows(run_dir: Path, records: Iterable[dict[str, Any]], concurrency: int = 512) -> list[dict[str, Any]]:
     """Attach parseable raw output to c=512 records without normalizing it."""
+    def is_readable_file(path: Path) -> bool:
+        try:
+            return path.is_file()
+        except OSError:
+            return False
+
     output: list[dict[str, Any]] = []
     for record in records:
         if record.get("mode") != "saturation" or record.get("concurrency") != concurrency:
             continue
         raw_path = Path(str(record.get("raw_output", "")))
-        if not raw_path.is_file():
+        if not is_readable_file(raw_path):
             raw_path = Path(str(record["result_path"])).with_name("wrk.txt")
-        parsed = parse_wrk_output(raw_path.read_text(encoding="utf-8", errors="replace")) if raw_path.is_file() else {}
+        parsed = parse_wrk_output(raw_path.read_text(encoding="utf-8", errors="replace")) if is_readable_file(raw_path) else {}
         for percentile in ("p50_latency_ms", "p95_latency_ms", "p99_latency_ms"):
             if parsed.get(percentile) is not None:
                 parsed[percentile] = float(parsed[percentile]) / 1_000.0
         invalid_path = raw_path.with_name("invalid.txt")
         reasons = list(record.get("failure_reasons") or [])
-        if invalid_path.is_file():
+        if is_readable_file(invalid_path):
             reasons.extend(line.strip() for line in invalid_path.read_text(encoding="utf-8", errors="replace").splitlines() if line.strip())
         row = dict(record) | parsed
         row.update({
             "failure_reasons": sorted(set(reasons)), "raw_file_path": str(raw_path),
-            "invalid_file_path": str(invalid_path) if invalid_path.is_file() else None,
+            "invalid_file_path": str(invalid_path) if is_readable_file(invalid_path) else None,
             "diagnostic_only": True,
         })
         if row.get("system") == "VSR (Envoy ExtProc)" and row.get("throughput_rps") and row.get("average_latency_ms"):

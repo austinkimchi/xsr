@@ -1,0 +1,16 @@
+diff --git a/src/wrk.c b/src/wrk.c
+index 1049f0b..453b29d 100644
+--- a/src/wrk.c
++++ b/src/wrk.c
+@@ -345,0 +346 @@ static int calibrate(aeEventLoop *loop, long long id, void *data) {
++    connection *c = thread->cs;
+@@ -358 +359,8 @@ static int calibrate(aeEventLoop *loop, long long id, void *data) {
+-    thread->start    = time_us();
++    uint64_t now = time_us();
++    for (uint64_t i = 0; i < thread->connections; i++, c++) {
++        c->thread_start = c->actual_latency_start -
++                (c->complete_at_last_batch_start / c->throughput);
++        c->caught_up = true;
++    }
++
++    thread->start    = now;

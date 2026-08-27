@@ -1,6 +1,9 @@
 """Focused tests for hardened benchmark-analysis helpers."""
 
 import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 from analysis_utils import (
     diagnostic_rows, exclusion_reasons, flatten_summary, paired_ratios,
@@ -54,6 +57,30 @@ class AnalysisUtilsTest(unittest.TestCase):
         self.assertEqual(parsed["timeout_count"], 7)
         self.assertAlmostEqual(parsed["maximum_latency_ms"], 1960.0)
         self.assertAlmostEqual(parsed["throughput_rps"], 526.8)
+
+    def test_diagnostic_rows_fall_back_from_unreadable_archived_path(self):
+        with TemporaryDirectory() as directory:
+            result_path = Path(directory) / "result.json"
+            fallback = result_path.with_name("wrk.txt")
+            fallback.write_text("Requests/sec: 500.25\n", encoding="utf-8")
+            archived = Path("/root/archived/wrk.txt")
+            original_is_file = Path.is_file
+
+            def guarded_is_file(path):
+                if path == archived:
+                    raise PermissionError(path)
+                return original_is_file(path)
+
+            record = {
+                "mode": "saturation", "concurrency": 512,
+                "system": "Direct backend", "raw_output": str(archived),
+                "result_path": str(result_path), "failure_reasons": [],
+            }
+            with patch.object(Path, "is_file", guarded_is_file):
+                rows = diagnostic_rows(Path(directory), [record], 512)
+
+            self.assertEqual(rows[0]["raw_file_path"], str(fallback))
+            self.assertAlmostEqual(rows[0]["throughput_rps"], 500.25)
 
 
 if __name__ == "__main__":

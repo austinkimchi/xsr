@@ -281,6 +281,7 @@ if [ "$START_VLLM_MOCK" = "1" ]; then
 fi
 
 ROUTER_PID=""
+ROUTER_LOG="/tmp/sk_router_wrk.log"
 VLLM_IF=""
 ENVOY_ONLY_IP=""
 ENVOY_ONLY_IF=""
@@ -322,7 +323,7 @@ wait_for_port() {
     while [ "$SECONDS" -lt "$deadline" ]; do
         if ! kill -0 "$ROUTER_PID" >/dev/null 2>&1; then
             echo "Error: sk_router exited before ${name} opened:"
-            cat /tmp/sk_router_wrk.log
+            cat "$ROUTER_LOG"
             exit 1
         fi
         if timeout 1 bash -c ":</dev/tcp/127.0.0.1/${port}" >/dev/null 2>&1; then
@@ -332,7 +333,7 @@ wait_for_port() {
     done
 
     echo "Error: ${name} did not open on port ${port}; router log:"
-    cat /tmp/sk_router_wrk.log
+    cat "$ROUTER_LOG"
     exit 1
 }
 
@@ -537,18 +538,21 @@ detach_xdp() {
 
 start_routing_proxy() {
     local mode="${1:-proxy}"
+    local log_path="${2:-/tmp/sk_router_wrk.log}"
 
     echo "Starting routing proxy (${mode})..."
+    ROUTER_LOG="$log_path"
+    mkdir -p "$(dirname "$ROUTER_LOG")"
     if [ "$mode" = "sockmap" ]; then
-        SK_ROUTER_MODE=sockmap ./sk_router > /tmp/sk_router_wrk.log 2>&1 &
+        SK_ROUTER_MODE=sockmap ./sk_router > "$ROUTER_LOG" 2>&1 &
     else
-        ./sk_router > /tmp/sk_router_wrk.log 2>&1 &
+        ./sk_router > "$ROUTER_LOG" 2>&1 &
     fi
     ROUTER_PID=$!
     wait_for_port "$XDP_PORT" "routing frontend"
     if ! wait_for_ns_port "10.10.0.1" "$XDP_PORT" "routing frontend"; then
         echo "sk_router log:" >&2
-        cat /tmp/sk_router_wrk.log >&2
+        cat "$ROUTER_LOG" >&2
         return 1
     fi
 }
@@ -604,6 +608,15 @@ run_wrk() {
     if [ "$WARMUP_DURATION" != "0" ] && [ "$WARMUP_DURATION" != "0s" ]; then
         ip netns exec "$NETNS" "$WRK_BIN" -t"$THREADS" -c"$CONCURRENCY" -d"$WARMUP_DURATION" $RATE_ARG -s "${SCRIPT_DIR}/prompts.lua" "$1" \
             > "${RAW_DIR}/${3}/warmup.txt" 2>&1 || { echo "Error: warm-up failed for $2." >&2; return 1; }
+        if [ "$3" = "xsr" ]; then
+            # SOCKMAP mode owns five persistent backend sockets for every
+            # accepted frontend connection.  A separate wrk/wrk2 warm-up
+            # process closes its peers, but the userspace router has no
+            # connection reaper and retains those socket sets.  Reset XSR so
+            # the measured process is not competing with stale warm-up state.
+            stop_routing_proxy
+            start_routing_proxy sockmap "${RAW_DIR}/${3}/router-measurement.log" || return 1
+        fi
     fi
     set +e
     output=$(ip netns exec "$NETNS" "$WRK_BIN" -t"$THREADS" -c"$CONCURRENCY" -d"$DURATION" $RATE_ARG -s "${SCRIPT_DIR}/prompts.lua" "$1" 2>&1)
@@ -671,7 +684,11 @@ run_benchmark() {
                 ;;
             xsr)
                 heading="XSR (SK_SKB/SOCKMAP)"
-                start_routing_proxy sockmap || return 1
+                if [ "$WARMUP_DURATION" != "0" ] && [ "$WARMUP_DURATION" != "0s" ]; then
+                    start_routing_proxy sockmap "${RAW_DIR}/${system}/router-warmup.log" || return 1
+                else
+                    start_routing_proxy sockmap "${RAW_DIR}/${system}/router-measurement.log" || return 1
+                fi
                 verify_router_backend_routing "XSR" || return 1
                 validate_untimed_load "xsr" "$XDP_URL" || return 1
                 ;;
