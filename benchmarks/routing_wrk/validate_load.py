@@ -12,7 +12,7 @@ import urllib.request
 CASES = (
     ("coding", "write a python function"),
     ("math", "calculate the derivative of x squared"),
-    ("qa", "what is the capital of France?"),
+    ("qa", "answer this question: what is the capital of France?"),
     ("writing", "write a short poem about rain"),
     ("others", "tell me a short story"),
 )

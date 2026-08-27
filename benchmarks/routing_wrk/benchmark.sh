@@ -11,6 +11,11 @@ for benchmark_arg in "$@"; do
         VLLM_PORT=*) VLLM_PORT="${benchmark_arg#VLLM_PORT=}" ;;
         CONCURRENCY=*) CONCURRENCY="${benchmark_arg#CONCURRENCY=}" ;;
         DURATION=*) DURATION="${benchmark_arg#DURATION=}" ;;
+        WARMUP_DURATION=*) WARMUP_DURATION="${benchmark_arg#WARMUP_DURATION=}" ;;
+        TRIALS=*) TRIALS="${benchmark_arg#TRIALS=}" ;;
+        BENCHMARK_PROFILE=*) BENCHMARK_PROFILE="${benchmark_arg#BENCHMARK_PROFILE=}" ;;
+        RANDOM_SEED=*) RANDOM_SEED="${benchmark_arg#RANDOM_SEED=}" ;;
+        BENCHMARK_DRY_RUN=*) BENCHMARK_DRY_RUN="${benchmark_arg#BENCHMARK_DRY_RUN=}" ;;
         WRK_BIN=*) WRK_BIN="${benchmark_arg#WRK_BIN=}" ;;
         WRK2_BIN=*) WRK2_BIN="${benchmark_arg#WRK2_BIN=}" ;;
         BENCHMARK_MODE=*) BENCHMARK_MODE="${benchmark_arg#BENCHMARK_MODE=}" ;;
@@ -28,7 +33,17 @@ BENCHMARK_MODE="${BENCHMARK_MODE:-saturation}"
 WRK2_LOCAL_BIN="${ROOT_DIR}/.tools/wrk2/wrk"
 WRK2_BIN="${WRK2_BIN:-$WRK2_LOCAL_BIN}"
 WRK_BIN="${WRK_BIN:-}"
-DURATION="${DURATION:-30s}"
+BENCHMARK_PROFILE="${BENCHMARK_PROFILE:-quick}"
+case "$BENCHMARK_PROFILE" in
+    quick) PROFILE_TRIALS=1; PROFILE_DURATION=5s; PROFILE_WARMUP=1s ;;
+    paper) PROFILE_TRIALS=5; PROFILE_DURATION=45s; PROFILE_WARMUP=5s ;;
+    *) echo "Error: BENCHMARK_PROFILE must be 'quick' or 'paper'." >&2; exit 1 ;;
+esac
+TRIALS="${TRIALS:-$PROFILE_TRIALS}"
+DURATION="${DURATION:-$PROFILE_DURATION}"
+WARMUP_DURATION="${WARMUP_DURATION:-$PROFILE_WARMUP}"
+RANDOM_SEED="${RANDOM_SEED:-20260826}"
+BENCHMARK_DRY_RUN="${BENCHMARK_DRY_RUN:-0}"
 BASE_THREADS="${THREADS:-4}"
 DEFAULT_CONCURRENCIES=(1 2 4 8 16 32 64 96 128 192 256 512)
 RATE="${RATE:-10000}"
@@ -68,7 +83,12 @@ if [ "$EUID" -ne 0 ]; then
         WRK_BIN="$WRK_BIN"
         WRK2_BIN="$WRK2_BIN"
         BENCHMARK_MODE="$BENCHMARK_MODE"
+        BENCHMARK_PROFILE="$BENCHMARK_PROFILE"
+        TRIALS="$TRIALS"
         DURATION="$DURATION"
+        WARMUP_DURATION="$WARMUP_DURATION"
+        RANDOM_SEED="$RANDOM_SEED"
+        BENCHMARK_DRY_RUN="$BENCHMARK_DRY_RUN"
         THREADS="$BASE_THREADS"
         RATE="$RATE"
         RATES="$RATES"
@@ -107,8 +127,11 @@ fi
 cd "$ROOT_DIR"
 mkdir -p "$REPORT_DIR"
 RUN_ID="${RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)-$$}"
-RAW_DIR="${REPORT_DIR}/raw/${RUN_ID}"
+RUN_ROOT="${REPORT_DIR}/${RUN_ID}"
+RAW_DIR="${RUN_ROOT}/raw"
 mkdir -p "$RAW_DIR"
+python3 "${SCRIPT_DIR}/manifest.py" --path "${RUN_ROOT}/manifest.json" --run-id "$RUN_ID" --profile "$BENCHMARK_PROFILE" \
+    --mode "$BENCHMARK_MODE" --trials "$TRIALS" --duration "$DURATION" --warmup-duration "$WARMUP_DURATION" --seed "$RANDOM_SEED"
 
 if [ "$INCLUDE_XDP" != "0" ] && [ "$INCLUDE_XDP" != "1" ]; then
     echo "Error: INCLUDE_XDP must be 0 or 1." >&2
@@ -116,6 +139,10 @@ if [ "$INCLUDE_XDP" != "0" ] && [ "$INCLUDE_XDP" != "1" ]; then
 fi
 if [ "$VALIDATE_LOAD" != "0" ] && [ "$VALIDATE_LOAD" != "1" ]; then
     echo "Error: VALIDATE_LOAD must be 0 or 1." >&2
+    exit 1
+fi
+if ! [[ "$TRIALS" =~ ^[1-9][0-9]*$ ]]; then
+    echo "Error: TRIALS must be a positive integer." >&2
     exit 1
 fi
 if [ "$TOPOLOGY_MODE" = "docker-parity" ]; then
@@ -160,6 +187,13 @@ case "$BENCHMARK_MODE" in
         ;;
 esac
 
+if [ "$BENCHMARK_DRY_RUN" = "1" ]; then
+    printf 'profile=%s trials=%s duration=%s warmup_duration=%s build_profile=%s mode=%s tool=%s\n' \
+        "$BENCHMARK_PROFILE" "$TRIALS" "$DURATION" "$WARMUP_DURATION" \
+        "$([ "$BENCHMARK_PROFILE" = paper ] && echo prod || echo dev)" "$BENCHMARK_MODE" "$WRK_BIN"
+    exit 0
+fi
+
 if ! ip netns exec "$NETNS" ip link show dev "$XDP_PEER_IF" >/dev/null 2>&1; then
     echo "Error: ${NETNS}/${XDP_PEER_IF} is missing. Run 'make setup' first." >&2
     exit 1
@@ -181,10 +215,12 @@ if [ ! -f "benchmarks/dataset_prompts.jsonl" ] || ! head -n 1 benchmarks/dataset
     python3 "${SCRIPT_DIR}/export_prompts.py"
 fi
 
-# The quick profile uses development instrumentation; paper runs switch to the
-# production build in the repeated-trial runner added later.
 echo "Building routing proxy and mock backends..."
-make dev KEYWORD_POLICY=config/policy_ngram.yaml
+if [ "$BENCHMARK_PROFILE" = "paper" ]; then
+    make prod KEYWORD_POLICY=config/policy_ngram.yaml
+else
+    make dev KEYWORD_POLICY=config/policy_ngram.yaml
+fi
 
 # Flush old iptables rules for these ports
 iptables -D INPUT -p tcp --dport "${XDP_PORT}" -j ACCEPT >/dev/null 2>&1 || true
@@ -428,7 +464,7 @@ verify_vllm_backend_routing() {
     done <<'EOF'
 coding|write a python function
 math|calculate the derivative of x squared
-qa|what is the capital of France?
+qa|answer this question: what is the capital of France?
 writing|write a short poem about rain
 others|tell me a short story
 EOF
@@ -531,7 +567,7 @@ verify_router_backend_routing() {
     done <<'EOF'
 coding|write a python function
 math|calculate the derivative of x squared
-qa|what is the capital of France?
+qa|answer this question: what is the capital of France?
 writing|write a short poem about rain
 others|tell me a short story
 EOF
@@ -556,8 +592,13 @@ stop_routing_proxy() {
 
 run_wrk() {
     local output status raw_file reason_file reason
-    raw_file="${RAW_DIR}/${3}.txt"
-    reason_file="${RAW_DIR}/${3}.invalid.txt"
+    raw_file="${RAW_DIR}/${3}/wrk.txt"
+    reason_file="${RAW_DIR}/${3}/invalid.txt"
+    mkdir -p "${RAW_DIR}/${3}"
+    if [ "$WARMUP_DURATION" != "0" ] && [ "$WARMUP_DURATION" != "0s" ]; then
+        ip netns exec "$NETNS" "$WRK_BIN" -t"$THREADS" -c"$CONCURRENCY" -d"$WARMUP_DURATION" $RATE_ARG -s "${SCRIPT_DIR}/prompts.lua" "$1" \
+            > "${RAW_DIR}/${3}/warmup.txt" 2>&1 || { echo "Error: warm-up failed for $2." >&2; return 1; }
+    fi
     set +e
     output=$(ip netns exec "$NETNS" "$WRK_BIN" -t"$THREADS" -c"$CONCURRENCY" -d"$DURATION" $RATE_ARG -s "${SCRIPT_DIR}/prompts.lua" "$1" 2>&1)
     status=$?
@@ -566,9 +607,15 @@ run_wrk() {
     printf '%s\n' "$output"
     if [ "$status" -ne 0 ]; then
         printf 'tool exit status=%s\n' "$status" > "$reason_file"
+        python3 "${SCRIPT_DIR}/record_result.py" --raw "$raw_file" --output "${RAW_DIR}/${3}/result.json" \
+            --system "$2" --topology "$(system_topology "$3")" --mode "$BENCHMARK_MODE" --configuration "$CURRENT_CONFIGURATION" \
+            --trial "$CURRENT_TRIAL" --tool "$WRK_BIN" --exit-status "$status"
         echo "Error: ${WRK_BIN} failed for $2 (exit ${status})." >&2
         return "$status"
     fi
+    python3 "${SCRIPT_DIR}/record_result.py" --raw "$raw_file" --output "${RAW_DIR}/${3}/result.json" \
+        --system "$2" --topology "$(system_topology "$3")" --mode "$BENCHMARK_MODE" --configuration "$CURRENT_CONFIGURATION" \
+        --trial "$CURRENT_TRIAL" --tool "$WRK_BIN" --exit-status "$status"
     if ! reason=$(python3 "${SCRIPT_DIR}/validate_output.py" --input "$raw_file"); then
         printf '%s\n' "$reason" > "$reason_file"
         echo "Error: invalid ${WRK_BIN} run for $2: ${reason}. Raw output: ${raw_file}" >&2
@@ -576,13 +623,17 @@ run_wrk() {
     fi
 }
 
-run_benchmark() {
-    local route_count=4
-    local step=1
+system_topology() {
+    case "$1" in
+        direct|xsr|xsr-legacy) echo host-veth ;;
+        envoy-only|vsr) echo docker-bridge ;;
+        *) echo unavailable ;;
+    esac
+}
 
-    if [ "$INCLUDE_XDP" = "1" ]; then
-        route_count=4
-    fi
+run_benchmark() {
+    local route_count="${#SYSTEM_ORDER[@]}"
+    local step=1 system heading
 
     echo "# Routing Performance Benchmark Results"
     echo ""
@@ -603,50 +654,46 @@ run_benchmark() {
     echo ""
     echo "- Routing backend ports: coding=\`${CODING_BACKEND_PORT}\`, math=\`${MATH_BACKEND_PORT}\`, qa=\`${QA_BACKEND_PORT}\`, writing=\`${WRITING_BACKEND_PORT}\`, others=\`${OTHERS_BACKEND_PORT}\`"
     echo ""
-    echo "## [${step}/${route_count}] Direct Backend"
-    echo "\`\`\`"
-    # No route decision occurs for the control. XDP was detached before this
-    # measurement began.
-    run_wrk "$DIRECT_BACKEND_URL" "direct backend" "direct"
-    echo "\`\`\`"
-    echo ""
-    step=$((step + 1))
-
-    echo "## [${step}/${route_count}] Envoy Only"
-    echo "\`\`\`"
-    run_wrk "$ENVOY_ONLY_URL" "Envoy-only route" "envoy-only"
-    echo "\`\`\`"
-    echo ""
-    step=$((step + 1))
-
-    if [ "$INCLUDE_XDP" = "1" ]; then
-        start_routing_proxy proxy
-
-        echo "## [${step}/${route_count}] XSR (legacy) Route"
+    for system in "${SYSTEM_ORDER[@]}"; do
+        case "$system" in
+            direct)
+                heading="Direct backend"
+                detach_xdp || return 1
+                ;;
+            envoy-only)
+                heading="Envoy only"
+                ;;
+            xsr)
+                heading="XSR (SK_SKB/SOCKMAP)"
+                start_routing_proxy sockmap || return 1
+                verify_router_backend_routing "XSR" || return 1
+                validate_untimed_load "xsr" "$XDP_URL" || return 1
+                ;;
+            xsr-legacy)
+                heading="XSR (legacy)"
+                start_routing_proxy proxy || return 1
+                verify_router_backend_routing "XSR (legacy)" || return 1
+                ;;
+            vsr)
+                heading="VSR (Envoy ExtProc)"
+                verify_vllm_backend_routing || return 1
+                validate_untimed_load "vsr" "$VLLM_URL" || return 1
+                ;;
+            *) echo "Error: unsupported benchmark system ${system}." >&2; return 1 ;;
+        esac
+        echo "## [${step}/${route_count}] ${heading}"
         echo "\`\`\`"
-        run_wrk "$XDP_URL" "XSR (legacy) route" "xsr-legacy"
+        case "$system" in
+            direct) run_wrk "$DIRECT_BACKEND_URL" "$heading" "$system" || return 1 ;;
+            envoy-only) run_wrk "$ENVOY_ONLY_URL" "$heading" "$system" || return 1 ;;
+            xsr|xsr-legacy) run_wrk "$XDP_URL" "$heading" "$system" || return 1 ;;
+            vsr) run_wrk "$VLLM_URL" "$heading" "$system" || return 1 ;;
+        esac
         echo "\`\`\`"
         echo ""
-        stop_routing_proxy
+        [ "$system" = "xsr" ] || [ "$system" = "xsr-legacy" ] && stop_routing_proxy
         step=$((step + 1))
-    fi
-
-    start_routing_proxy sockmap
-    verify_router_backend_routing "XSR"
-    validate_untimed_load "xsr" "$XDP_URL"
-    echo "## [${step}/${route_count}] XSR (SK_SKB/SOCKMAP)"
-    echo "\`\`\`"
-    run_wrk "$XDP_URL" "XSR (SK_SKB/SOCKMAP)" "xsr"
-    echo "\`\`\`"
-    echo ""
-    stop_routing_proxy
-    step=$((step + 1))
-
-    echo "## [${step}/${route_count}] VSR (Envoy ExtProc)"
-    echo "\`\`\`"
-    validate_untimed_load "vsr" "$VLLM_URL"
-    run_wrk "$VLLM_URL" "VSR (Envoy ExtProc)" "vsr"
-    echo "\`\`\`"
+    done
 }
 
 if [ "${CONCURRENCY+x}" = "x" ]; then
@@ -661,6 +708,7 @@ else
     RATE_VALUES=( "$RATE" )
 fi
 
+FAILED_TRIALS=0
 for RATE in "${RATE_VALUES[@]}"; do
 for CONCURRENCY in "${CONCURRENCIES[@]}"; do
     # Restore the configured thread count for every sweep entry: a low initial
@@ -671,44 +719,44 @@ for CONCURRENCY in "${CONCURRENCIES[@]}"; do
     fi
 
     if [ "$BENCHMARK_MODE" = "fixed-rate" ]; then
-        REPORT_FILE="${REPORT_DIR}/routing_fixed_rate_${RATE}_concurrency_${CONCURRENCY}.md"
+        CURRENT_CONFIGURATION="rate-${RATE}_concurrency-${CONCURRENCY}"
     else
-        REPORT_FILE="${REPORT_DIR}/routing_performance_${CONCURRENCY}.md"
+        CURRENT_CONFIGURATION="concurrency-${CONCURRENCY}"
     fi
-
-    # The preceding routing run leaves a classifier and router behind. Remove
-    # both before each direct control measurement.
-    stop_routing_proxy
-    detach_xdp
-    wait_for_ns_port "10.10.0.1" "$CODING_BACKEND_PORT" "coding mock backend"
-    wait_for_ns_port "10.10.0.1" "$MATH_BACKEND_PORT" "math mock backend"
-    wait_for_ns_port "10.10.0.1" "$OTHERS_BACKEND_PORT" "others mock backend"
-    wait_for_ns_port "10.10.0.1" "$QA_BACKEND_PORT" "QA mock backend"
-    wait_for_ns_port "10.10.0.1" "$WRITING_BACKEND_PORT" "writing mock backend"
-    setup_vllm_route
-    start_envoy_only
-    setup_envoy_only_route
-    verify_envoy_only_backend_routing
-    verify_vllm_backend_routing
-    # Capture tee's PID before run_benchmark starts sk_router in the
-    # background, which would otherwise overwrite $!.  Keep the write end in
-    # an explicit descriptor so it can be closed after the router exits.
-    exec {report_fd}> >(tee "$REPORT_FILE")
-    tee_pid=$!
-    run_benchmark >&"$report_fd"
-    # sk_router inherits the report pipe; terminate it before closing the
-    # descriptor and waiting for tee, otherwise tee never observes EOF.
-    stop_routing_proxy
-    exec {report_fd}>&-
-    wait "$tee_pid"
-
-    echo ""
-    echo "================================================================="
-    echo " Benchmark complete! Results saved to:"
-    echo "   - ${REPORT_FILE}"
-    echo "================================================================="
+    for CURRENT_TRIAL in $(seq 1 "$TRIALS"); do
+        RAW_DIR="${RUN_ROOT}/raw/${BENCHMARK_MODE}/${CURRENT_CONFIGURATION}/trial-$(printf '%02d' "$CURRENT_TRIAL")"
+        mkdir -p "$RAW_DIR"
+        BASE_SYSTEMS=(direct envoy-only xsr vsr)
+        [ "$INCLUDE_XDP" = "1" ] && BASE_SYSTEMS+=(xsr-legacy)
+        mapfile -t SYSTEM_ORDER < <(python3 -c 'import random, sys; items=sys.argv[1:]; random.Random(int(items.pop(0))).shuffle(items); print(*items, sep="\n")' "$((RANDOM_SEED + CURRENT_TRIAL + CONCURRENCY + RATE))" "${BASE_SYSTEMS[@]}")
+        python3 "${SCRIPT_DIR}/manifest.py" --path "${RUN_ROOT}/manifest.json" --configuration "$CURRENT_CONFIGURATION" --trial "$CURRENT_TRIAL" --order "${SYSTEM_ORDER[@]}"
+        REPORT_FILE="${RAW_DIR}/report.md"
+        stop_routing_proxy
+        detach_xdp
+        wait_for_ns_port "10.10.0.1" "$CODING_BACKEND_PORT" "coding mock backend"
+        wait_for_ns_port "10.10.0.1" "$MATH_BACKEND_PORT" "math mock backend"
+        wait_for_ns_port "10.10.0.1" "$OTHERS_BACKEND_PORT" "others mock backend"
+        wait_for_ns_port "10.10.0.1" "$QA_BACKEND_PORT" "QA mock backend"
+        wait_for_ns_port "10.10.0.1" "$WRITING_BACKEND_PORT" "writing mock backend"
+        setup_vllm_route
+        start_envoy_only
+        setup_envoy_only_route
+        verify_envoy_only_backend_routing
+        if ! run_benchmark > >(tee "$REPORT_FILE"); then
+            printf 'trial failed; see system raw output and invalid.txt files\n' > "${RAW_DIR}/FAILED"
+            FAILED_TRIALS=$((FAILED_TRIALS + 1))
+        fi
+        stop_routing_proxy
+        echo "Benchmark trial ${CURRENT_TRIAL}/${TRIALS}: ${REPORT_FILE}"
+    done
 done
 done
+
+python3 "${SCRIPT_DIR}/aggregate_results.py" --run-dir "$RUN_ROOT" || echo "No completed trial results available for aggregation." >&2
+if [ "$FAILED_TRIALS" -ne 0 ]; then
+    echo "Error: ${FAILED_TRIALS} invalid benchmark trial(s) were excluded from aggregation." >&2
+    exit 1
+fi
 
 if [ -n "$SUDO_USER" ]; then
     chown -R "$SUDO_USER:" "$REPORT_DIR" 2>/dev/null || true

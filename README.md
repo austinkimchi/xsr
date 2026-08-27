@@ -151,6 +151,20 @@ make install-wrk2
 sudo RATES="100 250 500 750 900" make performance-fixed-rate
 ```
 
+Use `BENCHMARK_PROFILE=quick` (the default: one 5-second trial and a 1-second
+warm-up) for smoke tests. `BENCHMARK_PROFILE=paper` schedules five independent
+45-second trials with 5-second warm-ups and uses the production XSR build;
+`TRIALS`, `DURATION`, and `WARMUP_DURATION` remain overridable. Each invocation
+creates `results/routing-performance/<run-id>/` with a manifest, recoverable
+per-system raw output, and CSV/JSON/Markdown summaries. Trial order is
+deterministically shuffled and recorded with its random seed.
+
+```bash
+sudo BENCHMARK_PROFILE=quick CONCURRENCY=1 make performance
+sudo BENCHMARK_PROFILE=paper make performance
+sudo BENCHMARK_PROFILE=paper RATES="100 250 500 750 900" make performance-fixed-rate
+```
+
 The fixed-rate reports include the requested rate, achieved rate, average
 latency, P50/P95/P99, and the raw tool output. Performance reports do not
 inspect response bodies during timed execution; route correctness is validated
