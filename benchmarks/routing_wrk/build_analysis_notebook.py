@@ -662,6 +662,22 @@ cells = [
         "median_per_concurrency_mean_speedup": "{:.2f}×",
         "maximum_per_concurrency_mean_speedup": "{:.2f}×",
     }))
+
+    # Show the raw paired XSR/VSR speedup for every trial at every concurrency.
+    # Missing cells indicate a trial was not a valid pair and is therefore not
+    # included in the row mean.
+    xsr_vsr_speedup_by_trial = (
+        xsr_vsr_throughput
+        .pivot(index="concurrency", columns="trial", values="ratio")
+        .sort_index()
+    )
+    xsr_vsr_speedup_by_trial.columns = [f"trial {int(trial)}" for trial in xsr_vsr_speedup_by_trial.columns]
+    xsr_vsr_speedup_by_trial["mean"] = xsr_vsr_speedup_by_trial.mean(axis=1)
+    xsr_vsr_speedup_by_trial = xsr_vsr_speedup_by_trial.reset_index()
+    print("XSR / VSR throughput speedup by concurrency and trial")
+    display(xsr_vsr_speedup_by_trial.style.format({
+        column: "{:.2f}×" for column in xsr_vsr_speedup_by_trial.columns if column != "concurrency"
+    }, na_rep="—"))
     """),
 ]
 
