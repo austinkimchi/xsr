@@ -578,6 +578,45 @@ cells = [
     )
     print(f"Exported paper-ready artifacts to {EXPORT_DIR}")
     """),
+    markdown("## 11. Average throughput speedup"),
+    code("""
+    # Aggregate the valid, paired trial-level throughput ratios across every
+    # fully valid tested concurrency. The arithmetic mean answers "average
+    # speedup" directly; the geometric mean is included because ratios are
+    # multiplicative and can span several orders of magnitude.
+    throughput_speedups = paired_trial_ratios[
+        paired_trial_ratios.metric.eq("throughput_rps")
+    ].copy()
+    if throughput_speedups.empty:
+        raise ValueError("No valid paired throughput trials are available for speedup analysis")
+
+    average_throughput_speedup = (
+        throughput_speedups
+        .groupby(["numerator", "denominator"], as_index=False)
+        .agg(
+            paired_trial_count=("ratio", "size"),
+            tested_concurrencies=("concurrency", lambda values: ", ".join(map(str, sorted(set(values))))),
+            arithmetic_mean_speedup=("ratio", "mean"),
+            geometric_mean_speedup=("ratio", lambda values: float(np.exp(np.log(values).mean()))),
+            minimum_speedup=("ratio", "min"),
+            maximum_speedup=("ratio", "max"),
+        )
+        .sort_values(["numerator", "denominator"])
+        .reset_index(drop=True)
+    )
+    average_throughput_speedup["comparison"] = (
+        average_throughput_speedup.numerator + " / " + average_throughput_speedup.denominator
+    )
+    average_throughput_speedup = average_throughput_speedup[
+        ["comparison", "paired_trial_count", "tested_concurrencies", "arithmetic_mean_speedup", "geometric_mean_speedup", "minimum_speedup", "maximum_speedup"]
+    ]
+    display(average_throughput_speedup.style.format({
+        "arithmetic_mean_speedup": "{:.2f}×",
+        "geometric_mean_speedup": "{:.2f}×",
+        "minimum_speedup": "{:.2f}×",
+        "maximum_speedup": "{:.2f}×",
+    }))
+    """),
 ]
 
 notebook = nbf.v4.new_notebook(cells=cells, metadata={
