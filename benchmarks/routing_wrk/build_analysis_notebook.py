@@ -57,7 +57,9 @@ cells = [
     from collections import Counter
 
     import matplotlib.pyplot as plt
+    import numpy as np
     import pandas as pd
+    from matplotlib.ticker import FuncFormatter, FixedLocator
 
     def repository_root(start: Path) -> Path:
         for candidate in (start, *start.parents):
@@ -229,7 +231,13 @@ cells = [
         "XSR (SK_SKB/SOCKMAP)": {"color": "#2878b5", "marker": "^", "linestyle": "-"},
         "VSR (Envoy ExtProc)": {"color": "#e68613", "marker": "D", "linestyle": ":"},
     }
-    plt.rcParams.update({"figure.facecolor": "white", "axes.facecolor": "white", "savefig.facecolor": "white", "font.size": 10})
+    plt.rcParams.update({
+        "figure.facecolor": "white", "axes.facecolor": "white", "savefig.facecolor": "white",
+        "font.size": 9.5, "axes.labelsize": 10, "axes.titlesize": 11,
+        "legend.fontsize": 9, "xtick.labelsize": 8.5, "ytick.labelsize": 8.5,
+        "axes.spines.top": False, "axes.spines.right": False,
+        "pdf.fonttype": 42, "ps.fonttype": 42,
+    })
     OUTPUT_RUN_ID = SATURATION_DIR.name if FIXED_RATE_DIR is None else f"{SATURATION_DIR.name}__{FIXED_RATE_DIR.name}"
     EXPORT_DIR = REPO_ROOT / "results" / "charts" / OUTPUT_RUN_ID
     EXPORT_DIR.mkdir(parents=True, exist_ok=True)
@@ -241,19 +249,87 @@ cells = [
         plt.close(figure)
 
     saturation_throughput = paper_valid_results[paper_valid_results.metric.eq("throughput_rps")].copy()
-    fig, ax = plt.subplots(figsize=(6.8, 3.6))
+    throughput_ticks = sorted(saturation_throughput.concurrency.unique())
+    throughput_positions = np.arange(len(throughput_ticks))
+    fig, ax = plt.subplots(figsize=(7.0, 3.75))
     for system in REQUIRED_SYSTEMS:
         frame = saturation_throughput[saturation_throughput.system.eq(system)].sort_values("concurrency")
         style = SYSTEM_STYLE[system]
-        ax.errorbar(frame.concurrency, frame[CENTRAL_STATISTIC], yerr=frame[ERROR_STATISTIC], label=system,
-                    color=style["color"], marker=style["marker"], linestyle=style["linestyle"], capsize=3)
-    ticks = sorted(saturation_throughput.concurrency.unique())
-    ax.set_xticks(ticks); ax.set_xlabel("Request concurrency"); ax.set_ylabel("Throughput (requests/s)")
+        positions = [throughput_ticks.index(value) for value in frame.concurrency]
+        ax.errorbar(positions, frame[CENTRAL_STATISTIC], yerr=frame[ERROR_STATISTIC], label=system,
+                    color=style["color"], marker=style["marker"], linestyle=style["linestyle"],
+                    linewidth=1.7, markersize=5, capsize=2.5, capthick=0.9)
+    ax.set_xticks(throughput_positions, [str(value) for value in throughput_ticks])
+    ax.set_xlabel("Request concurrency"); ax.set_ylabel("Throughput (requests/s)")
     ax.set_yscale("log")
-    ax.legend(loc="lower center", bbox_to_anchor=(0.5, 1.01), ncol=2, frameon=False)
-    ax.grid(axis="y", alpha=0.25); fig.tight_layout()
+    ax.margins(x=0.025)
+    ax.legend(loc="lower center", bbox_to_anchor=(0.5, 1.01), ncol=2, frameon=False, columnspacing=1.6)
+    ax.grid(axis="y", which="major", color="#d9dee7", linewidth=0.8)
+    ax.grid(axis="y", which="minor", color="#edf0f4", linewidth=0.45)
+    ax.set_axisbelow(True); fig.tight_layout()
     export_figure(fig, "saturation_throughput")
     saturation_throughput.to_csv(EXPORT_DIR / "plotted_saturation_data.csv", index=False)
+
+    # Linear-scale alternative: two stacked panels prevent the direct path from
+    # visually flattening the routing paths while keeping each panel honest at zero.
+    facet_groups = [
+        ("Infrastructure paths", ("Direct backend", "Envoy only")),
+        ("Routing paths", ("XSR (SK_SKB/SOCKMAP)", "VSR (Envoy ExtProc)")),
+    ]
+    fig, axes = plt.subplots(2, 1, figsize=(7.0, 5.45), sharex=True)
+    for axis, (panel_label, panel_systems) in zip(axes, facet_groups):
+        for system in panel_systems:
+            frame = saturation_throughput[saturation_throughput.system.eq(system)].sort_values("concurrency")
+            style = SYSTEM_STYLE[system]
+            positions = [throughput_ticks.index(value) for value in frame.concurrency]
+            lower_error = np.minimum(frame[ERROR_STATISTIC].to_numpy(), frame[CENTRAL_STATISTIC].to_numpy())
+            upper_error = frame[ERROR_STATISTIC].to_numpy()
+            axis.errorbar(positions, frame[CENTRAL_STATISTIC], yerr=np.vstack([lower_error, upper_error]), label=system,
+                          color=style["color"], marker=style["marker"], linestyle=style["linestyle"],
+                          linewidth=1.7, markersize=4.8, capsize=2.5, capthick=0.9)
+        axis.set_ylim(bottom=0)
+        axis.set_ylabel("Throughput (requests/s)")
+        axis.text(0.01, 0.92, panel_label, transform=axis.transAxes, fontsize=9, weight="semibold", va="top")
+        axis.grid(axis="y", color="#d9dee7", linewidth=0.8)
+        axis.set_axisbelow(True); axis.margins(x=0.025)
+    axes[1].set_xticks(throughput_positions, [str(value) for value in throughput_ticks])
+    axes[1].set_xlabel("Request concurrency")
+    facet_handles, facet_labels = [], []
+    for axis in axes:
+        handles, labels = axis.get_legend_handles_labels()
+        facet_handles.extend(handles); facet_labels.extend(labels)
+    fig.legend(facet_handles, facet_labels, loc="upper center", bbox_to_anchor=(0.5, 1.0),
+               ncol=2, frameon=False, columnspacing=1.6)
+    fig.tight_layout(rect=(0, 0, 1, 0.90), h_pad=1.1)
+    export_figure(fig, "saturation_throughput_faceted")
+
+    saturation_latency = paper_valid_results[paper_valid_results.metric.isin(["average_latency_us", "p50_latency_us", "p95_latency_us", "p99_latency_us"])].copy()
+    latency_panels = [("Average", "average_latency_us"), ("P50", "p50_latency_us"), ("P95", "p95_latency_us"), ("P99", "p99_latency_us")]
+    emphasized_systems = ("XSR (SK_SKB/SOCKMAP)", "VSR (Envoy ExtProc)")
+    fig, axes = plt.subplots(2, 2, figsize=(7.0, 5.8), sharex=True, sharey=True)
+    for axis, (panel_label, metric) in zip(axes.flat, latency_panels):
+        for system in emphasized_systems:
+            frame = saturation_latency[(saturation_latency.metric == metric) & (saturation_latency.system == system)].sort_values("concurrency")
+            style = SYSTEM_STYLE[system]
+            positions = [throughput_ticks.index(value) for value in frame.concurrency]
+            axis.errorbar(positions, frame[CENTRAL_STATISTIC], yerr=frame[ERROR_STATISTIC], label=system,
+                          color=style["color"], marker="o", linestyle=style["linestyle"],
+                          linewidth=1.8, markersize=4.5, capsize=2.2, capthick=0.8)
+        axis.set_title(panel_label, pad=6)
+        axis.set_yscale("log")
+        axis.grid(which="major", color="#d9e1ec", linewidth=0.8)
+        axis.grid(which="minor", color="#eef2f6", linewidth=0.45)
+        axis.set_axisbelow(True)
+        axis.margins(x=0.025)
+    for axis in axes[:, 0]: axis.set_ylabel("Latency (ms)")
+    for axis in axes[1, :]:
+        axis.set_xticks(throughput_positions, [str(value) for value in throughput_ticks], rotation=0)
+        axis.set_xlabel("Request concurrency")
+    handles, labels = axes[0, 0].get_legend_handles_labels()
+    fig.legend(handles, labels, loc="upper center", bbox_to_anchor=(0.5, 1.0), ncol=2, frameon=False)
+    fig.tight_layout(rect=(0, 0, 1, 0.94), h_pad=2.0, w_pad=1.5)
+    export_figure(fig, "saturation_latency")
+    saturation_latency[saturation_latency.system.isin(emphasized_systems)].to_csv(EXPORT_DIR / "plotted_saturation_latency_data.csv", index=False)
     """),
     markdown("## 6. Fixed-rate latency"),
     code("""
@@ -272,18 +348,29 @@ cells = [
             & fixed_rate_results.concurrency.eq(selected_fixed_concurrency)
             & fixed_rate_results.metric.isin(["average_latency_us", "p50_latency_us", "p95_latency_us", "p99_latency_us"])
         ].copy()
-        fig, axes = plt.subplots(2, 2, figsize=(6.8, 5.1), sharex=True)
+        fixed_rate_ticks = sorted(plotted_fixed_rate_data.offered_rate_rps.unique())
+        fixed_rate_positions = np.arange(len(fixed_rate_ticks))
+        fig, axes = plt.subplots(2, 2, figsize=(7.0, 5.8), sharex=True, sharey=True)
         for axis, (label, metric) in zip(axes.flat, [("Average", "average_latency_us"), ("P50", "p50_latency_us"), ("P95", "p95_latency_us"), ("P99", "p99_latency_us")]):
-            for system in REQUIRED_SYSTEMS:
+            for system in emphasized_systems:
                 frame = plotted_fixed_rate_data[(plotted_fixed_rate_data.metric == metric) & (plotted_fixed_rate_data.system == system)].sort_values("offered_rate_rps")
                 style = SYSTEM_STYLE[system]
-                alpha = 1.0 if system in {"XSR (SK_SKB/SOCKMAP)", "VSR (Envoy ExtProc)"} else 0.58
-                axis.errorbar(frame.offered_rate_rps, frame[CENTRAL_STATISTIC], yerr=frame[ERROR_STATISTIC], label=system,
-                              color=style["color"], marker=style["marker"], linestyle=style["linestyle"], capsize=2, alpha=alpha)
-            axis.set_ylabel(f"{label} latency (ms)"); axis.grid(axis="y", alpha=0.25)
-        for axis in axes[1, :]: axis.set_xlabel("Offered request rate (requests/s)")
-        axes[0, 0].legend(loc="lower center", bbox_to_anchor=(1.05, 1.24), ncol=2, frameon=False)
-        fig.tight_layout(); export_figure(fig, "fixed_rate_latency")
+                positions = [fixed_rate_ticks.index(value) for value in frame.offered_rate_rps]
+                axis.errorbar(positions, frame[CENTRAL_STATISTIC], yerr=frame[ERROR_STATISTIC], label=system,
+                              color=style["color"], marker="o", linestyle=style["linestyle"],
+                              linewidth=1.8, markersize=4.5, capsize=2.2, capthick=0.8)
+            axis.set_title(label, pad=6); axis.set_yscale("log")
+            axis.grid(which="major", color="#d9e1ec", linewidth=0.8)
+            axis.grid(which="minor", color="#eef2f6", linewidth=0.45)
+            axis.set_axisbelow(True); axis.margins(x=0.025)
+        for axis in axes[:, 0]: axis.set_ylabel("Latency (ms)")
+        for axis in axes[1, :]:
+            axis.set_xticks(fixed_rate_positions, [str(value) for value in fixed_rate_ticks])
+            axis.set_xlabel("Offered request rate (requests/s)")
+        handles, labels = axes[0, 0].get_legend_handles_labels()
+        fig.legend(handles, labels, loc="upper center", bbox_to_anchor=(0.5, 1.0), ncol=2, frameon=False)
+        fig.tight_layout(rect=(0, 0, 1, 0.94), h_pad=2.0, w_pad=1.5)
+        export_figure(fig, "fixed_rate_latency")
         plotted_fixed_rate_data.to_csv(EXPORT_DIR / "plotted_fixed_rate_data.csv", index=False)
     else:
         print("Fixed-rate figure not generated: no fixed-rate hardened run is available.")
@@ -307,18 +394,78 @@ cells = [
         paired.extend(paired_ratios(saturation_trials.to_dict("records"), numerator, denominator, metric, paper_configurations))
     paired_trial_ratios = pd.DataFrame(paired)
     paired_comparisons = pd.DataFrame(ratio_statistics(paired))
-    decomposition = paired_comparisons[paired_comparisons.configuration.eq(decomposition_configuration)].copy()
     systems = list(REQUIRED_SYSTEMS)
-    fig, axes = plt.subplots(1, 2, figsize=(6.8, 3.4))
-    for axis, metric, ylabel in [(axes[0], "throughput_rps", "Throughput retained relative to direct"), (axes[1], "average_latency_us", "Average-latency overhead relative to direct")]:
-        values, errors = [1.0], [0.0]
-        for system in systems[1:]:
-            row = decomposition[(decomposition.metric == metric) & (decomposition.numerator == system) & (decomposition.denominator == "Direct backend")]
-            values.append(float(row.iloc[0]["mean"])); errors.append(float(row.iloc[0]["ci95"]))
-        bars = axis.bar(range(len(systems)), values, yerr=errors, capsize=3, color=[SYSTEM_STYLE[s]["color"] for s in systems])
-        axis.set_xticks(range(len(systems)), systems, rotation=30, ha="right", fontsize=7)
-        axis.set_ylabel(ylabel); axis.axhline(1, color="#555555", linewidth=0.8); axis.grid(axis="y", alpha=0.25)
-    fig.tight_layout(); export_figure(fig, "routing_path_decomposition")
+
+    # Ratios are positive and span orders of magnitude. A geometric-mean interval
+    # on a log axis preserves that structure without compressing XSR and VSR into
+    # nearly invisible linear-scale bars.
+    decomposition_interval_rows = []
+    for metric in ("throughput_rps", "average_latency_us"):
+        for system in systems:
+            if system == "Direct backend":
+                center = lower = upper = 1.0
+                count = saturation_trial_count
+            else:
+                values = paired_trial_ratios[
+                    paired_trial_ratios.configuration.eq(decomposition_configuration)
+                    & paired_trial_ratios.metric.eq(metric)
+                    & paired_trial_ratios.numerator.eq(system)
+                    & paired_trial_ratios.denominator.eq("Direct backend")
+                ].ratio.astype(float)
+                if values.empty:
+                    raise ValueError(f"No paired {metric} ratios for {system} at {decomposition_configuration}")
+                logs = np.log(values.to_numpy())
+                log_center = float(logs.mean())
+                log_half_width = 1.96 * float(logs.std(ddof=1)) / np.sqrt(len(logs)) if len(logs) > 1 else 0.0
+                center = float(np.exp(log_center))
+                lower = float(np.exp(log_center - log_half_width))
+                upper = float(np.exp(log_center + log_half_width))
+                count = len(values)
+            decomposition_interval_rows.append({
+                "configuration": decomposition_configuration, "system": system, "metric": metric,
+                "geometric_mean": center, "ci95_lower": lower, "ci95_upper": upper,
+                "paired_trial_count": count,
+            })
+    decomposition_intervals = pd.DataFrame(decomposition_interval_rows)
+
+    fig, axes = plt.subplots(1, 2, figsize=(7.2, 3.55), sharey=True)
+    y_positions = np.arange(len(systems))
+    for axis, metric, panel_label in [
+        (axes[0], "throughput_rps", "Throughput retained"),
+        (axes[1], "average_latency_us", "Average-latency overhead"),
+    ]:
+        frame = decomposition_intervals[decomposition_intervals.metric.eq(metric)].set_index("system").loc[systems].reset_index()
+        centers = frame.geometric_mean.to_numpy()
+        lower_errors = centers - frame.ci95_lower.to_numpy()
+        upper_errors = frame.ci95_upper.to_numpy() - centers
+        axis.errorbar(centers, y_positions, xerr=np.vstack([lower_errors, upper_errors]), fmt="none",
+                      ecolor="#444444", elinewidth=1.1, capsize=3, zorder=2)
+        for y, system, value in zip(y_positions, systems, centers):
+            style = SYSTEM_STYLE[system]
+            axis.scatter(value, y, s=48, color=style["color"], marker=style["marker"],
+                         edgecolor="white", linewidth=0.55, zorder=3)
+            value_label = f"{value * 100:.3g}%" if metric == "throughput_rps" else f"{value:.1f}×"
+            axis.annotate(value_label, (value, y), xytext=(7, 0), textcoords="offset points",
+                          va="center", ha="left", fontsize=8,
+                          bbox={"facecolor": "white", "edgecolor": "none", "alpha": 0.78, "pad": 0.5})
+        axis.set_xscale("log")
+        axis.axvline(1.0, color="#7a7a7a", linestyle="--", linewidth=0.9, zorder=1)
+        axis.set_title(panel_label, pad=8)
+        axis.grid(axis="x", which="major", color="#d9dee7", linewidth=0.8)
+        axis.grid(axis="x", which="minor", color="#eef1f5", linewidth=0.45)
+        axis.set_axisbelow(True)
+    axes[0].set_yticks(y_positions, systems)
+    axes[0].invert_yaxis()
+    axes[0].set_xlim(5e-7, 1.8)
+    axes[0].xaxis.set_major_locator(FixedLocator([1e-6, 1e-4, 1e-2, 1.0]))
+    axes[0].xaxis.set_major_formatter(FuncFormatter(lambda value, _: f"{value * 100:g}%"))
+    axes[0].set_xlabel("Relative to direct backend (log scale)")
+    axes[1].set_xlim(0.7, 1500)
+    axes[1].xaxis.set_major_locator(FixedLocator([1, 10, 100, 1000]))
+    axes[1].xaxis.set_major_formatter(FuncFormatter(lambda value, _: f"{value:g}×"))
+    axes[1].set_xlabel("Relative to direct backend (log scale)")
+    fig.tight_layout(w_pad=2.0); export_figure(fig, "routing_path_decomposition")
+    decomposition_intervals.to_csv(EXPORT_DIR / "routing_path_decomposition_ratio_data.csv", index=False)
     saturation_results[(saturation_results.configuration == decomposition_configuration) & saturation_results.metric.isin(["throughput_rps", "average_latency_us"])].to_csv(
         EXPORT_DIR / "routing_path_decomposition_data.csv", index=False
     )
@@ -412,7 +559,13 @@ cells = [
     html = "<html><body><h1>Routing benchmark analysis</h1>" + provenance.to_html(index=False) + validity_summary.to_html(index=False) + "</body></html>"
     (EXPORT_DIR / "interactive_report.html").write_text(html, encoding="utf-8")
     (EXPORT_DIR / "figure_notes.md").write_text(
-        "# Figure notes\\n\\nSaturation throughput uses a logarithmic y-axis. Error bars are between-trial 95% confidence intervals.\\n",
+        "# Figure notes\\n\\n"
+        "- saturation_throughput uses equally spaced tested configurations on x and a logarithmic y-axis.\\n"
+        "- saturation_throughput_faceted is a linear-scale alternative with infrastructure and routing paths separated.\\n"
+        "- saturation_latency is a 2×2 logarithmic grid for valid XSR/VSR Average, P50, P95, and P99 latency.\\n"
+        "- Aggregate error bars are between-trial 95% confidence intervals.\\n"
+        "- routing_path_decomposition uses paired per-trial ratios, geometric means, and log-scale 95% intervals because the positive ratios span several orders of magnitude.\\n"
+        "- The broad XSR c=256 throughput interval is data-driven: three paired trials are near zero while two retain about 6–7% of direct throughput.\\n",
         encoding="utf-8",
     )
     print(f"Exported paper-ready artifacts to {EXPORT_DIR}")
