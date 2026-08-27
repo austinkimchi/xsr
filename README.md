@@ -154,7 +154,13 @@ sudo RATES="100 250 500 750 900" make performance-fixed-rate
 The fixed-rate reports include the requested rate, achieved rate, average
 latency, P50/P95/P99, and the raw tool output. Performance reports do not
 inspect response bodies during timed execution; route correctness is validated
-by the separate correctness benchmark and preflight requests.
+by the separate correctness benchmark and preflight requests. Both XSR and VSR
+preflight all five marker routes (`coding`, `math`, `qa`, `writing`, and
+`others`) before timing. The terminal `wrk`/`wrk2` report is then rejected if
+it contains transport errors, timeouts, non-2xx/3xx responses, or zero
+completed requests; the raw output and failure reason remain under the run's
+`raw/` directory. Set `VALIDATE_LOAD=1` to run a small concurrent marker check
+outside the measured interval.
 
 Legacy examples:
 ```bash

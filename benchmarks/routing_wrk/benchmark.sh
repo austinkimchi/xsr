@@ -16,6 +16,7 @@ for benchmark_arg in "$@"; do
         BENCHMARK_MODE=*) BENCHMARK_MODE="${benchmark_arg#BENCHMARK_MODE=}" ;;
         RATE=*) RATE="${benchmark_arg#RATE=}" ;;
         RATES=*) RATES="${benchmark_arg#RATES=}" ;;
+        VALIDATE_LOAD=*) VALIDATE_LOAD="${benchmark_arg#VALIDATE_LOAD=}" ;;
         INCLUDE_XDP=*) INCLUDE_XDP="${benchmark_arg#INCLUDE_XDP=}" ;;
     esac
 done
@@ -32,6 +33,7 @@ BASE_THREADS="${THREADS:-4}"
 DEFAULT_CONCURRENCIES=(1 2 4 8 16 32 64 96 128 192 256 512)
 RATE="${RATE:-10000}"
 RATES="${RATES:-100 250 500 750 900}"
+VALIDATE_LOAD="${VALIDATE_LOAD:-0}"
 INCLUDE_XDP="${INCLUDE_XDP:-0}"
 XDP_PORT="${XDP_PORT:-18081}"
 CODING_BACKEND_PORT="${CODING_BACKEND_PORT:-18391}"
@@ -66,6 +68,7 @@ if [ "$EUID" -ne 0 ]; then
         THREADS="$BASE_THREADS"
         RATE="$RATE"
         RATES="$RATES"
+        VALIDATE_LOAD="$VALIDATE_LOAD"
         INCLUDE_XDP="$INCLUDE_XDP"
         XDP_PORT="$XDP_PORT"
         CODING_BACKEND_PORT="$CODING_BACKEND_PORT"
@@ -95,9 +98,16 @@ fi
 
 cd "$ROOT_DIR"
 mkdir -p "$REPORT_DIR"
+RUN_ID="${RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)-$$}"
+RAW_DIR="${REPORT_DIR}/raw/${RUN_ID}"
+mkdir -p "$RAW_DIR"
 
 if [ "$INCLUDE_XDP" != "0" ] && [ "$INCLUDE_XDP" != "1" ]; then
     echo "Error: INCLUDE_XDP must be 0 or 1." >&2
+    exit 1
+fi
+if [ "$VALIDATE_LOAD" != "0" ] && [ "$VALIDATE_LOAD" != "1" ]; then
+    echo "Error: VALIDATE_LOAD must be 0 or 1." >&2
     exit 1
 fi
 
@@ -339,6 +349,8 @@ verify_vllm_backend_routing() {
     done <<'EOF'
 coding|write a python function
 math|calculate the derivative of x squared
+qa|what is the capital of France?
+writing|write a short poem about rain
 others|tell me a short story
 EOF
 }
@@ -434,8 +446,19 @@ verify_router_backend_routing() {
     done <<'EOF'
 coding|write a python function
 math|calculate the derivative of x squared
+qa|what is the capital of France?
+writing|write a short poem about rain
 others|tell me a short story
 EOF
+}
+
+validate_untimed_load() {
+    local name="$1"
+    local url="$2"
+    if [ "$VALIDATE_LOAD" = "1" ]; then
+        echo "Running untimed concurrent load validation for ${name}..."
+        python3 "${SCRIPT_DIR}/validate_load.py" --url "$url" > "${RAW_DIR}/${name//[^a-zA-Z0-9]/_}.load-validation.txt"
+    fi
 }
 
 stop_routing_proxy() {
@@ -447,18 +470,23 @@ stop_routing_proxy() {
 }
 
 run_wrk() {
-    local output status
+    local output status raw_file reason_file reason
+    raw_file="${RAW_DIR}/${3}.txt"
+    reason_file="${RAW_DIR}/${3}.invalid.txt"
     set +e
     output=$(ip netns exec "$NETNS" "$WRK_BIN" -t"$THREADS" -c"$CONCURRENCY" -d"$DURATION" $RATE_ARG -s "${SCRIPT_DIR}/prompts.lua" "$1" 2>&1)
     status=$?
     set -e
+    printf '%s\n' "$output" > "$raw_file"
     printf '%s\n' "$output"
     if [ "$status" -ne 0 ]; then
+        printf 'tool exit status=%s\n' "$status" > "$reason_file"
         echo "Error: ${WRK_BIN} failed for $2 (exit ${status})." >&2
         return "$status"
     fi
-    if ! grep -Eq '[[:space:]]*[1-9][0-9]* requests in ' <<<"$output"; then
-        echo "Error: ${WRK_BIN} completed $2 with zero requests; refusing to record an invalid measurement." >&2
+    if ! reason=$(python3 "${SCRIPT_DIR}/validate_output.py" --input "$raw_file"); then
+        printf '%s\n' "$reason" > "$reason_file"
+        echo "Error: invalid ${WRK_BIN} run for $2: ${reason}. Raw output: ${raw_file}" >&2
         return 1
     fi
 }
@@ -476,6 +504,7 @@ run_benchmark() {
     echo "- Timestamp: \`$(date)\`"
     echo "- Tool: \`${WRK_BIN}\`"
     echo "- Mode: \`${BENCHMARK_MODE}\`"
+    echo "- Timed response-body validation: \`disabled\` (routing correctness is measured separately)"
     echo "- Threads: \`${THREADS}\`"
     echo "- Connections: \`${CONCURRENCY}\`"
     echo "- Duration: \`${DURATION}\`"
@@ -492,7 +521,7 @@ run_benchmark() {
     echo "\`\`\`"
     # No route decision occurs for the control. XDP was detached before this
     # measurement began.
-    run_wrk "$DIRECT_BACKEND_URL" "direct backend"
+    run_wrk "$DIRECT_BACKEND_URL" "direct backend" "direct"
     echo "\`\`\`"
     echo ""
     step=$((step + 1))
@@ -502,7 +531,7 @@ run_benchmark() {
 
         echo "## [${step}/${route_count}] XSR (legacy) Route"
         echo "\`\`\`"
-        run_wrk "$XDP_URL" "XSR (legacy) route"
+        run_wrk "$XDP_URL" "XSR (legacy) route" "xsr-legacy"
         echo "\`\`\`"
         echo ""
         stop_routing_proxy
@@ -511,9 +540,10 @@ run_benchmark() {
 
     start_routing_proxy sockmap
     verify_router_backend_routing "XSR"
+    validate_untimed_load "xsr" "$XDP_URL"
     echo "## [${step}/${route_count}] XSR Route"
     echo "\`\`\`"
-    run_wrk "$XDP_URL" "XSR route"
+    run_wrk "$XDP_URL" "XSR route" "xsr"
     echo "\`\`\`"
     echo ""
     stop_routing_proxy
@@ -521,7 +551,8 @@ run_benchmark() {
 
     echo "## [${step}/${route_count}] vLLM-SR Route"
     echo "\`\`\`"
-    run_wrk "$VLLM_URL" "vLLM-SR route"
+    validate_untimed_load "vsr" "$VLLM_URL"
+    run_wrk "$VLLM_URL" "vLLM-SR route" "vsr"
     echo "\`\`\`"
 }
 
