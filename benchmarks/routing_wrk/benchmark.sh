@@ -194,6 +194,12 @@ if [ "$BENCHMARK_DRY_RUN" = "1" ]; then
     exit 0
 fi
 
+python3 "${SCRIPT_DIR}/collect_metadata.py" --output "${RUN_ROOT}/metadata.json" --mode "$BENCHMARK_MODE" \
+    --profile "$BENCHMARK_PROFILE" --trials "$TRIALS" --duration "$DURATION" --warmup-duration "$WARMUP_DURATION" \
+    --concurrency "${CONCURRENCY:-${DEFAULT_CONCURRENCIES[*]}}" --rates "$RATES" --wrk-bin "$WRK_BIN" --wrk2-bin "$WRK2_BIN" \
+    --vllm-container "$VLLM_HOST" --vsr-container "${VSR_CONTAINER:-${VLLM_HOST/envoy/router}}" \
+    --policy "${ROOT_DIR}/config/policy_ngram.yaml" --prompts "${ROOT_DIR}/benchmarks/dataset_prompts.jsonl"
+
 if ! ip netns exec "$NETNS" ip link show dev "$XDP_PEER_IF" >/dev/null 2>&1; then
     echo "Error: ${NETNS}/${XDP_PEER_IF} is missing. Run 'make setup' first." >&2
     exit 1

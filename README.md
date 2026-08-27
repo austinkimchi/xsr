@@ -159,6 +159,14 @@ creates `results/routing-performance/<run-id>/` with a manifest, recoverable
 per-system raw output, and CSV/JSON/Markdown summaries. Trial order is
 deterministically shuffled and recorded with its random seed.
 
+Each run writes `metadata.json` before measurement. It captures the XSR commit
+and dirty state, compiler/build profile, policy and prompt-corpus SHA-256s,
+host and Linux guest details, interface/offload state, benchmark tools, and the
+configured VSR/Envoy containers with immutable image IDs, repository digests
+when exposed, labels, creation timestamps, `envoy --version`, and an archived
+effective Envoy configuration. Fields unavailable from a deployment are marked
+unavailable rather than inferred.
+
 ```bash
 sudo BENCHMARK_PROFILE=quick CONCURRENCY=1 make performance
 sudo BENCHMARK_PROFILE=paper make performance

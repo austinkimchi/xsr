@@ -48,7 +48,9 @@ def aggregate(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def write_outputs(run_dir: Path, summary: list[dict[str, Any]]) -> None:
-    (run_dir / "summary.json").write_text(json.dumps({"results": summary}, indent=2) + "\n", encoding="utf-8")
+    metadata_path = run_dir / "metadata.json"
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8")) if metadata_path.exists() else {"status": "unavailable"}
+    (run_dir / "summary.json").write_text(json.dumps({"metadata": metadata, "results": summary}, indent=2) + "\n", encoding="utf-8")
     fields = ["mode", "configuration", "system", "topology", "valid_trial_count", "failed_trial_count"]
     for metric in METRICS:
         fields.extend(f"{metric}_{stat}" for stat in ("mean", "stdev", "median", "minimum", "maximum", "ci95"))
@@ -61,7 +63,9 @@ def write_outputs(run_dir: Path, summary: list[dict[str, Any]]) -> None:
                 for statistic, value in row["metrics"][metric].items():
                     flat[f"{metric}_{statistic}"] = value
             writer.writerow(flat)
-    lines = ["# Routing performance summary", "", "| Mode | Configuration | System | Topology | Valid | Failed | Throughput mean ± 95% CI |", "| --- | --- | --- | --- | ---: | ---: | ---: |"]
+    xsr = metadata.get("xsr", {})
+    docker = metadata.get("docker", {})
+    lines = ["# Routing performance summary", "", "## Provenance", "", f"- XSR commit: `{xsr.get('commit', 'unavailable')}` ({xsr.get('working_tree', 'unavailable')})", f"- Benchmark: `{metadata.get('benchmark', {}).get('profile', 'unavailable')}` / `{metadata.get('benchmark', {}).get('mode', 'unavailable')}`", f"- VSR image ID: `{docker.get('vsr', {}).get('image_id', 'unavailable') if isinstance(docker.get('vsr'), dict) else 'unavailable'}`", f"- Envoy image ID: `{docker.get('envoy', {}).get('image_id', 'unavailable') if isinstance(docker.get('envoy'), dict) else 'unavailable'}`", "", "| Mode | Configuration | System | Topology | Valid | Failed | Throughput mean ± 95% CI |", "| --- | --- | --- | --- | ---: | ---: | ---: |"]
     for row in summary:
         throughput = row["metrics"]["throughput_rps"]
         mean = "unavailable" if throughput["mean"] is None else f"{throughput['mean']:.2f} ± {throughput['ci95']:.2f}"
