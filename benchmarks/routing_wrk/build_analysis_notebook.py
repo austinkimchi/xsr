@@ -254,7 +254,8 @@ cells = [
     saturation_throughput = paper_valid_results[paper_valid_results.metric.eq("throughput_rps")].copy()
     throughput_ticks = sorted(saturation_throughput.concurrency.unique())
     throughput_positions = np.arange(len(throughput_ticks))
-    fig, ax = plt.subplots(figsize=(7.0, 3.75))
+    SATURATION_THROUGHPUT_WIDTH = 7.0
+    fig, ax = plt.subplots(figsize=(SATURATION_THROUGHPUT_WIDTH, 3.75))
     for system in REQUIRED_SYSTEMS:
         frame = saturation_throughput[saturation_throughput.system.eq(system)].sort_values("concurrency")
         style = SYSTEM_STYLE[system]
@@ -281,7 +282,8 @@ cells = [
         ("Infrastructure paths", ("Direct backend", "Envoy only")),
         ("Routing paths", ("XSR (SK_SKB/SOCKMAP)", "VSR (Envoy ExtProc)")),
     ]
-    fig, axes = plt.subplots(2, 1, figsize=(7.0, 5.45), sharex=True)
+    SATURATION_THROUGHPUT_FACETED_WIDTH = 7.0
+    fig, axes = plt.subplots(2, 1, figsize=(SATURATION_THROUGHPUT_FACETED_WIDTH, 5.45), sharex=True)
     for axis, (panel_label, panel_systems) in zip(axes, facet_groups):
         for system in panel_systems:
             frame = saturation_throughput[saturation_throughput.system.eq(system)].sort_values("concurrency")
@@ -311,7 +313,8 @@ cells = [
     saturation_latency = paper_valid_results[paper_valid_results.metric.isin(["average_latency_us", "p50_latency_us", "p95_latency_us", "p99_latency_us"])].copy()
     latency_panels = [("Average", "average_latency_us"), ("P50", "p50_latency_us"), ("P95", "p95_latency_us"), ("P99", "p99_latency_us")]
     emphasized_systems = ("XSR (SK_SKB/SOCKMAP)", "VSR (Envoy ExtProc)")
-    fig, axes = plt.subplots(2, 2, figsize=(7.0, 5.8), sharex=True, sharey=True)
+    SATURATION_LATENCY_WIDTH = 7.0
+    fig, axes = plt.subplots(2, 2, figsize=(SATURATION_LATENCY_WIDTH, 5.8), sharex=True, sharey=True)
     for axis, (panel_label, metric) in zip(axes.flat, latency_panels):
         for system in emphasized_systems:
             frame = saturation_latency[(saturation_latency.metric == metric) & (saturation_latency.system == system)].sort_values("concurrency")
