@@ -11,7 +11,7 @@ is still available for comparison but is no longer the default.
 
 ## Installation
 
-xsr requires Linux 4.14 or newer with BPF, BPF system calls, and the BPF stream
+xsr requires Linux Kernel 6 or newer with BPF, BPF system calls, and the BPF stream
 parser enabled. `make install` supports apt, dnf, and pacman systems. It installs
 the C/eBPF build tools, checks SOCKMAP support, and builds the production router.
 
