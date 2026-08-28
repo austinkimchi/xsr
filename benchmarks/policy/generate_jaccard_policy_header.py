@@ -8,6 +8,7 @@ loads them into BPF array maps, keeping keyword preprocessing out of XDP.
 from __future__ import annotations
 
 import argparse
+import sys
 from decimal import Decimal, ROUND_HALF_UP
 from pathlib import Path
 from collections import Counter
@@ -77,15 +78,16 @@ def grams(keyword: str, arity: int, case_sensitive: bool) -> list[tuple[int, int
 
 
 def casefold_entries(texts: list[str]) -> list[tuple[int, int]]:
+    targets = {char for text in texts for char in text.lower()}
     entries: dict[int, int] = {}
-    for text in texts:
-        for char in text:
-            lower = char.lower()
-            if len(lower) != 1:
-                continue
-            for variant in {char, lower.upper(), lower.title()}:
-                if len(variant) == 1 and variant != lower:
-                    entries[ord(variant)] = ord(lower)
+    # Reverse Python's one-to-one lowercase mapping for every Unicode scalar.
+    # Deriving variants from upper()/title() misses characters such as ẞ,
+    # whose uppercase form expands even though its lowercase form does not.
+    for codepoint in range(sys.maxunicode + 1):
+        char = chr(codepoint)
+        lower = char.lower()
+        if len(lower) == 1 and lower in targets and char != lower:
+            entries[codepoint] = ord(lower)
     if len(entries) > 128:
         raise ValueError("Unicode case-fold policy requires more than 128 bounded mappings")
     return sorted(entries.items())

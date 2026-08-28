@@ -17,6 +17,7 @@ mock_backend
 *.bpf.o
 *.generated.h
 !bpf/xdp_jaccard_policy.generated.h
+!bpf/xdp_unicode_word.generated.h
 
 # Benchmark results selected for publication
 results/charts/

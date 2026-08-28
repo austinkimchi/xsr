@@ -5,7 +5,7 @@
       "route": "coding",
       "operator": "OR",
       "method": "ngram",
-      "keywords": ["café", "machine learning", "函数"],
+      "keywords": ["café", "machine learning", "函数", "straße"],
       "ngram_threshold": 1.0,
       "ngram_arity": 3,
       "case_sensitive": false,

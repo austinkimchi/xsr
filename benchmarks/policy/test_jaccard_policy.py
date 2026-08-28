@@ -14,6 +14,7 @@ sys.path.insert(0, str(POLICY_DIR))
 
 from jaccard_reference import matches, rule_matches, threshold_milli, word_grams
 from generate_jaccard_policy_header import casefold_entries, emit, grams, parse
+from generate_unicode_word_header import contains, word_bitmap, word_ranges
 
 
 class JaccardKeywordTests(unittest.TestCase):
@@ -60,6 +61,18 @@ class JaccardKeywordTests(unittest.TestCase):
         self.assertTrue(matches("функция", "функция", 3, 1.0, False))
         self.assertTrue(matches("函数", "函数", 3, 1.0, False))
         self.assertIn((ord("É"), ord("é")), casefold_entries(["café"]))
+        self.assertIn((ord("ẞ"), ord("ß")), casefold_entries(["ß"]))
+
+    def test_unicode_word_boundaries_match_reference(self) -> None:
+        ranges = word_ranges()
+        bitmap = word_bitmap(ranges)
+        for char in ("é", "Ж", "函", "٢"):
+            self.assertTrue(contains(ranges, ord(char)))
+            self.assertEqual((bitmap[ord(char) >> 6] >> (ord(char) & 63)) & 1, 1)
+        for char in ("🙂", "©", "。", "—", "\u00a0"):
+            self.assertFalse(contains(ranges, ord(char)))
+            self.assertEqual((bitmap[ord(char) >> 6] >> (ord(char) & 63)) & 1, 0)
+        self.assertTrue(rule_matches("café🙂", ["café"], "OR", 3, 1.0, False))
 
     def test_multi_word_phrase_uses_full_text_search(self) -> None:
         self.assertTrue(rule_matches("machine learning", ["machine learning"], "OR", 3, 1.0, False))

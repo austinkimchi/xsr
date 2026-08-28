@@ -62,8 +62,10 @@ phrases. Prompts without a match use the fallback backend.
 
 The kernel implementation is deliberately bounded for verifier safety: at most
 16 keywords across 8 rules, 32 trigrams per keyword or word, and 128 trigrams
-in the full-text phrase pass. Case-insensitive policies support one-to-one
-Unicode lowercasing; expanding folds are rejected when the policy is generated.
+in the full-text phrase pass. A generated Unicode alphanumeric bitmap
+delimits words consistently around Unicode punctuation and symbols.
+Case-insensitive policies support every reverse one-to-one Unicode lowercase
+mapping relevant to their keywords; expanding folds are rejected when the policy is generated.
 Inputs outside those bounds still pass through, but only matches completed
 within the bounded domain affect routing.
 

@@ -49,6 +49,7 @@ struct xdp_jaccard_casefold { __u32 from; __u32 to; };
 
 #ifdef __BPF__
 #include <bpf/bpf_helpers.h>
+#include "xdp_unicode_word.generated.h"
 struct { __uint(type, BPF_MAP_TYPE_ARRAY); __uint(max_entries, XDP_JACCARD_MAX_KEYWORDS); __type(key, __u32); __type(value, struct xdp_jaccard_keyword); } xdp_jaccard_keywords SEC(".maps");
 struct { __uint(type, BPF_MAP_TYPE_ARRAY); __uint(max_entries, XDP_JACCARD_MAX_RULES); __type(key, __u32); __type(value, struct xdp_jaccard_rule); } xdp_jaccard_rules SEC(".maps");
 struct { __uint(type, BPF_MAP_TYPE_ARRAY); __uint(max_entries, 1); __type(key, __u32); __type(value, struct xdp_jaccard_policy_config); } xdp_jaccard_config SEC(".maps");
@@ -98,16 +99,17 @@ static __always_inline __u32 xdp_jaccard_lower(__u32 c) {
 }
 
 static __always_inline int xdp_jaccard_word_char(__u32 c) {
+  __u32 word;
   if (c < 128)
     return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
            (c >= '0' && c <= '9') || c == '_' || c == '-';
-  /* Common Unicode whitespace and punctuation delimiters. Other non-ASCII
-   * scalars are treated as letters/digits, covering accented, Cyrillic, CJK,
-   * Arabic, and similar scripts without an unbounded category table. */
-  if (c == 0x00a0 || c == 0x1680 || c == 0x180e || c == 0x3000 ||
-      (c >= 0x2000 && c <= 0x206f))
+  if (c > XDP_UNICODE_WORD_MAX)
     return 0;
-  return 1;
+  word = c >> 6;
+  asm volatile("" : "+r"(word));
+  if (word >= XDP_UNICODE_WORD_BITMAP_WORDS)
+    return 0;
+  return (xdp_unicode_word_bitmap[word] >> (c & 63)) & 1;
 }
 
 static __noinline void xdp_jaccard_reset_query(struct xdp_jaccard_query *q) {
