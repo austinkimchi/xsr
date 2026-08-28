@@ -7,6 +7,7 @@ import argparse
 import concurrent.futures
 import contextlib
 import dataclasses
+import hashlib
 import http.client
 import http.server
 import json
@@ -58,8 +59,16 @@ DATASETS = {
         "config": "qualitative",
         "split": "test",
     },
+    "routerarena": {
+        "dataset": "RouteWorks/RouterArena",
+        "config": "default",
+        "revision": "a4a062ce3313b56bb09c042e1bc37b61d34e3bd8",
+    },
 }
 SPEED_BENCH_ROWS = 880
+ROUTERARENA_ROWS = {"full": 8400, "sub_10": 809}
+ROUTERARENA_PROMPT_FORMAT = "routerarena-context-question-options-v1"
+ROUTERARENA_PROMPT_CAP = 10_000
 SPEED_CATEGORY_ROUTES = {
     "coding": "coding",
     "math": "math",
@@ -74,6 +83,10 @@ class Case:
     expected_route: str
     matched_keyword: str | None
     source_index: int
+    case_id: str = ""
+    source: str = "speed-bench"
+    reference_kind: str = "dataset-category"
+    source_metadata: dict[str, Any] = dataclasses.field(default_factory=dict)
 
 
 @dataclasses.dataclass
@@ -85,6 +98,10 @@ class Result:
     route: str | None
     matched_keyword: str | None
     source_index: int = 0
+    case_id: str = ""
+    source: str = "speed-bench"
+    reference_kind: str = "dataset-category"
+    source_metadata: dict[str, Any] = dataclasses.field(default_factory=dict)
     xdp_elapsed_ns: int | None = None
     src_port: int | None = None
     error: str | None = None
@@ -250,6 +267,10 @@ def send_case(url: str, case: Case, timeout_s: float) -> Result:
             route_from_response(headers, body),
             case.matched_keyword,
             source_index=case.source_index,
+            case_id=case.case_id,
+            source=case.source,
+            reference_kind=case.reference_kind,
+            source_metadata=case.source_metadata,
             src_port=src_port,
         )
     except Exception as exc:
@@ -262,6 +283,10 @@ def send_case(url: str, case: Case, timeout_s: float) -> Result:
             None,
             case.matched_keyword,
             source_index=case.source_index,
+            case_id=case.case_id,
+            source=case.source,
+            reference_kind=case.reference_kind,
+            source_metadata=case.source_metadata,
             src_port=src_port,
             error=str(exc),
         )
@@ -311,6 +336,10 @@ def send_case_persistent(url: str, case: Case, timeout_s: float) -> Result:
             route_from_response(headers, body),
             case.matched_keyword,
             source_index=case.source_index,
+            case_id=case.case_id,
+            source=case.source,
+            reference_kind=case.reference_kind,
+            source_metadata=case.source_metadata,
             src_port=src_port,
         )
     except Exception:
@@ -344,6 +373,10 @@ def run_client_worker(url: str, timeout_s: float, concurrency: int = 1) -> int:
                 item["expected_route"],
                 item.get("matched_keyword"),
                 item.get("source_index", 0),
+                item.get("case_id", ""),
+                item.get("source", "speed-bench"),
+                item.get("reference_kind", "dataset-category"),
+                item.get("source_metadata", {}),
             )
         )
     results = send_cases_concurrently(url, cases, timeout_s, concurrency)
@@ -365,8 +398,54 @@ def prompt_from_row(row: dict[str, Any]) -> str | None:
     return None
 
 
-def load_rows(args: argparse.Namespace) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    spec = DATASETS[args.dataset]
+def routerarena_prompt_from_row(row: dict[str, Any]) -> str | None:
+    """Build the versioned, model-neutral RouterArena request representation."""
+    question = row.get("Question")
+    parts: list[str] = []
+    context = row.get("Context")
+    if isinstance(context, str) and context.strip():
+        parts.append(context.strip())
+    if isinstance(question, str) and question.strip():
+        parts.append(question.strip())
+
+    options = row.get("Options")
+    formatted_options: list[str] = []
+    if isinstance(options, dict):
+        formatted_options = [f"{key}. {value}" for key, value in options.items()]
+    elif isinstance(options, (list, tuple)):
+        formatted_options = [
+            f"{chr(ord('A') + index)}. {value}"
+            for index, value in enumerate(options)
+            if value is not None and str(value).strip()
+        ]
+    elif isinstance(options, str) and options.strip():
+        formatted_options = [options.strip()]
+    if formatted_options:
+        parts.append("\n".join(formatted_options))
+
+    if not parts:
+        return None
+
+    prompt = "\n\n".join(parts)
+    if len(prompt) > ROUTERARENA_PROMPT_CAP:
+        prompt = f"{prompt[:5000]}…{prompt[-5000:]}"
+    return prompt
+
+
+def normalized_prompt(prompt: str) -> str:
+    return " ".join(prompt.split()).casefold()
+
+
+def rows_fingerprint(rows: list[dict[str, Any]]) -> str:
+    digest = hashlib.sha256()
+    for row in rows:
+        digest.update(json.dumps(row, sort_keys=True, separators=(",", ":"), default=str).encode())
+        digest.update(b"\n")
+    return f"sha256:{digest.hexdigest()}"
+
+
+def load_speed_rows(args: argparse.Namespace) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    spec = DATASETS["speed-bench"]
     args.cache_dir.mkdir(parents=True, exist_ok=True)
     cache_path = args.cache_dir / (
         f"{spec['dataset'].replace('/', '__')}-{spec['config']}-{spec['split']}.jsonl"
@@ -376,19 +455,19 @@ def load_rows(args: argparse.Namespace) -> tuple[list[dict[str, Any]], dict[str,
     if cache_path.exists():
         with cache_path.open() as file:
             cached = [json.loads(line) for line in file if line.strip()]
-        if len(cached) >= args.scan_limit:
-            return cached[: args.scan_limit], dataset_meta(args, spec, "cache", args.scan_limit)
+        if len(cached) >= SPEED_BENCH_ROWS:
+            return cached[:SPEED_BENCH_ROWS], dataset_meta("speed-bench", spec, "cache", SPEED_BENCH_ROWS)
 
     rows: list[dict[str, Any]] = []
     try:
-        while len(rows) < args.scan_limit:
+        while len(rows) < SPEED_BENCH_ROWS:
             query = urllib.parse.urlencode(
                 {
                     "dataset": spec["dataset"],
                     "config": spec["config"],
                     "split": spec["split"],
                     "offset": len(rows),
-                    "length": min(100, args.scan_limit - len(rows)),
+                    "length": min(100, SPEED_BENCH_ROWS - len(rows)),
                 }
             )
             url = f"https://datasets-server.huggingface.co/rows?{query}"
@@ -420,29 +499,56 @@ def load_rows(args: argparse.Namespace) -> tuple[list[dict[str, Any]], dict[str,
             rows.extend(page)
     except Exception:
         if cached:
-            return cached, dataset_meta(args, spec, "cache-partial", len(cached))
+            return cached, dataset_meta("speed-bench", spec, "cache-partial", len(cached))
         raise
 
     with cache_path.open("w") as file:
         for row in rows:
             file.write(json.dumps(row, separators=(",", ":"), default=str) + "\n")
-    return rows, dataset_meta(args, spec, "dataset-server", len(rows))
+    return rows, dataset_meta("speed-bench", spec, "dataset-server", len(rows))
+
+
+def load_routerarena_rows(args: argparse.Namespace) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Load RouterArena through datasets so the normal Hugging Face cache is used."""
+    spec = DATASETS["routerarena"]
+    try:
+        from datasets import load_dataset
+    except ImportError as exc:
+        raise SystemExit("RouterArena requires the benchmark environment's 'datasets' package") from exc
+
+    dataset = load_dataset(
+        spec["dataset"],
+        spec["config"],
+        split=args.routerarena_split,
+        revision=spec["revision"],
+    )
+    rows = [dict(row) for row in dataset]
+    expected = ROUTERARENA_ROWS[args.routerarena_split]
+    if len(rows) != expected:
+        raise SystemExit(
+            f"RouterArena default/{args.routerarena_split} at revision {spec['revision']} "
+            f"must contain {expected} rows; got {len(rows)}"
+        )
+    meta = dataset_meta("routerarena", {**spec, "split": args.routerarena_split}, "datasets", len(rows))
+    meta["fingerprint"] = getattr(dataset, "_fingerprint", None)
+    meta["prompt_format"] = ROUTERARENA_PROMPT_FORMAT
+    return rows, meta
 
 
 def dataset_meta(
-    args: argparse.Namespace,
+    name: str,
     spec: dict[str, str],
     loader: str,
     scanned_rows: int,
 ) -> dict[str, Any]:
     return {
-        "name": args.dataset,
+        "name": name,
         "source": spec["dataset"],
         "config": spec["config"],
         "split": spec["split"],
         "loader": loader,
         "scanned_rows": scanned_rows,
-        "requested_per_route": getattr(args, "per_route", None),
+        "revision": spec.get("revision", "unversioned"),
     }
 
 
@@ -512,7 +618,7 @@ def select_cases(
 
 def load_speed_bench_cases(args: argparse.Namespace) -> tuple[list[Case], dict[str, Any]]:
     """Load every qualitative SPEED-Bench request with its category route label."""
-    rows, meta = load_rows(args)
+    rows, meta = load_speed_rows(args)
     if len(rows) != SPEED_BENCH_ROWS:
         raise SystemExit(
             f"SPEED-Bench qualitative/test must contain {SPEED_BENCH_ROWS} rows; got {len(rows)}"
@@ -522,6 +628,7 @@ def load_speed_bench_cases(args: argparse.Namespace) -> tuple[list[Case], dict[s
     selected = {route: 0 for route in ROUTES}
     selected.update({"embedded_quote": 0, "duplicate_prompt": 0, "missing_prompt": 0})
     categories: dict[str, int] = {}
+    prompt_counts: dict[str, int] = {}
     for index, row in enumerate(rows):
         prompt = prompt_from_row(row)
         if not prompt:
@@ -530,23 +637,141 @@ def load_speed_bench_cases(args: argparse.Namespace) -> tuple[list[Case], dict[s
         if not category:
             raise SystemExit(f"SPEED-Bench row {index} has no category")
         route = SPEED_CATEGORY_ROUTES.get(category, "others")
-        cases.append(Case(prompt, route, None, index))
+        prompt_key = normalized_prompt(prompt)
+        prompt_counts[prompt_key] = prompt_counts.get(prompt_key, 0) + 1
+        if prompt_counts[prompt_key] > 1:
+            selected["duplicate_prompt"] += 1
+        cases.append(
+            Case(
+                prompt,
+                route,
+                None,
+                index,
+                f"speed-bench:qualitative:test:{index}",
+                "speed-bench",
+                "dataset-category",
+                {"category": category},
+            )
+        )
         selected[route] += 1
         categories[category] = categories.get(category, 0) + 1
 
     expected_counts = {"coding": 80, "math": 80, "qa": 80, "writing": 80, "others": 560}
-    if selected != {**expected_counts, "embedded_quote": 0, "duplicate_prompt": 0, "missing_prompt": 0}:
+    if {route: selected[route] for route in ROUTES} != expected_counts:
         raise SystemExit(f"unexpected SPEED-Bench route distribution: {selected}")
     meta["selected_counts"] = selected
     meta["categories"] = categories
     meta["all_rows_required"] = SPEED_BENCH_ROWS
+    meta["prompt_format"] = "speed-bench-native-v1"
+    meta["fingerprint"] = rows_fingerprint(rows)
     return cases, meta
+
+
+def load_routerarena_cases(
+    args: argparse.Namespace,
+    routes: list[dict[str, object]],
+    case_sensitive: bool,
+) -> tuple[list[Case], dict[str, Any]]:
+    rows, meta = load_routerarena_rows(args)
+    cases: list[Case] = []
+    selected = {route: 0 for route in ROUTES}
+    selected.update({"missing_prompt": 0, "missing_question_field": 0, "duplicate_prompt": 0, "embedded_quote": 0})
+    prompt_counts: dict[str, int] = {}
+
+    for source_index, row in enumerate(rows):
+        question = row.get("Question")
+        if not isinstance(question, str) or not question.strip():
+            selected["missing_question_field"] += 1
+        prompt = routerarena_prompt_from_row(row)
+        if not prompt:
+            selected["missing_prompt"] += 1
+            continue
+        prompt_key = normalized_prompt(prompt)
+        prompt_counts[prompt_key] = prompt_counts.get(prompt_key, 0) + 1
+        if prompt_counts[prompt_key] > 1:
+            selected["duplicate_prompt"] += 1
+
+        route, keyword = expected_route(prompt, routes, case_sensitive)
+        global_index = row.get("Global Index")
+        if global_index is None or str(global_index).strip() == "":
+            raise SystemExit(f"RouterArena row {source_index} has no Global Index")
+        metadata = {
+            key: row.get(key)
+            for key in ("Global Index", "Domain", "Category", "Dataset name", "Difficulty")
+        }
+        cases.append(
+            Case(
+                prompt,
+                route,
+                keyword,
+                source_index,
+                f"routerarena:{args.routerarena_split}:{global_index}",
+                "routerarena",
+                "policy-oracle",
+                metadata,
+            )
+        )
+        selected[route] += 1
+
+    meta["selected_counts"] = selected
+    meta["all_rows_required"] = ROUTERARENA_ROWS[args.routerarena_split]
+    meta["sent_cases"] = len(cases)
+    return cases, meta
+
+
+def corpus_duplicate_stats(cases: list[Case]) -> dict[str, Any]:
+    by_prompt: dict[str, list[Case]] = {}
+    for case in cases:
+        by_prompt.setdefault(normalized_prompt(case.prompt), []).append(case)
+    duplicate_groups = [group for group in by_prompt.values() if len(group) > 1]
+    within = sum(
+        len(group) - len({case.source for case in group})
+        for group in duplicate_groups
+    )
+    across_groups = [group for group in duplicate_groups if len({case.source for case in group}) > 1]
+    return {
+        "corpus_entries": len(cases),
+        "unique_prompts": len(by_prompt),
+        "duplicate_entries_within_sources": within,
+        "cross_source_duplicate_groups": len(across_groups),
+        "cross_source_duplicate_entries": sum(len(group) for group in across_groups),
+        "cross_source_duplicates": [
+            {"case_ids": [case.case_id for case in group], "prompt": group[0].prompt[:160]}
+            for group in across_groups
+        ],
+    }
 
 
 def load_cases(args: argparse.Namespace) -> tuple[list[Case], dict[str, Any], dict[str, Any]]:
     policy = load_policy(args.config)
     case_sensitive, routes = validate_policy(policy)
-    cases, meta = load_speed_bench_cases(args)
+    sources: list[dict[str, Any]] = []
+    cases: list[Case] = []
+    if args.dataset in {"combined", "speed-bench"}:
+        speed_cases, speed_meta = load_speed_bench_cases(args)
+        cases.extend(speed_cases)
+        sources.append(speed_meta)
+    if args.dataset in {"combined", "routerarena"}:
+        routerarena_cases, routerarena_meta = load_routerarena_cases(args, routes, case_sensitive)
+        cases.extend(routerarena_cases)
+        sources.append(routerarena_meta)
+
+    duplicate_stats = corpus_duplicate_stats(cases)
+    selected_counts = {route: sum(1 for case in cases if case.expected_route == route) for route in ROUTES}
+    skipped: dict[str, int] = {}
+    for source in sources:
+        for reason in ("missing_prompt", "embedded_quote"):
+            skipped[reason] = skipped.get(reason, 0) + int(source["selected_counts"].get(reason, 0))
+    meta = {
+        "name": args.dataset,
+        "source": "+".join(source["source"] for source in sources),
+        "scanned_rows": sum(source["scanned_rows"] for source in sources),
+        "sent_cases": len(cases),
+        "selected_counts": selected_counts,
+        "skipped_cases": skipped,
+        "sources": sources,
+        "duplicates": duplicate_stats,
+    }
     policy_meta = {
         "case_sensitive": case_sensitive,
         "keyword_count": sum(len(route["keywords"]) for route in routes),  # type: ignore[arg-type]
@@ -632,6 +857,37 @@ def summarize(
         }
         for result in results
     ]
+    reference_agreement: dict[str, dict[str, Any]] = {}
+    for observation in observations:
+        key = str(observation["reference_kind"])
+        bucket = reference_agreement.setdefault(key, {"total": 0, "agreement_count": 0})
+        bucket["total"] += 1
+        bucket["agreement_count"] += int(observation["reference_route_match"])
+    for bucket in reference_agreement.values():
+        bucket["agreement_percent"] = 100.0 * bucket["agreement_count"] / bucket["total"]
+
+    route_counts_by_source: dict[str, dict[str, int]] = {}
+    for observation in observations:
+        source_counts = route_counts_by_source.setdefault(
+            str(observation["source"]),
+            {**{route: 0 for route in ROUTES}, "unknown": 0},
+        )
+        route = observation["route"]
+        source_counts[route if route in ROUTES else "unknown"] += 1
+
+    routerarena_breakdown: dict[str, dict[str, dict[str, int | float]]] = {}
+    for field in ("Domain", "Difficulty"):
+        groups: dict[str, dict[str, int | float]] = {}
+        for observation in observations:
+            if observation["source"] != "routerarena":
+                continue
+            value = str(observation["source_metadata"].get(field) or "unknown")
+            bucket = groups.setdefault(value, {"total": 0, "agreement_count": 0})
+            bucket["total"] = int(bucket["total"]) + 1
+            bucket["agreement_count"] = int(bucket["agreement_count"]) + int(observation["reference_route_match"])
+        for bucket in groups.values():
+            bucket["agreement_percent"] = 100.0 * int(bucket["agreement_count"]) / int(bucket["total"])
+        routerarena_breakdown[field.lower()] = groups
     return {
         "mode": mode,
         "status": "ok",
@@ -639,9 +895,15 @@ def summarize(
         "expected_requests": len(results) if expected_requests is None else expected_requests,
         "successes": sum(1 for result in results if 200 <= result.status < 300),
         "errors": sum(1 for result in results if result.error or result.status >= 400 or result.status == 0),
-        "route_agreement": correct / len(results) if results else None,
-        "correct_routes": correct,
+        # A mixed corpus has intentionally different reference semantics, so
+        # expose only the labeled per-reference metrics instead of an
+        # unlabeled aggregate "accuracy".
+        "route_agreement": correct / len(results) if results and len(reference_agreement) == 1 else None,
+        "correct_routes": correct if len(reference_agreement) == 1 else None,
+        "reference_agreement": reference_agreement,
+        "routerarena_breakdown": routerarena_breakdown,
         "route_counts": counts,
+        "route_counts_by_source": route_counts_by_source,
         "latency_ms": {
             "avg": sum(latencies) / len(latencies) if latencies else None,
             "p50": percentile(latencies, 50),
@@ -674,18 +936,31 @@ def socket_open(url: str) -> bool:
 def run_vllm(args: argparse.Namespace, cases: list[Case]) -> dict[str, Any]:
     if not socket_open(args.vllm_sr_url):
         return {"mode": "vllm-sr", "status": "skipped", "reason": "vLLM-SR endpoint is not reachable"}
-    cpu_start = read_cpu()
-    start = time.perf_counter()
-    results = send_cases_concurrently(args.vllm_sr_url, cases, args.timeout_s, args.concurrency)
-    wall_s = time.perf_counter() - start
-    return summarize(
-        "vllm-sr",
-        results,
-        wall_s,
-        cpu_delta(cpu_start, read_cpu()),
-        sampled_cpu(containers=("vllm-sr-router-container", "vllm-sr-envoy-container")),
-        len(cases),
-    )
+    firewall = False
+    try:
+        if os.geteuid() == 0 and not args.no_firewall:
+            iptables_allow_vllm_backends()
+            firewall = True
+        cpu_start = read_cpu()
+        start = time.perf_counter()
+        results = send_cases_concurrently(args.vllm_sr_url, cases, args.timeout_s, args.concurrency)
+        wall_s = time.perf_counter() - start
+        summary = summarize(
+            "vllm-sr",
+            results,
+            wall_s,
+            cpu_delta(cpu_start, read_cpu()),
+            sampled_cpu(containers=("vllm-sr-router-container", "vllm-sr-envoy-container")),
+            len(cases),
+        )
+        unknown = summary["route_counts"]["unknown"]
+        if summary["errors"] or unknown:
+            summary["status"] = "incomplete"
+            summary["reason"] = f"errors={summary['errors']}, unknown_routes={unknown}"
+        return summary
+    finally:
+        if firewall:
+            iptables_remove_vllm_backends()
 
 
 def checked(command: list[str]) -> None:
@@ -723,6 +998,20 @@ def iptables_allow(ifname: str, port: int) -> None:
 def iptables_remove(ifname: str, port: int) -> None:
     subprocess.run(
         ["iptables", "-D", "INPUT", "-i", ifname, "-p", "tcp", "--dport", str(port), "-j", "ACCEPT"],
+        cwd=ROOT,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+
+
+def iptables_allow_vllm_backends() -> None:
+    """Allow benchmark Envoy containers to reach host-side mock backends."""
+    checked(["iptables", "-I", "INPUT", "1", "-i", "br+", "-p", "tcp", "--dport", "18391:18395", "-j", "ACCEPT"])
+
+
+def iptables_remove_vllm_backends() -> None:
+    subprocess.run(
+        ["iptables", "-D", "INPUT", "-i", "br+", "-p", "tcp", "--dport", "18391:18395", "-j", "ACCEPT"],
         cwd=ROOT,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
@@ -1042,7 +1331,11 @@ def comparison(results: list[dict[str, Any]]) -> dict[str, Any]:
 
     return {
         "status": "ok",
-        "route_agreement_delta": (xdp["route_agreement"] or 0) - (vllm["route_agreement"] or 0),
+        "route_agreement_delta": (
+            xdp["route_agreement"] - vllm["route_agreement"]
+            if xdp.get("route_agreement") is not None and vllm.get("route_agreement") is not None
+            else None
+        ),
         "avg_latency_delta_ms": (xdp_avg or 0) - (vllm_avg or 0),
         "p99_latency_delta_ms": (xdp_p99 or 0) - (vllm_p99 or 0),
         "avg_speedup": avg_speedup,
@@ -1071,20 +1364,25 @@ def xsr_vsr_routing_agreement(results: list[dict[str, Any]]) -> dict[str, Any]:
             "vsr_status": vsr.get("status"),
         }
 
-    def index_mode(mode_result: dict[str, Any], name: str) -> tuple[dict[tuple[int, str], dict[str, Any]] | None, str | None]:
+    def index_mode(mode_result: dict[str, Any], name: str) -> tuple[dict[str, dict[str, Any]] | None, str | None]:
         observations = mode_result.get("results")
         if not isinstance(observations, list):
             return None, f"{name} did not retain per-prompt results"
         expected_requests = mode_result.get("expected_requests", mode_result.get("requests"))
         if not isinstance(expected_requests, int) or len(observations) != expected_requests:
             return None, f"{name} returned {len(observations)} of {expected_requests} expected prompt results"
-        indexed: dict[tuple[int, str], dict[str, Any]] = {}
+        indexed: dict[str, dict[str, Any]] = {}
         for observation in observations:
-            if not isinstance(observation, dict) or not isinstance(observation.get("prompt"), str):
+            if (
+                not isinstance(observation, dict)
+                or not isinstance(observation.get("prompt"), str)
+                or not isinstance(observation.get("case_id"), str)
+                or not observation["case_id"]
+            ):
                 return None, f"{name} contains an invalid per-prompt result"
-            key = (observation.get("source_index", 0), observation["prompt"])
+            key = observation["case_id"]
             if key in indexed:
-                return None, f"{name} has duplicate prompt identity at source index {key[0]}"
+                return None, f"{name} has duplicate case identity {key}"
             indexed[key] = observation
         return indexed, None
 
@@ -1107,13 +1405,13 @@ def xsr_vsr_routing_agreement(results: list[dict[str, Any]]) -> dict[str, Any]:
             "missing_from_xsr": len(missing_from_xsr),
             "missing_from_vsr": len(missing_from_vsr),
             "missing_prompt_identities": {
-                "from_xsr": [{"source_index": index, "prompt": prompt[:160]} for index, prompt in missing_from_xsr[:10]],
-                "from_vsr": [{"source_index": index, "prompt": prompt[:160]} for index, prompt in missing_from_vsr[:10]],
+                "from_xsr": missing_from_xsr[:10],
+                "from_vsr": missing_from_vsr[:10],
             },
         }
 
     missing_routes = [
-        {"source_index": key[0], "prompt": key[1][:160], "mode": mode}
+        {"case_id": key, "prompt": observation["prompt"][:160], "mode": mode}
         for mode, observations in (("xsr", xsr_by_prompt), ("vsr", vsr_by_prompt))
         for key, observation in observations.items()
         if observation.get("route") not in ROUTES
@@ -1136,8 +1434,8 @@ def xsr_vsr_routing_agreement(results: list[dict[str, Any]]) -> dict[str, Any]:
             return {
                 "status": "incomplete",
                 "reason": "modes disagree on the expected route for a request",
-                "source_index": key[0],
-                "prompt": key[1][:160],
+                "case_id": key,
+                "prompt": xsr_result["prompt"][:160],
             }
         xsr_route = xsr_result["route"]
         vsr_route = vsr_result["route"]
@@ -1145,8 +1443,10 @@ def xsr_vsr_routing_agreement(results: list[dict[str, Any]]) -> dict[str, Any]:
         routes_match = xsr_route == vsr_route
         request_comparisons.append(
             {
-                "source_index": key[0],
-                "prompt": key[1],
+                "case_id": key,
+                "source": xsr_result.get("source"),
+                "source_index": xsr_result.get("source_index", 0),
+                "prompt": xsr_result["prompt"],
                 "expected_route": xsr_result["expected_route"],
                 "xdp_route": xsr_route,
                 "vllm_sr_route": vsr_route,
@@ -1159,11 +1459,20 @@ def xsr_vsr_routing_agreement(results: list[dict[str, Any]]) -> dict[str, Any]:
             agreements += 1
 
     total = len(xsr_keys)
+    per_source: dict[str, dict[str, Any]] = {}
+    for item in request_comparisons:
+        source = str(item.get("source") or "unknown")
+        bucket = per_source.setdefault(source, {"total": 0, "agreement_count": 0})
+        bucket["total"] += 1
+        bucket["agreement_count"] += int(item["routes_match"])
+    for bucket in per_source.values():
+        bucket["agreement_percent"] = 100.0 * bucket["agreement_count"] / bucket["total"]
     return {
         "status": "ok",
         "total": total,
         "agreement_count": agreements,
         "agreement_percent": 100.0 * agreements / total if total else None,
+        "per_source": per_source,
         "confusion_matrix": matrix,
         "request_comparisons": request_comparisons,
         "mismatches": [comparison for comparison in request_comparisons if not comparison["routes_match"]],
@@ -1211,137 +1520,119 @@ def write_reports(
         written_paths.append(json_path)
 
     dataset = report["dataset"]
-    selected = dataset["selected_counts"]
-    control_results = [r for r in report["results"] if r.get("mode") in {"direct-netns", "direct"}]
+    duplicates = dataset["duplicates"]
     test_results = [r for r in report["results"] if r.get("mode") not in {"direct-netns", "direct"}]
-
-    concurrency = report.get("concurrency", 1)
     lines = [
-        "# SPEED-Bench Routing Correctness Benchmark",
+        "# Routing Correctness Benchmark",
         "",
-        f"- Dataset: `{dataset['source']}`",
-        f"- Total rows: {dataset['scanned_rows']}",
-        "- Selected prompts: " + ", ".join(f"{route}={selected[route]}" for route in ROUTES),
-        f"- Rows excluded: embedded_quote={selected['embedded_quote']}, duplicate_prompt={selected['duplicate_prompt']}, missing_prompt={selected['missing_prompt']}",
+        f"- Corpus entries sent (paper-facing n): {dataset['sent_cases']}",
+        f"- Normalized unique prompts: {duplicates['unique_prompts']}",
+        f"- Cross-source duplicate groups: {duplicates['cross_source_duplicate_groups']}",
+        f"- Entries in cross-source duplicate groups: {duplicates['cross_source_duplicate_entries']}",
+        f"- Concurrency: {report.get('concurrency', 1)}",
         f"- Policy: case_sensitive={report['policy']['case_sensitive']}; keywords={report['policy']['keyword_count']}",
-        f"- Concurrency: {concurrency}",
         "",
+        "## Corpus",
+        "",
+        "| Source | Raw | Sent | Skipped | Duplicates within source | Revision / fingerprint | Prompt format | Route distribution |",
+        "| --- | ---: | ---: | --- | ---: | --- | --- | --- |",
     ]
-    if dataset.get("sources"):
-        lines += [
-            "## Dataset Mix",
-            "",
-            "| Source | Scanned | coding | math | qa | writing | others |",
-            "| --- | ---: | ---: | ---: | ---: | ---: | ---: |",
-        ]
-        for source in dataset["sources"]:
-            counts = source["selected_counts"]
-            lines.append(
-                f"| `{source['source']}` | {source['scanned_rows']} | "
-                + " | ".join(str(counts[route]) for route in ROUTES)
-                + " |"
-            )
-        lines.append("")
-
-    if control_results:
-        lines += [
-            "## Control Result",
-            "",
-            "| Mode | Requests | avg ms | p99 ms | RPS | Host CPU % | Sampled CPU % |",
-            "| --- | ---: | ---: | ---: | ---: | ---: | ---: |",
-        ]
-        for result in control_results:
-            if result.get("status") != "ok":
-                lines.append(f"| {result['mode']} ({result.get('reason', 'skipped')}) | 0 | n/a | n/a | n/a | n/a | n/a |")
-                continue
-            latency = result["latency_ms"]
-            lines.append(
-                f"| {result['mode']} | {result['requests']} | "
-                f"{fmt(latency['avg'])} | {fmt(latency['p99'])} | "
-                f"{fmt(result['requests_per_second'])} | {fmt(result['host_cpu_percent'])} | {fmt(result['sampled_cpu_percent'])} |"
-            )
-        lines.append("")
+    for source in dataset["sources"]:
+        counts = source["selected_counts"]
+        sent = sum(counts.get(route, 0) for route in ROUTES)
+        skipped = ", ".join(
+            f"{key}={counts.get(key, 0)}"
+            for key in ("missing_prompt", "embedded_quote")
+            if counts.get(key, 0)
+        ) or "none"
+        revision = source.get("revision") or "dataset server"
+        if source.get("fingerprint"):
+            revision += f" / {source['fingerprint']}"
+        distribution = ", ".join(f"{route}={counts.get(route, 0)}" for route in ROUTES)
+        lines.append(
+            f"| `{source['source']}` ({source['config']}/{source['split']}) | {source['scanned_rows']} | {sent} | "
+            f"{skipped} | {counts.get('duplicate_prompt', 0)} | `{revision}` | `{source.get('prompt_format', 'n/a')}` | {distribution} |"
+        )
 
     lines += [
+        "",
+        "Duplicates are counted for transparency and are not removed from the paper-facing corpus.",
+        "",
         "## Results",
         "",
-        "| Mode | Requests | Reference-label agreement | avg ms | p99 ms | RPS | Host CPU % | Sampled CPU % |",
-        "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+        "| Mode | Status | Requests | SPEED dataset-label agreement | RouterArena policy-oracle agreement | avg ms | p99 ms | RPS |",
+        "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |",
+    ]
+    for source in dataset["sources"]:
+        missing_question = source["selected_counts"].get("missing_question_field", 0)
+        if missing_question:
+            lines.insert(
+                lines.index("## Results") - 1,
+                f"{source['source']} rows with an empty Question field: {missing_question}; other available prompt components were retained.",
+            )
+    for result in test_results:
+        refs = result.get("reference_agreement", {})
+        speed = refs.get("dataset-category", {})
+        arena = refs.get("policy-oracle", {})
+        latency = result.get("latency_ms", {})
+        lines.append(
+            f"| {result['mode']} | {result.get('status')} | {result.get('requests', 0)} | "
+            f"{speed.get('agreement_count', 0)}/{speed.get('total', 0)} ({fmt(speed.get('agreement_percent'), 2)}%) | "
+            f"{arena.get('agreement_count', 0)}/{arena.get('total', 0)} ({fmt(arena.get('agreement_percent'), 2)}%) | "
+            f"{fmt(latency.get('avg'))} | {fmt(latency.get('p99'))} | {fmt(result.get('requests_per_second'))} |"
+        )
+
+    lines += [
+        "",
+        "## Route Distribution by Source",
+        "",
+        "| Mode | Source | " + " | ".join(ROUTES) + " | unknown |",
+        "| --- | --- | " + " | ".join("---:" for _ in ROUTES) + " | ---: |",
     ]
     for result in test_results:
-        if result.get("status") != "ok":
-            lines.append(f"| {result['mode']} ({result.get('reason', result.get('status', 'skipped'))}) | {result.get('requests', 0)} | n/a | n/a | n/a | n/a | n/a | n/a |")
-            continue
-        latency = result["latency_ms"]
-        lines.append(
-            f"| {result['mode']} | {result['requests']} | {fmt(result['route_agreement'], 4)} | "
-            f"{fmt(latency['avg'])} | {fmt(latency['p99'])} | "
-            f"{fmt(result['requests_per_second'])} | {fmt(result['host_cpu_percent'])} | {fmt(result['sampled_cpu_percent'])} |"
-        )
+        for source, counts in sorted(result.get("route_counts_by_source", {}).items()):
+            lines.append(
+                f"| {result['mode']} | {source} | "
+                + " | ".join(str(counts.get(route, 0)) for route in ROUTES)
+                + f" | {counts.get('unknown', 0)} |"
+            )
 
     pairwise = report["xsr_vsr_routing_agreement"]
     lines += ["", "## XSR vs VSR Routing Agreement", ""]
     if pairwise["status"] == "ok":
-        lines += [
-            f"XSR ↔ VSR agreement: {pairwise['agreement_count']}/{pairwise['total']} ({pairwise['agreement_percent']:.2f}%)",
-            "",
-            "```text",
-            "             VSR",
-            "           " + " ".join(f"{route:>7}" for route in ROUTES),
-            *[
-                f"XSR {route:<7}" + " ".join(f"{pairwise['confusion_matrix'][route][target]:>7}" for target in ROUTES)
-                for route in ROUTES
-            ],
-            "```",
-        ]
-        mismatches = pairwise["mismatches"]
-        if mismatches:
-            lines += [
-                "",
-                "### Per-Request Route Mismatches",
-                "",
-                "| Source index | Expected | XDP | vLLM-SR | Prompt |",
-                "| ---: | --- | --- | --- | --- |",
-            ]
-            for item in mismatches[:20]:
+        lines.append(
+            f"Overall: {pairwise['agreement_count']}/{pairwise['total']} ({pairwise['agreement_percent']:.2f}%)."
+        )
+        for source, value in sorted(pairwise["per_source"].items()):
+            lines.append(
+                f"- {source}: {value['agreement_count']}/{value['total']} ({value['agreement_percent']:.2f}%)"
+            )
+        if pairwise["mismatches"]:
+            lines += ["", "### Mismatches", "", "| Case ID | Expected | XDP | VSR | Prompt |", "| --- | --- | --- | --- | --- |"]
+            for item in pairwise["mismatches"][:20]:
                 prompt = " ".join(item["prompt"].split())[:160].replace("|", "\\|")
                 lines.append(
-                    f"| {item['source_index']} | {item['expected_route']} | {item['xdp_route']} | "
-                    f"{item['vllm_sr_route']} | {prompt} |"
+                    f"| `{item['case_id']}` | {item['expected_route']} | {item['xdp_route']} | {item['vllm_sr_route']} | {prompt} |"
                 )
-            if len(mismatches) > 20:
-                lines.append(f"\n- Showing 20 of {len(mismatches)} request mismatches; all are in the JSON report.")
+            if len(pairwise["mismatches"]) > 20:
+                lines.append(f"\nAll {len(pairwise['mismatches'])} mismatches are retained in the JSON report.")
     else:
-        lines.append(f"- Pairwise comparison incomplete: {pairwise.get('reason', 'unknown')}")
+        lines.append(f"Pairwise comparison incomplete: {pairwise.get('reason', 'unknown')}.")
 
-    lines += [
-        "",
-        "## Route Counts",
-        "",
-        "| Mode | " + " | ".join(ROUTES) + " |",
-        "| --- | " + " | ".join("---:" for _ in ROUTES) + " |",
-    ]
+    lines += ["", "## RouterArena Breakdown", ""]
     for result in test_results:
-        counts = result.get("route_counts") or {}
-        lines.append(f"| {result['mode']} | " + " | ".join(str(counts.get(route, 0)) for route in ROUTES) + " |")
-
-    comp = report["comparison"]
-    lines += ["", "## Comparison", ""]
-    if comp["status"] == "ok":
-        if comp.get("avg_speedup") is not None or comp.get("p99_speedup") is not None or comp.get("rps_speedup") is not None:
-            lines += [
-                "| Metric | avg speedup | p99 speedup | RPS speedup |",
-                "| --- | ---: | ---: | ---: |",
-                f"| XDP vs vLLM-SR | {fmt(comp.get('avg_speedup'), 2)}x | {fmt(comp.get('p99_speedup'), 2)}x | {fmt(comp.get('rps_speedup'), 2)}x |",
-                "",
-            ]
-        lines += [
-            f"- Reference-label agreement delta, XDP minus vLLM-SR: {fmt(comp['route_agreement_delta'], 4)}",
-            f"- Average latency delta, XDP minus vLLM-SR: {fmt(comp['avg_latency_delta_ms'])} ms",
-            f"- p99 latency delta, XDP minus vLLM-SR: {fmt(comp['p99_latency_delta_ms'])} ms",
-        ]
-    else:
-        lines.append(f"- Comparison incomplete: {comp.get('reason', 'unknown')}")
+        breakdown = result.get("routerarena_breakdown", {})
+        if not breakdown or not any(breakdown.values()):
+            continue
+        lines.append(f"### {result['mode']}")
+        lines.append("")
+        for field in ("domain", "difficulty"):
+            values = breakdown.get(field, {})
+            summary = ", ".join(
+                f"{name}: {value['agreement_count']}/{value['total']} ({value['agreement_percent']:.1f}%)"
+                for name, value in sorted(values.items())
+            )
+            lines.append(f"- {field.title()}: {summary or 'n/a'}")
 
     report_path = report_dir / report_name
     report_path.write_text("\n".join(lines) + "\n")
@@ -1355,17 +1646,22 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
     parser.add_argument(
         "--dataset",
-        choices=sorted(DATASETS),
-        default="speed-bench",
-        help="SPEED-Bench qualitative/test is the required routing-correctness corpus.",
+        choices=("combined", "speed-bench", "routerarena"),
+        default="combined",
+        help="Corpus selection (default: the full SPEED-Bench + RouterArena corpus).",
     )
-    parser.add_argument("--scan-limit", type=int, default=SPEED_BENCH_ROWS, help="Must be at least 880 for SPEED-Bench.")
+    parser.add_argument(
+        "--routerarena-split",
+        choices=sorted(ROUTERARENA_ROWS),
+        default="full",
+        help="RouterArena split; sub_10 is intended for smoke tests.",
+    )
     parser.add_argument("--per-route", type=int, default=None, help=argparse.SUPPRESS)
     parser.add_argument("--cache-dir", type=Path, default=DEFAULT_CACHE_DIR)
     parser.add_argument("--report-dir", type=Path, default=DEFAULT_REPORT_DIR)
     parser.add_argument("--report-name", default=None, help="Markdown report filename (default: routing_correctness_benchmark.md)")
     parser.add_argument("--json-output", action="store_true", help="Also write a JSON report alongside the Markdown report")
-    parser.add_argument("--modes", default="direct-netns,xdp,vllm-sr")
+    parser.add_argument("--modes", default="direct-netns,sockmap,vllm-sr")
     parser.add_argument("--timeout-s", type=float, default=10.0)
     parser.add_argument("--event-timeout-s", type=float, default=10.0)
     parser.add_argument("--xdp-url", default=DEFAULT_XDP_URL)
