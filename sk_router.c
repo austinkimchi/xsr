@@ -933,8 +933,13 @@ int main(void) {
   }
 
   mode = getenv("SK_ROUTER_MODE");
-  if (mode && strcmp(mode, "sockmap") == 0)
-    return run_sockmap_router();
+  if (mode && strcmp(mode, "proxy") == 0)
+    return run_proxy_router();
+  if (mode && strcmp(mode, "sockmap") != 0) {
+    fprintf(stderr, "unknown SK_ROUTER_MODE '%s'; use sockmap or proxy\n",
+            mode);
+    return 1;
+  }
 
-  return run_proxy_router();
+  return run_sockmap_router();
 }
