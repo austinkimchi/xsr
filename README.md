@@ -78,6 +78,18 @@ sudo BENCHMARK_PROFILE=quick make performance
 sudo BENCHMARK_PROFILE=quick RATES="100 250 500" make performance-fixed-rate
 ```
 
+The correctness command runs the combined 9,280-entry routing-equivalence
+corpus by default: SPEED-Bench `qualitative/test` (880) plus the pinned
+RouterArena `default/full` split (8,400). It uses the SOCKMAP path and repeats
+the corpus at concurrencies 1, 4, 8, and 16.
+Examples:
+
+```bash
+sudo make correctness args="--dataset speed-bench"
+sudo make correctness args="--dataset routerarena --routerarena-split sub_10"
+sudo make correctness args="--dataset routerarena --routerarena-split full"
+```
+
 Use `BENCHMARK_PROFILE=paper` for the longer five-trial runs. Docker and a VSR
 deployment are required for the VSR and Envoy comparisons. Add
 `args="INCLUDE_XDP=1"` to a performance command only when the legacy XDP result
