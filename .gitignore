@@ -2,6 +2,7 @@
 __pycache__/
 *.py[cod]
 .cache/
+.venv/
 reports/
 
 # Compiled C / BPF Binaries & Generated Headers
@@ -12,6 +13,7 @@ benchmarks/mock_backend
 tests/mock_backend
 *.bpf.o
 *.generated.h
+!bpf/xdp_jaccard_policy.generated.h
 
 # Generated Datasets
 *.jsonl
@@ -40,6 +42,3 @@ results/routing-performance/*/raw/**/FAILED
 
 # Explicit, repository-local benchmark tool installations
 .tools/
-
-# Generated policy headers
-bpf/xdp_jaccard_policy.generated.h

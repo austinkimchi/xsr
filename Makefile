@@ -1,20 +1,40 @@
+SHELL := /bin/bash
+
 CC ?= gcc
 BPF_CLANG ?= clang
 PKG_CONFIG ?= pkg-config
 PYTHON ?= python3
+BENCHMARK_PYTHON ?= $(CURDIR)/.venv/bin/python
 NOFILE_LIMIT ?= 16384
 
 ARCH := $(shell uname -m)
+BPF_ARCH := $(ARCH)
+ifneq (,$(filter x86_64 i386 i486 i586 i686,$(ARCH)))
+BPF_ARCH := x86
+else ifneq (,$(filter aarch64 arm64,$(ARCH)))
+BPF_ARCH := arm64
+else ifneq (,$(filter arm%,$(ARCH)))
+BPF_ARCH := arm
+else ifneq (,$(filter ppc64 ppc64le,$(ARCH)))
+BPF_ARCH := powerpc
+else ifeq ($(ARCH),s390x)
+BPF_ARCH := s390
+else ifeq ($(ARCH),riscv64)
+BPF_ARCH := riscv
+endif
+MULTIARCH := $(shell $(CC) -print-multiarch 2>/dev/null)
+MULTIARCH_INCLUDE := $(if $(MULTIARCH),-I/usr/include/$(MULTIARCH))
+
+OPT_CFLAGS ?= -O3
+EXTRA_DEFS ?=
+USER_CFLAGS := -Wall $(OPT_CFLAGS) $(EXTRA_DEFS)
 BPF_CFLAGS := -O2 -g -target bpf \
 	-D__BPF__=1 \
-	-D__TARGET_ARCH_x86 \
-	-I. -Ibpf \
-	-I/usr/include/$(ARCH)-linux-gnu
-
-OPT_CFLAGS := -O2
-USER_CFLAGS := -Wall $(OPT_CFLAGS)
+	-D__TARGET_ARCH_$(BPF_ARCH) \
+	-I. -Ibpf $(MULTIARCH_INCLUDE) $(EXTRA_DEFS)
 DEV_DEFS := -DXDP_DEBUG=1 -DXDP_PROFILE=1
-LIBBPF_FLAGS := $(shell $(PKG_CONFIG) --cflags --libs libbpf)
+LIBBPF_FLAGS = $(shell $(PKG_CONFIG) --cflags --libs libbpf 2>/dev/null)
+
 XDP_NETNS ?= ns1
 XDP_HOST_IF ?= veth0
 XDP_PEER_IF ?= veth1
@@ -22,67 +42,74 @@ XDP_HOST_ADDR ?= 10.10.0.1/24
 XDP_PEER_ADDR ?= 10.10.0.2/24
 KEYWORD_POLICY ?= config/policy_ngram.yaml
 VSR_BACKEND_PORTS ?= 18391 18392 18393 18394 18395
-# Optional arguments forwarded by `make correctness`, for example:
-# sudo make correctness args="--modes direct-netns,xdp"
 args ?=
 
-.DEFAULT_GOAL := all
+.DEFAULT_GOAL := build
 
 help:
-	@echo "XDP router commands:"
-	@echo "  make                     Build all router, BPF, and benchmark binaries"
-	@echo "  make all                 Build all router, BPF, and benchmark binaries"
-	@echo "  make dev                 Clean and build with debug/profile instrumentation"
-	@echo "  make prod                Clean and build optimized binaries"
-	@echo "  make check               Check required build and network dependencies"
-	@echo "  make check-performance   Check dependencies plus saturation-mode wrk"
-	@echo "  make check-performance-fixed-rate  Check dependencies plus fixed-rate wrk2"
-	@echo "  make install-wrk2        Build the pinned wrk2 release in .tools/wrk2/"
-	@echo "  sudo make setup          Create or repair ns1 and the veth0/veth1 pair"
-	@echo "  sudo make iproutes       Allow benchmark backend ports through INPUT"
+	@echo "XSR commands:"
+	@echo "  make                 Build the production SOCKMAP router"
+	@echo "  make install         Install Linux dependencies and build production"
+	@echo "  make benchmark       Set up Python/tools and build benchmark helpers"
+	@echo "  make check           Check build tools and SOCKMAP support"
+	@echo "  make dev             Build benchmark helpers with debug output"
+	@echo "  make legacy          Build the older XDP router when explicitly needed"
+	@echo "  make policy          Regenerate the checked-in policy header"
+	@echo "  sudo make setup      Create or repair ns1 and veth0/veth1"
 	@echo "  sudo make correctness [args=\"...\"]"
-	@echo "                           Set up and run routing correctness checks"
-	@echo "  sudo make sockmap-smoke"
-	@echo "                           Verify SOCKMAP routing, including first-request delivery"
 	@echo "  sudo make performance [args=\"CONCURRENCY=1 DURATION=30s ...\"]"
-	@echo "                           Run the saturation (wrk) benchmark"
 	@echo "  sudo make performance-fixed-rate [args=\"RATES='100 250 500' ...\"]"
-	@echo "                           Run the fixed-rate (wrk2) benchmark"
-	@echo "  sudo make wrk [args=\"...\"]"
-	@echo "                           Alias for performance"
-	@echo "  make clean               Remove built binaries and generated policy headers"
-	@echo "  sudo make clean-setup    Remove ns1 and veth0"
-	@echo ""
-	@echo "Performance options: VLLM_IP, VLLM_HOST, VLLM_PORT, CONCURRENCY,"
-	@echo "                     DURATION, WRK_BIN, WRK2_BIN, RATE/RATES, and INCLUDE_XDP=1 (legacy XSR)."
+	@echo "  make clean           Remove compiled binaries and BPF objects"
+	@echo "  sudo make clean-setup"
 
-all: xdp_router sk_router xdp_router.bpf.o sk_router.bpf.o benchmarks/mock_backend
+all: build
 
-dev: USER_CFLAGS += $(DEV_DEFS)
-dev: BPF_CFLAGS += $(DEV_DEFS)
-dev: clean all
+build: sk_router sk_router.bpf.o
 
-prod: OPT_CFLAGS := -O3
-prod: USER_CFLAGS := -Wall $(OPT_CFLAGS)
-prod: clean all
+legacy: xdp_router xdp_router.bpf.o
+
+benchmark-build: build benchmarks/mock_backend
+
+prod:
+	$(MAKE) clean
+	$(MAKE) build OPT_CFLAGS=-O3
+
+dev:
+	$(MAKE) clean
+	$(MAKE) benchmark-build OPT_CFLAGS=-O2 EXTRA_DEFS="$(DEV_DEFS)"
+
+install:
+	./scripts/install_dependencies.sh production
+	$(MAKE) check
+	$(MAKE) prod
+
+benchmark:
+	./scripts/install_dependencies.sh benchmark
+	$(PYTHON) -m venv .venv
+	$(BENCHMARK_PYTHON) -m pip install --upgrade pip
+	$(BENCHMARK_PYTHON) -m pip install -r benchmarks/requirements.txt
+	$(MAKE) policy PYTHON=$(BENCHMARK_PYTHON)
+	$(MAKE) benchmark-build
+	$(MAKE) install-wrk
+	$(MAKE) install-wrk2
+	$(MAKE) check-benchmark
+
+policy:
+	$(PYTHON) benchmarks/policy/generate_jaccard_policy_header.py $(KEYWORD_POLICY) bpf/xdp_jaccard_policy.generated.h
 
 define require_sudo
 	@if [ "$$(id -u)" -ne 0 ]; then \
-		echo "Error: run this benchmark as: sudo make $@" >&2; \
+		echo "Error: run this command as: sudo make $@" >&2; \
 		exit 1; \
 	fi
 endef
 
 correctness:
 	$(require_sudo)
-	$(MAKE) check
+	$(MAKE) check-benchmark
 	$(MAKE) setup
 	$(MAKE) iproutes
-	./benchmarks/run_routing_correctness.sh $(args)
-
-sockmap-smoke:
-	$(require_sudo)
-	$(PYTHON) tests/probe_sk_router_smoke.py
+	PYTHON="$(BENCHMARK_PYTHON)" ./benchmarks/run_routing_correctness.sh $(args)
 
 performance:
 	$(require_sudo)
@@ -91,7 +118,7 @@ performance:
 	$(MAKE) iproutes
 	@ulimit -n $(NOFILE_LIMIT) || { echo "Error: unable to set open-file limit to $(NOFILE_LIMIT)." >&2; exit 1; }; \
 		echo "Effective open-file limit: $$(ulimit -n)"; \
-		BENCHMARK_MODE=saturation ./benchmarks/run_routing_performance.sh $(args)
+		PYTHON="$(BENCHMARK_PYTHON)" BENCHMARK_MODE=saturation ./benchmarks/run_routing_performance.sh $(args)
 
 performance-fixed-rate:
 	$(require_sudo)
@@ -100,25 +127,37 @@ performance-fixed-rate:
 	$(MAKE) iproutes
 	@ulimit -n $(NOFILE_LIMIT) || { echo "Error: unable to set open-file limit to $(NOFILE_LIMIT)." >&2; exit 1; }; \
 		echo "Effective open-file limit: $$(ulimit -n)"; \
-		BENCHMARK_MODE=fixed-rate ./benchmarks/run_routing_performance.sh $(args)
+		PYTHON="$(BENCHMARK_PYTHON)" BENCHMARK_MODE=fixed-rate ./benchmarks/run_routing_performance.sh $(args)
 
 wrk: performance
 
-check:
+check-build:
+	@test "$$(uname -s)" = Linux || { echo "Error: XSR production requires Linux." >&2; exit 1; }
 	@command -v "$(CC)" >/dev/null || { echo "Error: compiler '$(CC)' is required." >&2; exit 1; }
 	@command -v "$(BPF_CLANG)" >/dev/null || { echo "Error: clang is required for BPF builds." >&2; exit 1; }
 	@command -v "$(PKG_CONFIG)" >/dev/null || { echo "Error: pkg-config is required." >&2; exit 1; }
-	@command -v "$(PYTHON)" >/dev/null || { echo "Error: python3 is required." >&2; exit 1; }
-	@$(PYTHON) -c 'import yaml' >/dev/null 2>&1 || { echo "Error: Python yaml module is required (install python3-yaml)." >&2; exit 1; }
-	@$(PKG_CONFIG) --exists libbpf || { echo "Error: libbpf development files are required (pkg-config libbpf)." >&2; exit 1; }
-	@command -v ip >/dev/null || { echo "Error: iproute2 (ip) is required." >&2; exit 1; }
-	@command -v iptables >/dev/null || { echo "Error: iptables is required." >&2; exit 1; }
+	@$(PKG_CONFIG) --exists libbpf || { echo "Error: libbpf development files are required." >&2; exit 1; }
 
-check-performance: check
-	@command -v wrk >/dev/null || { echo "Error: saturation mode requires standard wrk. Install it with your package manager (for example: apt-get install wrk)." >&2; exit 1; }
+check: check-build
+	@./scripts/check_sockmap.sh
+	@command -v ip >/dev/null || { echo "Error: iproute2 is required." >&2; exit 1; }
+	@command -v ethtool >/dev/null || { echo "Error: ethtool is required." >&2; exit 1; }
 
-check-performance-fixed-rate: check
-	@test -x "$(CURDIR)/.tools/wrk2/wrk" || command -v "$${WRK2_BIN:-wrk2}" >/dev/null || { echo "Error: fixed-rate mode requires wrk2. Run 'make install-wrk2' or set WRK2_BIN=/path/to/wrk2." >&2; exit 1; }
+check-benchmark: check
+	@test -x "$(BENCHMARK_PYTHON)" || { echo "Error: run 'make benchmark' first." >&2; exit 1; }
+	@$(BENCHMARK_PYTHON) -c 'import datasets, matplotlib, nbconvert, nbformat, numpy, pandas' >/dev/null 2>&1 || { echo "Error: benchmark Python packages are incomplete; run 'make benchmark'." >&2; exit 1; }
+	@command -v curl >/dev/null || { echo "Error: curl is required." >&2; exit 1; }
+	@command -v docker >/dev/null || { echo "Error: Docker is required for the VSR and Envoy comparisons." >&2; exit 1; }
+	@command -v iptables >/dev/null || { echo "Error: iptables is required for benchmark setup." >&2; exit 1; }
+
+check-performance: check-benchmark
+	@test -x "$(CURDIR)/.tools/wrk/wrk" || command -v wrk >/dev/null || { echo "Error: saturation mode requires standard wrk; run 'make benchmark' or 'make install-wrk'." >&2; exit 1; }
+
+check-performance-fixed-rate: check-benchmark
+	@test -x "$(CURDIR)/.tools/wrk2/wrk" || command -v "$${WRK2_BIN:-wrk2}" >/dev/null || { echo "Error: fixed-rate mode requires wrk2; run 'make benchmark' or 'make install-wrk2'." >&2; exit 1; }
+
+install-wrk:
+	./benchmarks/routing_wrk/install_wrk.sh
 
 install-wrk2:
 	./benchmarks/routing_wrk/install_wrk2.sh
@@ -132,9 +171,6 @@ sk_router: sk_router.c xdp_router.h bpf/xdp_decision.bpf.h bpf/xdp_signals.bpf.h
 benchmarks/mock_backend: benchmarks/mock_backend.c
 	$(CC) -O3 $< -o $@ -lpthread
 
-bpf/xdp_jaccard_policy.generated.h: $(KEYWORD_POLICY) scripts/generate_jaccard_policy_header.py scripts/generate_keyword_header.py
-	$(PYTHON) scripts/generate_jaccard_policy_header.py $(KEYWORD_POLICY) $@
-
 xdp_router.bpf.o: bpf/xdp_router.bpf.c xdp_router.h bpf/xdp_http_parser.bpf.h bpf/xdp_classifier.bpf.h bpf/xdp_jaccard_classifier.bpf.h bpf/xdp_jaccard_policy.generated.h
 	$(BPF_CLANG) $(BPF_CFLAGS) -c $< -o $@
 
@@ -142,7 +178,7 @@ sk_router.bpf.o: bpf/sk_router.bpf.c xdp_router.h bpf/xdp_decision.bpf.h bpf/xdp
 	$(BPF_CLANG) $(BPF_CFLAGS) -c $< -o $@
 
 clean:
-	rm -f xdp_router sk_router xdp_router.bpf.o sk_router.bpf.o bpf/xdp_keyword_policy.generated.h bpf/xdp_jaccard_policy.generated.h bpf/xdp_ngram_model.generated.h benchmarks/mock_backend
+	rm -f xdp_router sk_router xdp_router.bpf.o sk_router.bpf.o benchmarks/mock_backend
 
 clean-setup:
 	@ip link delete $(XDP_HOST_IF) 2>/dev/null || true
@@ -177,8 +213,6 @@ setup:
 	@ip netns exec $(XDP_NETNS) ip link set lo up
 	@echo "setup complete: $(XDP_HOST_IF)=$(XDP_HOST_ADDR), $(XDP_NETNS)/$(XDP_PEER_IF)=$(XDP_PEER_ADDR)"
 
-# Permit vLLM-SR's Docker bridge to reach the five marker backends used by
-# the routing benchmark.  INPUT is commonly DROP on development hosts.
 iproutes:
 	@for port in $(VSR_BACKEND_PORTS); do \
 		iptables -C INPUT -p tcp --dport $$port -j ACCEPT 2>/dev/null || \
@@ -186,4 +220,4 @@ iproutes:
 	done
 	@echo "benchmark backend ports allowed: $(VSR_BACKEND_PORTS)"
 
-.PHONY: help all dev prod correctness sockmap-smoke performance performance-fixed-rate wrk check check-performance check-performance-fixed-rate install-wrk2 clean clean-setup setup iproutes
+.PHONY: help all build legacy benchmark-build prod dev install benchmark policy correctness performance performance-fixed-rate wrk check-build check check-benchmark check-performance check-performance-fixed-rate install-wrk install-wrk2 clean clean-setup setup iproutes

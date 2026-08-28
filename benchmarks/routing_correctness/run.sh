@@ -3,6 +3,11 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+PYTHON_BIN="${PYTHON:-${ROOT_DIR}/.venv/bin/python}"
+if [ ! -x "$PYTHON_BIN" ] && ! command -v "$PYTHON_BIN" >/dev/null 2>&1; then
+  echo "Error: benchmark Python is unavailable; run 'make benchmark' first." >&2
+  exit 1
+fi
 
 METHODS=("ngram")
 CONCURRENCIES=(1 4 8 16)
@@ -12,7 +17,7 @@ SPEED_BENCH_ARGS=(--dataset speed-bench --scan-limit 880)
 
 if [ "$EUID" -ne 0 ]; then
   echo "XDP benchmark requires root privileges. Elevating with sudo..."
-  exec sudo "$0" "$@"
+  exec sudo env PYTHON="$PYTHON_BIN" "$0" "$@"
 fi
 
 cd "${ROOT_DIR}"
@@ -38,7 +43,11 @@ for METHOD in "${METHODS[@]}"; do
   echo " [1/2] Building XDP router for method: ${METHOD}"
   echo " Config: ${CONFIG}"
   echo "-----------------------------------------------------------------"
+  make KEYWORD_POLICY="$CONFIG" PYTHON="$PYTHON_BIN" policy
   make KEYWORD_POLICY="$CONFIG" dev
+  if [[ ",${BENCHMARK_MODES}," == *,xdp,* ]]; then
+    make legacy
+  fi
 
   echo ""
   echo "-----------------------------------------------------------------"
@@ -52,7 +61,7 @@ for METHOD in "${METHODS[@]}"; do
     echo ""
     echo "   - concurrency=${CONCURRENCY}"
     echo "     output=${REPORT_DIR}/${REPORT_NAME}"
-    python3 "${SCRIPT_DIR}/benchmark.py" \
+    "$PYTHON_BIN" "${SCRIPT_DIR}/benchmark.py" \
       "${SPEED_BENCH_ARGS[@]}" \
       "$@" \
       --config "$CONFIG" \

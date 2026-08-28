@@ -28,10 +28,16 @@ done
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+PYTHON_BIN="${PYTHON:-${ROOT_DIR}/.venv/bin/python}"
+if [ ! -x "$PYTHON_BIN" ] && ! command -v "$PYTHON_BIN" >/dev/null 2>&1; then
+    echo "Error: benchmark Python is unavailable; run 'make benchmark' first." >&2
+    exit 1
+fi
 
 BENCHMARK_MODE="${BENCHMARK_MODE:-saturation}"
 WRK2_LOCAL_BIN="${ROOT_DIR}/.tools/wrk2/wrk"
 WRK2_BIN="${WRK2_BIN:-$WRK2_LOCAL_BIN}"
+WRK_LOCAL_BIN="${ROOT_DIR}/.tools/wrk/wrk"
 WRK_BIN="${WRK_BIN:-}"
 BENCHMARK_PROFILE="${BENCHMARK_PROFILE:-quick}"
 case "$BENCHMARK_PROFILE" in
@@ -80,6 +86,7 @@ REPORT_DIR="${ROOT_DIR}/results/routing-performance"
 if [ "$EUID" -ne 0 ]; then
     echo "Routing benchmark uses sudo for cleanup and firewall setup. Elevating..."
     sudo_env=(
+        PYTHON="$PYTHON_BIN"
         WRK_BIN="$WRK_BIN"
         WRK2_BIN="$WRK2_BIN"
         BENCHMARK_MODE="$BENCHMARK_MODE"
@@ -125,13 +132,6 @@ if [ "$EUID" -ne 0 ]; then
 fi
 
 cd "$ROOT_DIR"
-mkdir -p "$REPORT_DIR"
-RUN_ID="${RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)-$$}"
-RUN_ROOT="${REPORT_DIR}/${RUN_ID}"
-RAW_DIR="${RUN_ROOT}/raw"
-mkdir -p "$RAW_DIR"
-python3 "${SCRIPT_DIR}/manifest.py" --path "${RUN_ROOT}/manifest.json" --run-id "$RUN_ID" --profile "$BENCHMARK_PROFILE" \
-    --mode "$BENCHMARK_MODE" --trials "$TRIALS" --duration "$DURATION" --warmup-duration "$WARMUP_DURATION" --seed "$RANDOM_SEED"
 
 if [ "$INCLUDE_XDP" != "0" ] && [ "$INCLUDE_XDP" != "1" ]; then
     echo "Error: INCLUDE_XDP must be 0 or 1." >&2
@@ -156,7 +156,9 @@ fi
 
 case "$BENCHMARK_MODE" in
     saturation)
-        if [ -z "$WRK_BIN" ]; then WRK_BIN="wrk"; fi
+        if [ -z "$WRK_BIN" ]; then
+            WRK_BIN="$([ -x "$WRK_LOCAL_BIN" ] && printf '%s' "$WRK_LOCAL_BIN" || printf 'wrk')"
+        fi
         if ! command -v "$WRK_BIN" >/dev/null 2>&1; then
             echo "Error: saturation mode requires standard wrk; '${WRK_BIN}' is not available." >&2
             echo "Install wrk with your package manager, then retry 'sudo make performance'." >&2
@@ -194,7 +196,15 @@ if [ "$BENCHMARK_DRY_RUN" = "1" ]; then
     exit 0
 fi
 
-python3 "${SCRIPT_DIR}/collect_metadata.py" --output "${RUN_ROOT}/metadata.json" --mode "$BENCHMARK_MODE" \
+mkdir -p "$REPORT_DIR"
+RUN_ID="${RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)-$$}"
+RUN_ROOT="${REPORT_DIR}/${RUN_ID}"
+RAW_DIR="${RUN_ROOT}/raw"
+mkdir -p "$RAW_DIR"
+"$PYTHON_BIN" "${SCRIPT_DIR}/manifest.py" --path "${RUN_ROOT}/manifest.json" --run-id "$RUN_ID" --profile "$BENCHMARK_PROFILE" \
+    --mode "$BENCHMARK_MODE" --trials "$TRIALS" --duration "$DURATION" --warmup-duration "$WARMUP_DURATION" --seed "$RANDOM_SEED"
+
+"$PYTHON_BIN" "${SCRIPT_DIR}/collect_metadata.py" --output "${RUN_ROOT}/metadata.json" --mode "$BENCHMARK_MODE" \
     --profile "$BENCHMARK_PROFILE" --trials "$TRIALS" --duration "$DURATION" --warmup-duration "$WARMUP_DURATION" \
     --concurrency "${CONCURRENCY:-${DEFAULT_CONCURRENCIES[*]}}" --rates "$RATES" --wrk-bin "$WRK_BIN" --wrk2-bin "$WRK2_BIN" \
     --vllm-container "$VLLM_HOST" --vsr-container "${VSR_CONTAINER:-${VLLM_HOST/envoy/router}}" \
@@ -218,14 +228,18 @@ pkill -9 sk_router >/dev/null 2>&1 || true
 # Generate prompt dataset if missing or from the older no-route-metadata format.
 if [ ! -f "benchmarks/dataset_prompts.jsonl" ] || ! head -n 1 benchmarks/dataset_prompts.jsonl | grep -q '"x_expected_route"'; then
     echo "Generating dataset_prompts.jsonl..."
-    python3 "${SCRIPT_DIR}/export_prompts.py"
+    "$PYTHON_BIN" "${SCRIPT_DIR}/export_prompts.py"
 fi
 
 echo "Building routing proxy and mock backends..."
 if [ "$BENCHMARK_PROFILE" = "paper" ]; then
-    make prod KEYWORD_POLICY=config/policy_ngram.yaml
+    make prod
+    make benchmarks/mock_backend
 else
-    make dev KEYWORD_POLICY=config/policy_ngram.yaml
+    make dev
+fi
+if [ "$INCLUDE_XDP" = "1" ]; then
+    make legacy
 fi
 
 # Flush old iptables rules for these ports
@@ -406,7 +420,7 @@ start_envoy_only() {
     image="${VLLM_ENVOY_IMAGE:-$(docker inspect -f '{{.Config.Image}}' "$VLLM_HOST" 2>/dev/null)}"
     [ -n "$image" ] || { echo "Error: could not determine Envoy image for ${VLLM_HOST}." >&2; return 1; }
     config="${RAW_DIR}/envoy-only.json"
-    python3 "${SCRIPT_DIR}/generate_envoy_only_config.py" --gateway "$gateway" --port "$ENVOY_ONLY_PORT" \
+    "$PYTHON_BIN" "${SCRIPT_DIR}/generate_envoy_only_config.py" --gateway "$gateway" --port "$ENVOY_ONLY_PORT" \
         --coding-port "$CODING_BACKEND_PORT" --math-port "$MATH_BACKEND_PORT" --qa-port "$QA_BACKEND_PORT" \
         --writing-port "$WRITING_BACKEND_PORT" --others-port "$OTHERS_BACKEND_PORT" --output "$config"
     if grep -q 'ext_proc' "$config"; then
@@ -588,7 +602,7 @@ validate_untimed_load() {
     local url="$2"
     if [ "$VALIDATE_LOAD" = "1" ]; then
         echo "Running untimed concurrent load validation for ${name}..."
-        python3 "${SCRIPT_DIR}/validate_load.py" --url "$url" > "${RAW_DIR}/${name//[^a-zA-Z0-9]/_}.load-validation.txt"
+        "$PYTHON_BIN" "${SCRIPT_DIR}/validate_load.py" --url "$url" > "${RAW_DIR}/${name//[^a-zA-Z0-9]/_}.load-validation.txt"
     fi
 }
 
@@ -626,16 +640,16 @@ run_wrk() {
     printf '%s\n' "$output"
     if [ "$status" -ne 0 ]; then
         printf 'tool exit status=%s\n' "$status" > "$reason_file"
-        python3 "${SCRIPT_DIR}/record_result.py" --raw "$raw_file" --output "${RAW_DIR}/${3}/result.json" \
+        "$PYTHON_BIN" "${SCRIPT_DIR}/record_result.py" --raw "$raw_file" --output "${RAW_DIR}/${3}/result.json" \
             --system "$2" --topology "$(system_topology "$3")" --mode "$BENCHMARK_MODE" --configuration "$CURRENT_CONFIGURATION" \
             --trial "$CURRENT_TRIAL" --tool "$WRK_BIN" --exit-status "$status"
         echo "Error: ${WRK_BIN} failed for $2 (exit ${status})." >&2
         return "$status"
     fi
-    python3 "${SCRIPT_DIR}/record_result.py" --raw "$raw_file" --output "${RAW_DIR}/${3}/result.json" \
+    "$PYTHON_BIN" "${SCRIPT_DIR}/record_result.py" --raw "$raw_file" --output "${RAW_DIR}/${3}/result.json" \
         --system "$2" --topology "$(system_topology "$3")" --mode "$BENCHMARK_MODE" --configuration "$CURRENT_CONFIGURATION" \
         --trial "$CURRENT_TRIAL" --tool "$WRK_BIN" --exit-status "$status"
-    if ! reason=$(python3 "${SCRIPT_DIR}/validate_output.py" --input "$raw_file"); then
+    if ! reason=$("$PYTHON_BIN" "${SCRIPT_DIR}/validate_output.py" --input "$raw_file"); then
         printf '%s\n' "$reason" > "$reason_file"
         echo "Error: invalid ${WRK_BIN} run for $2: ${reason}. Raw output: ${raw_file}" >&2
         return 1
@@ -751,8 +765,8 @@ for CONCURRENCY in "${CONCURRENCIES[@]}"; do
         mkdir -p "$RAW_DIR"
         BASE_SYSTEMS=(direct envoy-only xsr vsr)
         [ "$INCLUDE_XDP" = "1" ] && BASE_SYSTEMS+=(xsr-legacy)
-        mapfile -t SYSTEM_ORDER < <(python3 -c 'import random, sys; items=sys.argv[1:]; random.Random(int(items.pop(0))).shuffle(items); print(*items, sep="\n")' "$((RANDOM_SEED + CURRENT_TRIAL + CONCURRENCY + RATE))" "${BASE_SYSTEMS[@]}")
-        python3 "${SCRIPT_DIR}/manifest.py" --path "${RUN_ROOT}/manifest.json" --configuration "$CURRENT_CONFIGURATION" --trial "$CURRENT_TRIAL" --order "${SYSTEM_ORDER[@]}"
+        mapfile -t SYSTEM_ORDER < <("$PYTHON_BIN" -c 'import random, sys; items=sys.argv[1:]; random.Random(int(items.pop(0))).shuffle(items); print(*items, sep="\n")' "$((RANDOM_SEED + CURRENT_TRIAL + CONCURRENCY + RATE))" "${BASE_SYSTEMS[@]}")
+        "$PYTHON_BIN" "${SCRIPT_DIR}/manifest.py" --path "${RUN_ROOT}/manifest.json" --configuration "$CURRENT_CONFIGURATION" --trial "$CURRENT_TRIAL" --order "${SYSTEM_ORDER[@]}"
         REPORT_FILE="${RAW_DIR}/report.md"
         stop_routing_proxy
         detach_xdp
@@ -775,7 +789,7 @@ for CONCURRENCY in "${CONCURRENCIES[@]}"; do
 done
 done
 
-python3 "${SCRIPT_DIR}/aggregate_results.py" --run-dir "$RUN_ROOT" || echo "No completed trial results available for aggregation." >&2
+"$PYTHON_BIN" "${SCRIPT_DIR}/aggregate_results.py" --run-dir "$RUN_ROOT" || echo "No completed trial results available for aggregation." >&2
 if [ "$FAILED_TRIALS" -ne 0 ]; then
     echo "Error: ${FAILED_TRIALS} invalid benchmark trial(s) were excluded from aggregation." >&2
     exit 1

@@ -27,7 +27,7 @@ from typing import Any
 
 
 ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(ROOT / "scripts"))
+sys.path.insert(0, str(ROOT / "benchmarks" / "policy"))
 
 from generate_keyword_header import load_policy, validate_policy  # noqa: E402
 from jaccard_reference import rule_matches  # noqa: E402
