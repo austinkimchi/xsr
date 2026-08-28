@@ -24,6 +24,7 @@ tests/mock_backend
 !/models/
 !/models/xdp_ngram_model_fnv.json
 tests/vllm-sr-bert-stack/
+tests/
 
 # Benchmark results selected for publication
 results/charts/
