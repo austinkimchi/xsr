@@ -76,6 +76,7 @@ struct sk_http_flow_state {
   __u8 escaped;
   __u8 unicode_remaining;
   __u16 unicode_value;
+  __u16 unicode_high_surrogate;
   struct xdp_classifier_state classifier;
 };
 
@@ -164,6 +165,27 @@ static __always_inline int content_hex_value(unsigned char c) {
   return -1;
 }
 
+static __always_inline void sk_score_codepoint(struct xdp_classifier_state *classifier,
+                                               __u32 value) {
+  if (value <= 0x7f) {
+    xdp_classifier_score_char(classifier, value);
+  } else if (value <= 0x7ff) {
+    xdp_classifier_score_char(classifier, 0xc0 | (value >> 6));
+    xdp_classifier_score_char(classifier, 0x80 | (value & 0x3f));
+  } else if (value <= 0xffff) {
+    xdp_classifier_score_char(classifier, 0xe0 | (value >> 12));
+    xdp_classifier_score_char(classifier, 0x80 | ((value >> 6) & 0x3f));
+    xdp_classifier_score_char(classifier, 0x80 | (value & 0x3f));
+  } else if (value <= 0x10ffff) {
+    xdp_classifier_score_char(classifier, 0xf0 | (value >> 18));
+    xdp_classifier_score_char(classifier, 0x80 | ((value >> 12) & 0x3f));
+    xdp_classifier_score_char(classifier, 0x80 | ((value >> 6) & 0x3f));
+    xdp_classifier_score_char(classifier, 0x80 | (value & 0x3f));
+  } else {
+    xdp_classifier_score_char(classifier, ' ');
+  }
+}
+
 static long scan_headers_callback(__u32 i, void *data) {
   struct sk_classify_ctx *ctx = data;
   struct sk_http_flow_state *flow = ctx->flow;
@@ -233,9 +255,28 @@ static long scan_content_callback(__u32 i, void *data) {
       flow->unicode_value = (flow->unicode_value << 4) | hex;
       flow->unicode_remaining--;
       if (!flow->unicode_remaining) {
-        xdp_classifier_score_char(&flow->classifier, flow->unicode_value <= 0x7f
-                                                         ? flow->unicode_value
-                                                         : ' ');
+        __u32 value = flow->unicode_value;
+        if (value >= 0xd800 && value <= 0xdbff) {
+          if (flow->unicode_high_surrogate)
+            xdp_classifier_score_char(&flow->classifier, ' ');
+          flow->unicode_high_surrogate = value;
+        } else if (value >= 0xdc00 && value <= 0xdfff &&
+                   flow->unicode_high_surrogate) {
+          value = 0x10000 +
+                  (((__u32)flow->unicode_high_surrogate - 0xd800) << 10) +
+                  (value - 0xdc00);
+          flow->unicode_high_surrogate = 0;
+          sk_score_codepoint(&flow->classifier, value);
+        } else {
+          if (flow->unicode_high_surrogate) {
+            xdp_classifier_score_char(&flow->classifier, ' ');
+            flow->unicode_high_surrogate = 0;
+          }
+          if (value >= 0xdc00 && value <= 0xdfff)
+            xdp_classifier_score_char(&flow->classifier, ' ');
+          else
+            sk_score_codepoint(&flow->classifier, value);
+        }
         flow->unicode_value = 0;
       }
       return 0;

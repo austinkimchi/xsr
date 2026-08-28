@@ -56,7 +56,16 @@ client
 The shared policy is [`config/policy_ngram.yaml`](config/policy_ngram.yaml). Each
 route has a short keyword list. xsr compares three-character pieces so small
 spelling differences can still match, then applies the policy's priority order.
-Prompts without a match use the fallback backend.
+Matching operates on Unicode code points, accepts raw UTF-8 and JSON `\uXXXX`
+escapes, and performs both per-word matching and a full-text pass for multi-word
+phrases. Prompts without a match use the fallback backend.
+
+The kernel implementation is deliberately bounded for verifier safety: at most
+16 keywords across 8 rules, 32 trigrams per keyword or word, and 128 trigrams
+in the full-text phrase pass. Case-insensitive policies support one-to-one
+Unicode lowercasing; expanding folds are rejected when the policy is generated.
+Inputs outside those bounds still pass through, but only matches completed
+within the bounded domain affect routing.
 
 To change the policy, regenerate the checked-in header from the benchmark
 environment and rebuild:

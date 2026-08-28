@@ -16,7 +16,7 @@ from generate_keyword_header import keyword_signals, load_policy, signal_route_n
 
 MAX_KEYWORDS = 16
 MAX_RULES = 8
-MAX_GRAMS = 16
+MAX_GRAMS = 32
 MAX_ARITY = 3
 ROUTES = {
     "coding": "XDP_ROUTE_CODING",
@@ -34,22 +34,26 @@ def threshold_milli(value: object) -> int:
     return result
 
 
-def pack(chars: bytes) -> int:
-    value = 0
-    for char in chars:
-        value = (value << 8) | char
-    return value
+def normalize(text: str, case_sensitive: bool) -> str:
+    if case_sensitive:
+        return text
+    lowered = text.lower()
+    for char in text:
+        if len(char.lower()) != 1:
+            raise ValueError(
+                f"keyword {text!r} requires expanding Unicode case folding, "
+                "which is outside the bounded XDP implementation"
+            )
+    return lowered
 
 
-def gram_counts(keyword: str, arity: int, case_sensitive: bool) -> tuple[list[int], list[int], int]:
-    try:
-        raw = keyword.encode("ascii")
-    except UnicodeEncodeError as exc:
-        raise ValueError(f"keyword {keyword!r} must be ASCII for XDP") from exc
-    if not case_sensitive:
-        raw = raw.lower()
-    padded = b" " * (arity - 1) + raw + b" " * (arity - 1)
-    all_grams = [pack(padded[index : index + arity]) for index in range(len(padded) - arity + 1)]
+def gram_counts(keyword: str, arity: int, case_sensitive: bool) -> tuple[list[tuple[int, int, int]], list[int], int]:
+    normalized = normalize(keyword, case_sensitive)
+    padded = " " * (arity - 1) + normalized + " " * (arity - 1)
+    all_grams = [
+        tuple(ord(char) for char in padded[index : index + arity])
+        for index in range(len(padded) - arity + 1)
+    ]
     if len(all_grams) > MAX_GRAMS:
         raise ValueError(
             f"keyword {keyword!r} produces {len(all_grams)} trigrams; max is {MAX_GRAMS} "
@@ -67,17 +71,34 @@ def gram_counts(keyword: str, arity: int, case_sensitive: bool) -> tuple[list[in
     return result, multiplicities, len(all_grams)
 
 
-def grams(keyword: str, arity: int, case_sensitive: bool) -> list[int]:
+def grams(keyword: str, arity: int, case_sensitive: bool) -> list[tuple[int, int, int]]:
     """Compatibility helper returning the distinct packed grams in source order."""
     return gram_counts(keyword, arity, case_sensitive)[0]
 
 
-def parse(path: Path) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+def casefold_entries(texts: list[str]) -> list[tuple[int, int]]:
+    entries: dict[int, int] = {}
+    for text in texts:
+        for char in text:
+            lower = char.lower()
+            if len(lower) != 1:
+                continue
+            for variant in {char, lower.upper(), lower.title()}:
+                if len(variant) == 1 and variant != lower:
+                    entries[ord(variant)] = ord(lower)
+    if len(entries) > 128:
+        raise ValueError("Unicode case-fold policy requires more than 128 bounded mappings")
+    return sorted(entries.items())
+
+
+def parse(path: Path) -> tuple[list[dict[str, object]], list[dict[str, object]], list[tuple[int, int]]]:
     policy = load_policy(path)
     signals = keyword_signals(policy)
     decision_routes, priorities = decision_keyword_routes(policy)
     rules: list[dict[str, object]] = []
     keywords: list[dict[str, object]] = []
+    insensitive_texts: list[str] = []
+    policy_case_sensitive: bool | None = None
     for signal in signals:
         if not isinstance(signal, dict) or str(signal.get("method", "")).lower() != "ngram":
             raise ValueError("XDP Jaccard policies must contain only method: ngram keyword signals")
@@ -96,12 +117,17 @@ def parse(path: Path) -> tuple[list[dict[str, object]], list[dict[str, object]]]
             raise ValueError(f"{name}: keywords must be a non-empty list")
         if len(rules) >= MAX_RULES:
             raise ValueError(f"at most {MAX_RULES} keyword rules are supported")
+        case_sensitive = bool(signal.get("case_sensitive", False))
+        if policy_case_sensitive is None:
+            policy_case_sensitive = case_sensitive
+        elif policy_case_sensitive != case_sensitive:
+            raise ValueError("XDP requires the same case_sensitive value for every ngram rule")
         rule_id = len(rules)
         rules.append({
             "threshold_milli": threshold_milli(signal.get("ngram_threshold", 0.4)),
             "priority": priorities.get(name, int(signal.get("priority", 0))),
             "route": ROUTES[route_name], "operator": OPERATORS[operator],
-            "arity": arity, "case_sensitive": int(bool(signal.get("case_sensitive", False))),
+            "arity": arity, "case_sensitive": int(case_sensitive),
             "keyword_count": len(values),
         })
         for value in values:
@@ -110,21 +136,26 @@ def parse(path: Path) -> tuple[list[dict[str, object]], list[dict[str, object]]]
             text = str(value)
             if not text:
                 raise ValueError(f"{name}: empty keywords are not supported")
-            values, counts, total = gram_counts(text, arity, bool(signal.get("case_sensitive", False)))
-            keywords.append({"rule_id": rule_id, "grams": values, "counts": counts, "total_grams": total})
-    return rules, keywords
+            gram_values, counts, total = gram_counts(text, arity, case_sensitive)
+            keywords.append({"rule_id": rule_id, "grams": gram_values, "counts": counts, "total_grams": total})
+            if not case_sensitive:
+                insensitive_texts.append(text)
+    return rules, keywords, casefold_entries(insensitive_texts)
 
 
-def emit(source: Path, rules: list[dict[str, object]], keywords: list[dict[str, object]]) -> str:
+def emit(source: Path, rules: list[dict[str, object]], keywords: list[dict[str, object]],
+         casefolds: list[tuple[int, int]]) -> str:
     lines = [
         "/* Generated by benchmarks/policy/generate_jaccard_policy_header.py. Do not edit. */",
-        f"/* Source: {source.as_posix()}; Pad::Auto-compatible ASCII preprocessing. */",
+        f"/* Source: {source.as_posix()}; Pad::Auto-compatible Unicode preprocessing. */",
         "#ifndef XDP_JACCARD_POLICY_GENERATED_H", "#define XDP_JACCARD_POLICY_GENERATED_H", "",
         f"#define XDP_JACCARD_GENERATED_RULE_COUNT {len(rules)}",
         f"#define XDP_JACCARD_GENERATED_KEYWORD_COUNT {len(keywords)}", "",
+        f"#define XDP_JACCARD_GENERATED_CASEFOLD_COUNT {len(casefolds)}", "",
         "#ifndef __BPF__",
         "static const struct xdp_jaccard_policy_config xdp_jaccard_generated_config = {",
-        f"  .keyword_count = {len(keywords)}, .rule_count = {len(rules)},", "};",
+        f"  .keyword_count = {len(keywords)}, .rule_count = {len(rules)}, "
+        f".case_sensitive = {rules[0]['case_sensitive'] if rules else 0},", "};",
         "static const struct xdp_jaccard_rule xdp_jaccard_generated_rules[] = {",
     ]
     for rule in rules:
@@ -133,13 +164,18 @@ def emit(source: Path, rules: list[dict[str, object]], keywords: list[dict[str, 
     for keyword in keywords:
         values = list(keyword["grams"])
         counts = list(keyword["counts"])
-        values.extend([0] * (MAX_GRAMS - len(values)))
+        values.extend([(0, 0, 0)] * (MAX_GRAMS - len(values)))
         counts.extend([0] * (MAX_GRAMS - len(counts)))
         lines.append(
             f"  {{.count = {len(keyword['grams'])}, .total_grams = {keyword['total_grams']}, "
-            f".grams = {{{', '.join(map(str, values))}}}, .gram_counts = {{{', '.join(map(str, counts))}}}, "
+            f".grams = {{{', '.join(f'{{.a = {a}, .b = {b}, .c = {c}}}' for a, b, c in values)}}}, "
+            f".gram_counts = {{{', '.join(map(str, counts))}}}, "
             f".rule_id = {keyword['rule_id']}}},"
         )
+    lines.extend(["};", "static const struct xdp_jaccard_casefold xdp_jaccard_generated_casefolds[] = {"])
+    lines.extend(f"  {{.from = {source_cp}, .to = {target_cp}}}," for source_cp, target_cp in casefolds)
+    if not casefolds:
+        lines.append("  {.from = 0, .to = 0},")
     lines.extend(["};", "#endif", "", "#endif", ""])
     return "\n".join(lines)
 
@@ -149,9 +185,9 @@ def main() -> int:
     parser.add_argument("policy", type=Path)
     parser.add_argument("output", type=Path)
     args = parser.parse_args()
-    rules, keywords = parse(args.policy)
+    rules, keywords, casefolds = parse(args.policy)
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(emit(args.policy, rules, keywords))
+    args.output.write_text(emit(args.policy, rules, keywords, casefolds))
     return 0
 
 
