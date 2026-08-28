@@ -1,4 +1,4 @@
-"""Bounded ASCII reference for VSR's ngrammatic warp-2 matcher.
+"""Bounded Unicode reference for VSR's ngrammatic warp-2 matcher.
 
 This mirrors `Corpus::search`: Pad::Auto on both sides, lowercase input for
 the configured case-insensitive subset, multiset gram intersection, and the
@@ -18,21 +18,18 @@ def threshold_milli(value: object) -> int:
     return int((Decimal(str(value)) * 1000).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
 
 
-def word_grams(word: str, arity: int, case_sensitive: bool) -> Counter[bytes]:
+def word_grams(word: str, arity: int, case_sensitive: bool) -> Counter[str]:
     if not case_sensitive:
         word = word.lower()
-    raw = word.encode("ascii")
-    padded = b" " * (arity - 1) + raw + b" " * (arity - 1)
+    padded = " " * (arity - 1) + word + " " * (arity - 1)
     return Counter(padded[index : index + arity] for index in range(len(padded) - arity + 1))
 
 
 def words(text: str) -> Iterable[str]:
-    # The XDP byte implementation intentionally has the ASCII subset of VSR's
-    # Unicode-aware splitter; '-' and '_' remain word characters in both.
-    return (word for word in re.split(r"[^A-Za-z0-9_-]+", text) if word)
+    return (word for word in re.split(r"[^\w-]+", text, flags=re.UNICODE) if word)
 
 
-def similarity_counts(left: Counter[bytes], right: Counter[bytes]) -> tuple[int, int, int]:
+def similarity_counts(left: Counter[str], right: Counter[str]) -> tuple[int, int, int]:
     """Return ngrammatic's samegram count, allgram count, and warp-2 numerator."""
     same = sum(min(count, right[gram]) for gram, count in left.items())
     all_grams = sum(left.values()) + sum(right.values()) - same
@@ -54,5 +51,12 @@ def rule_matches(text: str, keywords: list[str], operator: str, arity: int,
         keyword for keyword in keywords
         if any(matches(word, keyword, arity, threshold, case_sensitive) for word in words(text))
     }
+    # nlp-binding performs one additional Corpus::search with the normalized
+    # full text so keywords containing spaces can match as phrases.
+    if len(matched) < len(keywords):
+        matched.update(
+            keyword for keyword in keywords
+            if keyword not in matched and matches(text, keyword, arity, threshold, case_sensitive)
+        )
     operator = operator.upper()
     return (operator == "OR" and bool(matched)) or (operator == "AND" and len(matched) == len(keywords)) or (operator == "NOR" and not matched)

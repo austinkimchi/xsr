@@ -17,7 +17,7 @@ static __always_inline void xdp_classifier_score_char(struct xdp_classifier_stat
 }
 
 static __always_inline void xdp_classifier_finish(struct xdp_classifier_state *state) {
-  xdp_jaccard_finish_word(&state->jaccard);
+  xdp_jaccard_finish(&state->jaccard);
 }
 
 static __always_inline __u32 xdp_classifier_route(struct xdp_classifier_state *state) {

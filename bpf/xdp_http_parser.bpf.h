@@ -30,6 +30,7 @@ struct content_flow_state {
   __u8 unicode_remaining;
   __u8 needs_json_decode;
   __u16 unicode_value;
+  __u16 unicode_high_surrogate;
   __u32 decode_offset;
 };
 
@@ -81,6 +82,7 @@ static __always_inline int content_match_key(struct content_flow_state *state,
       state->unicode_remaining = 0;
       state->needs_json_decode = 0;
       state->unicode_value = 0;
+      state->unicode_high_surrogate = 0;
       return CONTENT_PARTIAL;
     }
 
@@ -206,6 +208,27 @@ content_emit_decoded(struct content_scan_ctx *ctx, unsigned char c) {
   ctx->length = ctx->state->content_length;
 }
 
+static __always_inline void
+content_emit_codepoint(struct content_scan_ctx *ctx, __u32 value) {
+  if (value <= 0x7f) {
+    content_emit_decoded(ctx, value);
+  } else if (value <= 0x7ff) {
+    content_emit_decoded(ctx, 0xc0 | (value >> 6));
+    content_emit_decoded(ctx, 0x80 | (value & 0x3f));
+  } else if (value <= 0xffff) {
+    content_emit_decoded(ctx, 0xe0 | (value >> 12));
+    content_emit_decoded(ctx, 0x80 | ((value >> 6) & 0x3f));
+    content_emit_decoded(ctx, 0x80 | (value & 0x3f));
+  } else if (value <= 0x10ffff) {
+    content_emit_decoded(ctx, 0xf0 | (value >> 18));
+    content_emit_decoded(ctx, 0x80 | ((value >> 12) & 0x3f));
+    content_emit_decoded(ctx, 0x80 | ((value >> 6) & 0x3f));
+    content_emit_decoded(ctx, 0x80 | (value & 0x3f));
+  } else {
+    content_emit_decoded(ctx, ' ');
+  }
+}
+
 /* This callback is used only by the tail-called escape decoder. */
 static long decode_content_callback(__u32 i, void *data) {
   struct content_scan_ctx *ctx = data;
@@ -230,10 +253,28 @@ static long decode_content_callback(__u32 i, void *data) {
     state->unicode_value = (state->unicode_value << 4) | hex;
     state->unicode_remaining--;
     if (!state->unicode_remaining) {
-      if (state->unicode_value <= 0x7f)
-        content_emit_decoded(ctx, state->unicode_value);
-      else
-        content_emit_decoded(ctx, ' ');
+      __u32 value = state->unicode_value;
+      if (value >= 0xd800 && value <= 0xdbff) {
+        if (state->unicode_high_surrogate)
+          content_emit_decoded(ctx, ' ');
+        state->unicode_high_surrogate = value;
+      } else if (value >= 0xdc00 && value <= 0xdfff &&
+                 state->unicode_high_surrogate) {
+        value = 0x10000 +
+                (((__u32)state->unicode_high_surrogate - 0xd800) << 10) +
+                (value - 0xdc00);
+        state->unicode_high_surrogate = 0;
+        content_emit_codepoint(ctx, value);
+      } else {
+        if (state->unicode_high_surrogate) {
+          content_emit_decoded(ctx, ' ');
+          state->unicode_high_surrogate = 0;
+        }
+        if (value >= 0xdc00 && value <= 0xdfff)
+          content_emit_decoded(ctx, ' ');
+        else
+          content_emit_codepoint(ctx, value);
+      }
       state->unicode_value = 0;
     }
     return 0;
