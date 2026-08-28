@@ -25,8 +25,15 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
-#include "bpf/xdp_jaccard_classifier.bpf.h"
+#include "bpf/xdp_keyword_modules.generated.h"
+#if XDP_KEYWORD_ENABLE_NGRAM
+#include "bpf/xdp_ngram_classifier.bpf.h"
 #include "bpf/xdp_jaccard_policy.generated.h"
+#endif
+#if XDP_KEYWORD_ENABLE_BM25
+#include "bpf/xdp_bm25_classifier.bpf.h"
+#include "bpf/xdp_bm25_policy.generated.h"
+#endif
 #include "bpf/xdp_signals.bpf.h"
 #include "xdp_router.h"
 
@@ -210,6 +217,7 @@ static int populate_decision_rules(int rules_fd) {
   return 0;
 }
 
+#if XDP_KEYWORD_ENABLE_NGRAM
 static int populate_jaccard_policy(struct bpf_object *obj) {
   int config_fd = bpf_object__find_map_fd_by_name(obj, "xdp_jaccard_config");
   int rules_fd = bpf_object__find_map_fd_by_name(obj, "xdp_jaccard_rules");
@@ -253,6 +261,9 @@ static int populate_jaccard_policy(struct bpf_object *obj) {
       }
   return 0;
 }
+#endif
+
+#include "bpf/xdp_keyword_policy_loader.h"
 
 static int route_to_backend_port(__u32 route) {
   if (route == XDP_ROUTE_CODING)
@@ -316,8 +327,8 @@ static int start_xdp_classifier(struct xdp_classifier_runtime *runtime) {
     return -1;
   }
 
-  if (populate_jaccard_policy(runtime->obj) != 0) {
-    perror("populate_jaccard_policy");
+  if (populate_keyword_policy(runtime->obj) != 0) {
+    perror("populate_keyword_policy");
     return -1;
   }
 
@@ -858,8 +869,8 @@ static int run_sockmap_router(void) {
     perror("populate_decision_rules");
     return 1;
   }
-  if (populate_jaccard_policy(obj) != 0) {
-    perror("populate_jaccard_policy");
+  if (populate_keyword_policy(obj) != 0) {
+    perror("populate_keyword_policy");
     return 1;
   }
 

@@ -237,6 +237,7 @@ def validate_policy(policy: dict[str, object]) -> tuple[bool, list[dict[str, obj
                 "method": method,
                 "ngram_arity": int(route.get("ngram_arity", 3)),
                 "ngram_threshold": route.get("ngram_threshold", 0.4),
+                "bm25_threshold": route.get("bm25_threshold", 0.1),
             }
         )
 

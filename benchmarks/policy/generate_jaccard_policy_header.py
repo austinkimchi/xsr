@@ -72,14 +72,18 @@ def grams(keyword: str, arity: int, case_sensitive: bool) -> list[int]:
     return gram_counts(keyword, arity, case_sensitive)[0]
 
 
-def parse(path: Path) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+def parse(path: Path, allow_other_methods: bool = False) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
     policy = load_policy(path)
     signals = keyword_signals(policy)
     decision_routes, priorities = decision_keyword_routes(policy)
     rules: list[dict[str, object]] = []
     keywords: list[dict[str, object]] = []
     for signal in signals:
-        if not isinstance(signal, dict) or str(signal.get("method", "")).lower() != "ngram":
+        if not isinstance(signal, dict):
+            raise ValueError("keyword signals must be objects")
+        if str(signal.get("method", "")).lower() != "ngram":
+            if allow_other_methods:
+                continue
             raise ValueError("XDP Jaccard policies must contain only method: ngram keyword signals")
         name = str(signal.get("name", ""))
         route_name = signal_route_name(signal, decision_routes)
