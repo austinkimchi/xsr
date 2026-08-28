@@ -2,6 +2,7 @@
 __pycache__/
 *.py[cod]
 .cache/
+reports/
 
 # Compiled C / BPF Binaries & Generated Headers
 xdp_router
@@ -22,9 +23,8 @@ tests/mock_backend
 !/models/xdp_ngram_model_fnv.json
 tests/vllm-sr-bert-stack/
 
-# Generated Benchmark Results (keep the curated summary only)
+# Generated Benchmark Results
 results/*
-!results/wrk_benchmark.md
 !results/wrk_benchmark_analysis.ipynb
 
 # Explicit, repository-local benchmark tool installations
