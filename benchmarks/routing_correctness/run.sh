@@ -9,7 +9,7 @@ if [ ! -x "$PYTHON_BIN" ] && ! command -v "$PYTHON_BIN" >/dev/null 2>&1; then
   exit 1
 fi
 
-METHODS=("ngram")
+read -r -a METHODS <<< "${KEYWORD_METHODS:-ngram bm25}"
 CONCURRENCIES=(1 4 8 16)
 REPORT_ROOT="results/routing-correctness"
 BENCHMARK_MODES="${BENCHMARK_MODES:-direct-netns,sockmap,vllm-sr}"
@@ -55,7 +55,7 @@ for METHOD in "${METHODS[@]}"; do
   echo "-----------------------------------------------------------------"
   for CONCURRENCY in "${CONCURRENCIES[@]}"; do
     REPORT_DIR="${REPORT_ROOT}"
-    REPORT_NAME="routing_correctness_benchmark_concurrency_${CONCURRENCY}.md"
+    REPORT_NAME="routing_correctness_${METHOD}_concurrency_${CONCURRENCY}.md"
     mkdir -p "${REPORT_DIR}"
 
     echo ""
@@ -78,8 +78,8 @@ echo "================================================================="
 echo " All routing correctness benchmarks completed successfully!"
 echo " Generated report files:"
 for CONCURRENCY in "${CONCURRENCIES[@]}"; do
-  REPORT_NAME="routing_correctness_benchmark_concurrency_${CONCURRENCY}.md"
   for METHOD in "${METHODS[@]}"; do
+    REPORT_NAME="routing_correctness_${METHOD}_concurrency_${CONCURRENCY}.md"
     if [ -f "${REPORT_ROOT}/${REPORT_NAME}" ]; then
       echo "  - ${REPORT_ROOT}/${REPORT_NAME}"
     fi
