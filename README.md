@@ -66,6 +66,8 @@ in the full-text phrase pass. A generated Unicode alphanumeric bitmap
 delimits words consistently around Unicode punctuation and symbols.
 Case-insensitive policies support every reverse one-to-one Unicode lowercase
 mapping relevant to their keywords; expanding folds are rejected when the policy is generated.
+Context-sensitive lowercase policies, such as Greek final sigma, are also
+rejected because the bounded kernel matcher folds one code point at a time.
 Inputs outside those bounds still pass through, but only matches completed
 within the bounded domain affect routing.
 

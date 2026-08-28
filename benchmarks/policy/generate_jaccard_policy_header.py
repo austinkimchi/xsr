@@ -35,16 +35,30 @@ def threshold_milli(value: object) -> int:
     return result
 
 
+def scalar_lower(text: str, keyword: str) -> str:
+    result: list[str] = []
+    for char in text:
+        lowered = char.lower()
+        if len(lowered) != 1:
+            raise ValueError(
+                f"keyword {keyword!r} requires expanding Unicode case folding, "
+                "which is outside the bounded XDP implementation"
+            )
+        result.append(lowered)
+    return "".join(result)
+
+
 def normalize(text: str, case_sensitive: bool) -> str:
     if case_sensitive:
         return text
     lowered = text.lower()
-    for char in text:
-        if len(char.lower()) != 1:
-            raise ValueError(
-                f"keyword {text!r} requires expanding Unicode case folding, "
-                "which is outside the bounded XDP implementation"
-            )
+    scalar_lower(text, text)
+    uppercase = text.upper()
+    if uppercase.lower() != scalar_lower(uppercase, text):
+        raise ValueError(
+            f"keyword {text!r} requires context-sensitive Unicode lowercasing, "
+            "which the scalar XDP case-fold map cannot reproduce"
+        )
     return lowered
 
 

@@ -13,7 +13,7 @@ POLICY_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(POLICY_DIR))
 
 from jaccard_reference import matches, rule_matches, threshold_milli, word_grams
-from generate_jaccard_policy_header import casefold_entries, emit, grams, parse
+from generate_jaccard_policy_header import casefold_entries, emit, grams, parse, scalar_lower
 from generate_unicode_word_header import contains, word_bitmap, word_ranges
 
 
@@ -107,6 +107,32 @@ class JaccardKeywordTests(unittest.TestCase):
     def test_expanding_case_fold_is_rejected(self) -> None:
         with self.assertRaisesRegex(ValueError, "expanding Unicode case folding"):
             grams("İ", 3, False)
+
+    def test_context_sensitive_lowercase_is_rejected(self) -> None:
+        self.assertTrue(matches("ΣΟΣ", "σος", 3, 1.0, False))
+        self.assertEqual("ΣΟΣ".lower(), "σος")
+        self.assertEqual(scalar_lower("ΣΟΣ", "σος"), "σοσ")
+        for keyword in ("σος", "σοσ", "ΣΟΣ"):
+            with self.subTest(keyword=keyword):
+                with self.assertRaisesRegex(ValueError, "context-sensitive Unicode lowercasing"):
+                    grams(keyword, 3, False)
+
+        self.assertEqual(grams("σος", 3, True)[0], (ord(" "), ord(" "), ord("σ")))
+
+        policy = {
+            "routes": [{
+                "name": "greek_sigma",
+                "route": "coding",
+                "method": "ngram",
+                "keywords": ["σος"],
+                "case_sensitive": False,
+            }]
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "policy.json"
+            source.write_text(json.dumps(policy, ensure_ascii=False), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "context-sensitive Unicode lowercasing"):
+                parse(source)
 
 
 if __name__ == "__main__":
