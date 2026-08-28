@@ -25,6 +25,7 @@ tests/vllm-sr-bert-stack/
 # Generated Benchmark Results (keep the curated summary only)
 results/*
 !results/wrk_benchmark.md
+!results/wrk_benchmark_analysis.ipynb
 
 # Explicit, repository-local benchmark tool installations
 .tools/
