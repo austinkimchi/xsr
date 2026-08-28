@@ -1,0 +1,18 @@
+{
+  "configuration": "rate-100_concurrency-64",
+  "failure_reasons": [],
+  "metrics": {
+    "average_latency_us": 19510.0,
+    "p50_latency_us": 19023.0,
+    "p95_latency_us": 33887.0,
+    "p99_latency_us": 44223.0,
+    "throughput_rps": 100.03
+  },
+  "mode": "fixed-rate",
+  "raw_output": "/root/xsr/results/routing-performance/20260827T213312Z-28024/raw/fixed-rate/rate-100_concurrency-64/trial-01/vsr/wrk.txt",
+  "system": "VSR (Envoy ExtProc)",
+  "tool": "/root/xsr/.tools/wrk2/wrk",
+  "topology": "docker-bridge",
+  "trial": 1,
+  "valid": true
+}

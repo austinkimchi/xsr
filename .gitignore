@@ -23,9 +23,20 @@ tests/mock_backend
 !/models/xdp_ngram_model_fnv.json
 tests/vllm-sr-bert-stack/
 
-# Generated Benchmark Results
-results/*
-!results/wrk_benchmark_analysis.ipynb
+# Benchmark results selected for publication
+results/charts/
+results/routing-correctness/
+results/routing-performance/*
+!results/routing-performance/20260827T013338Z-157571/
+!results/routing-performance/20260827T013338Z-157571/**
+!results/routing-performance/20260827T213312Z-28024/
+!results/routing-performance/20260827T213312Z-28024/**
+
+# Large per-trial logs stay local; result.json contains the measured values.
+results/routing-performance/*/raw/**/*.txt
+results/routing-performance/*/raw/**/*.log
+results/routing-performance/*/raw/**/report.md
+results/routing-performance/*/raw/**/FAILED
 
 # Explicit, repository-local benchmark tool installations
 .tools/

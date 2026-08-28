@@ -1,0 +1,18 @@
+{
+  "configuration": "concurrency-512",
+  "failure_reasons": [],
+  "metrics": {
+    "average_latency_us": 174670.0,
+    "p50_latency_us": 183809.0,
+    "p95_latency_us": 219305.0,
+    "p99_latency_us": 387558.0,
+    "throughput_rps": 1064.17
+  },
+  "mode": "saturation",
+  "raw_output": "/root/xsr/results/routing-performance/20260827T013338Z-157571/raw/saturation/concurrency-512/trial-05/vsr/wrk.txt",
+  "system": "VSR (Envoy ExtProc)",
+  "tool": "wrk",
+  "topology": "docker-bridge",
+  "trial": 5,
+  "valid": true
+}

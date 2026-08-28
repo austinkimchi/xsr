@@ -1,0 +1,18 @@
+{
+  "configuration": "rate-250_concurrency-64",
+  "failure_reasons": [],
+  "metrics": {
+    "average_latency_us": 1280.0,
+    "p50_latency_us": 1233.0,
+    "p95_latency_us": 2291.0,
+    "p99_latency_us": 2801.0,
+    "throughput_rps": 248.79
+  },
+  "mode": "fixed-rate",
+  "raw_output": "/root/xsr/results/routing-performance/20260827T213312Z-28024/raw/fixed-rate/rate-250_concurrency-64/trial-02/direct/wrk.txt",
+  "system": "Direct backend",
+  "tool": "/root/xsr/.tools/wrk2/wrk",
+  "topology": "host-veth",
+  "trial": 2,
+  "valid": true
+}

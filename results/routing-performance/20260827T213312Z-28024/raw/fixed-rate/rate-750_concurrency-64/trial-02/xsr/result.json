@@ -1,0 +1,18 @@
+{
+  "configuration": "rate-750_concurrency-64",
+  "failure_reasons": [],
+  "metrics": {
+    "average_latency_us": 1840.0,
+    "p50_latency_us": 1768.0,
+    "p95_latency_us": 2981.0,
+    "p99_latency_us": 3639.0,
+    "throughput_rps": 750.06
+  },
+  "mode": "fixed-rate",
+  "raw_output": "/root/xsr/results/routing-performance/20260827T213312Z-28024/raw/fixed-rate/rate-750_concurrency-64/trial-02/xsr/wrk.txt",
+  "system": "XSR (SK_SKB/SOCKMAP)",
+  "tool": "/root/xsr/.tools/wrk2/wrk",
+  "topology": "host-veth",
+  "trial": 2,
+  "valid": true
+}

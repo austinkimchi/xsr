@@ -1,0 +1,13 @@
+{
+  "configuration": "concurrency-512",
+  "failure_reasons": [
+    "zero completed requests"
+  ],
+  "mode": "saturation",
+  "raw_output": "/root/xsr/results/routing-performance/20260827T013338Z-157571/raw/saturation/concurrency-512/trial-05/xsr/wrk.txt",
+  "system": "XSR (SK_SKB/SOCKMAP)",
+  "tool": "wrk",
+  "topology": "host-veth",
+  "trial": 5,
+  "valid": false
+}

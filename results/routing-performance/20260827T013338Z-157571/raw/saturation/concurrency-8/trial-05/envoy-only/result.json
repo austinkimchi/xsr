@@ -1,0 +1,18 @@
+{
+  "configuration": "concurrency-8",
+  "failure_reasons": [],
+  "metrics": {
+    "average_latency_us": 1090.0,
+    "p50_latency_us": 1070.0,
+    "p95_latency_us": 1371.0,
+    "p99_latency_us": 1561.0,
+    "throughput_rps": 7275.38
+  },
+  "mode": "saturation",
+  "raw_output": "/root/xsr/results/routing-performance/20260827T013338Z-157571/raw/saturation/concurrency-8/trial-05/envoy-only/wrk.txt",
+  "system": "Envoy only",
+  "tool": "wrk",
+  "topology": "docker-bridge",
+  "trial": 5,
+  "valid": true
+}

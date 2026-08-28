@@ -1,0 +1,18 @@
+{
+  "configuration": "concurrency-4",
+  "failure_reasons": [],
+  "metrics": {
+    "average_latency_us": 3740.0,
+    "p50_latency_us": 3641.0,
+    "p95_latency_us": 5571.0,
+    "p99_latency_us": 6636.0,
+    "throughput_rps": 1066.52
+  },
+  "mode": "saturation",
+  "raw_output": "/root/xsr/results/routing-performance/20260827T013338Z-157571/raw/saturation/concurrency-4/trial-04/vsr/wrk.txt",
+  "system": "VSR (Envoy ExtProc)",
+  "tool": "wrk",
+  "topology": "docker-bridge",
+  "trial": 4,
+  "valid": true
+}

@@ -1,0 +1,18 @@
+{
+  "configuration": "concurrency-192",
+  "failure_reasons": [],
+  "metrics": {
+    "average_latency_us": 11180.0,
+    "p50_latency_us": 10848.0,
+    "p95_latency_us": 16645.0,
+    "p99_latency_us": 21125.0,
+    "throughput_rps": 15709.98
+  },
+  "mode": "saturation",
+  "raw_output": "/root/xsr/results/routing-performance/20260827T013338Z-157571/raw/saturation/concurrency-192/trial-01/envoy-only/wrk.txt",
+  "system": "Envoy only",
+  "tool": "wrk",
+  "topology": "docker-bridge",
+  "trial": 1,
+  "valid": true
+}

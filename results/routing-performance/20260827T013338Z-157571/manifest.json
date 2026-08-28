@@ -1,0 +1,611 @@
+{
+  "trials": [
+    {
+      "configuration": "concurrency-1",
+      "trial": 1,
+      "system_order": [
+        "vsr",
+        "envoy-only",
+        "direct",
+        "xsr"
+      ]
+    },
+    {
+      "configuration": "concurrency-1",
+      "trial": 2,
+      "system_order": [
+        "direct",
+        "envoy-only",
+        "xsr",
+        "vsr"
+      ]
+    },
+    {
+      "configuration": "concurrency-1",
+      "trial": 3,
+      "system_order": [
+        "vsr",
+        "xsr",
+        "direct",
+        "envoy-only"
+      ]
+    },
+    {
+      "configuration": "concurrency-1",
+      "trial": 4,
+      "system_order": [
+        "direct",
+        "xsr",
+        "vsr",
+        "envoy-only"
+      ]
+    },
+    {
+      "configuration": "concurrency-1",
+      "trial": 5,
+      "system_order": [
+        "direct",
+        "xsr",
+        "envoy-only",
+        "vsr"
+      ]
+    },
+    {
+      "configuration": "concurrency-2",
+      "trial": 1,
+      "system_order": [
+        "direct",
+        "envoy-only",
+        "xsr",
+        "vsr"
+      ]
+    },
+    {
+      "configuration": "concurrency-2",
+      "trial": 2,
+      "system_order": [
+        "vsr",
+        "xsr",
+        "direct",
+        "envoy-only"
+      ]
+    },
+    {
+      "configuration": "concurrency-2",
+      "trial": 3,
+      "system_order": [
+        "direct",
+        "xsr",
+        "vsr",
+        "envoy-only"
+      ]
+    },
+    {
+      "configuration": "concurrency-2",
+      "trial": 4,
+      "system_order": [
+        "direct",
+        "xsr",
+        "envoy-only",
+        "vsr"
+      ]
+    },
+    {
+      "configuration": "concurrency-2",
+      "trial": 5,
+      "system_order": [
+        "vsr",
+        "envoy-only",
+        "xsr",
+        "direct"
+      ]
+    },
+    {
+      "configuration": "concurrency-4",
+      "trial": 1,
+      "system_order": [
+        "direct",
+        "xsr",
+        "vsr",
+        "envoy-only"
+      ]
+    },
+    {
+      "configuration": "concurrency-4",
+      "trial": 2,
+      "system_order": [
+        "direct",
+        "xsr",
+        "envoy-only",
+        "vsr"
+      ]
+    },
+    {
+      "configuration": "concurrency-4",
+      "trial": 3,
+      "system_order": [
+        "vsr",
+        "envoy-only",
+        "xsr",
+        "direct"
+      ]
+    },
+    {
+      "configuration": "concurrency-4",
+      "trial": 4,
+      "system_order": [
+        "direct",
+        "envoy-only",
+        "xsr",
+        "vsr"
+      ]
+    },
+    {
+      "configuration": "concurrency-4",
+      "trial": 5,
+      "system_order": [
+        "direct",
+        "vsr",
+        "envoy-only",
+        "xsr"
+      ]
+    },
+    {
+      "configuration": "concurrency-8",
+      "trial": 1,
+      "system_order": [
+        "direct",
+        "vsr",
+        "envoy-only",
+        "xsr"
+      ]
+    },
+    {
+      "configuration": "concurrency-8",
+      "trial": 2,
+      "system_order": [
+        "direct",
+        "xsr",
+        "vsr",
+        "envoy-only"
+      ]
+    },
+    {
+      "configuration": "concurrency-8",
+      "trial": 3,
+      "system_order": [
+        "xsr",
+        "vsr",
+        "envoy-only",
+        "direct"
+      ]
+    },
+    {
+      "configuration": "concurrency-8",
+      "trial": 4,
+      "system_order": [
+        "direct",
+        "xsr",
+        "envoy-only",
+        "vsr"
+      ]
+    },
+    {
+      "configuration": "concurrency-8",
+      "trial": 5,
+      "system_order": [
+        "direct",
+        "vsr",
+        "xsr",
+        "envoy-only"
+      ]
+    },
+    {
+      "configuration": "concurrency-16",
+      "trial": 1,
+      "system_order": [
+        "xsr",
+        "direct",
+        "envoy-only",
+        "vsr"
+      ]
+    },
+    {
+      "configuration": "concurrency-16",
+      "trial": 2,
+      "system_order": [
+        "xsr",
+        "envoy-only",
+        "direct",
+        "vsr"
+      ]
+    },
+    {
+      "configuration": "concurrency-16",
+      "trial": 3,
+      "system_order": [
+        "direct",
+        "vsr",
+        "xsr",
+        "envoy-only"
+      ]
+    },
+    {
+      "configuration": "concurrency-16",
+      "trial": 4,
+      "system_order": [
+        "envoy-only",
+        "direct",
+        "xsr",
+        "vsr"
+      ]
+    },
+    {
+      "configuration": "concurrency-16",
+      "trial": 5,
+      "system_order": [
+        "direct",
+        "xsr",
+        "vsr",
+        "envoy-only"
+      ]
+    },
+    {
+      "configuration": "concurrency-32",
+      "trial": 1,
+      "system_order": [
+        "xsr",
+        "envoy-only",
+        "direct",
+        "vsr"
+      ]
+    },
+    {
+      "configuration": "concurrency-32",
+      "trial": 2,
+      "system_order": [
+        "envoy-only",
+        "vsr",
+        "direct",
+        "xsr"
+      ]
+    },
+    {
+      "configuration": "concurrency-32",
+      "trial": 3,
+      "system_order": [
+        "xsr",
+        "envoy-only",
+        "vsr",
+        "direct"
+      ]
+    },
+    {
+      "configuration": "concurrency-32",
+      "trial": 4,
+      "system_order": [
+        "xsr",
+        "vsr",
+        "direct",
+        "envoy-only"
+      ]
+    },
+    {
+      "configuration": "concurrency-32",
+      "trial": 5,
+      "system_order": [
+        "envoy-only",
+        "direct",
+        "xsr",
+        "vsr"
+      ]
+    },
+    {
+      "configuration": "concurrency-64",
+      "trial": 1,
+      "system_order": [
+        "direct",
+        "vsr",
+        "envoy-only",
+        "xsr"
+      ]
+    },
+    {
+      "configuration": "concurrency-64",
+      "trial": 2,
+      "system_order": [
+        "direct",
+        "xsr",
+        "envoy-only",
+        "vsr"
+      ]
+    },
+    {
+      "configuration": "concurrency-64",
+      "trial": 3,
+      "system_order": [
+        "vsr",
+        "xsr",
+        "direct",
+        "envoy-only"
+      ]
+    },
+    {
+      "configuration": "concurrency-64",
+      "trial": 4,
+      "system_order": [
+        "xsr",
+        "vsr",
+        "direct",
+        "envoy-only"
+      ]
+    },
+    {
+      "configuration": "concurrency-64",
+      "trial": 5,
+      "system_order": [
+        "direct",
+        "xsr",
+        "vsr",
+        "envoy-only"
+      ]
+    },
+    {
+      "configuration": "concurrency-96",
+      "trial": 1,
+      "system_order": [
+        "direct",
+        "envoy-only",
+        "vsr",
+        "xsr"
+      ]
+    },
+    {
+      "configuration": "concurrency-96",
+      "trial": 2,
+      "system_order": [
+        "vsr",
+        "xsr",
+        "envoy-only",
+        "direct"
+      ]
+    },
+    {
+      "configuration": "concurrency-96",
+      "trial": 3,
+      "system_order": [
+        "envoy-only",
+        "vsr",
+        "xsr",
+        "direct"
+      ]
+    },
+    {
+      "configuration": "concurrency-96",
+      "trial": 4,
+      "system_order": [
+        "envoy-only",
+        "direct",
+        "xsr",
+        "vsr"
+      ]
+    },
+    {
+      "configuration": "concurrency-96",
+      "trial": 5,
+      "system_order": [
+        "direct",
+        "vsr",
+        "envoy-only",
+        "xsr"
+      ]
+    },
+    {
+      "configuration": "concurrency-128",
+      "trial": 1,
+      "system_order": [
+        "envoy-only",
+        "direct",
+        "xsr",
+        "vsr"
+      ]
+    },
+    {
+      "configuration": "concurrency-128",
+      "trial": 2,
+      "system_order": [
+        "envoy-only",
+        "direct",
+        "xsr",
+        "vsr"
+      ]
+    },
+    {
+      "configuration": "concurrency-128",
+      "trial": 3,
+      "system_order": [
+        "direct",
+        "envoy-only",
+        "xsr",
+        "vsr"
+      ]
+    },
+    {
+      "configuration": "concurrency-128",
+      "trial": 4,
+      "system_order": [
+        "direct",
+        "envoy-only",
+        "xsr",
+        "vsr"
+      ]
+    },
+    {
+      "configuration": "concurrency-128",
+      "trial": 5,
+      "system_order": [
+        "xsr",
+        "vsr",
+        "envoy-only",
+        "direct"
+      ]
+    },
+    {
+      "configuration": "concurrency-192",
+      "trial": 1,
+      "system_order": [
+        "xsr",
+        "envoy-only",
+        "direct",
+        "vsr"
+      ]
+    },
+    {
+      "configuration": "concurrency-192",
+      "trial": 2,
+      "system_order": [
+        "xsr",
+        "envoy-only",
+        "direct",
+        "vsr"
+      ]
+    },
+    {
+      "configuration": "concurrency-192",
+      "trial": 3,
+      "system_order": [
+        "envoy-only",
+        "xsr",
+        "vsr",
+        "direct"
+      ]
+    },
+    {
+      "configuration": "concurrency-192",
+      "trial": 4,
+      "system_order": [
+        "envoy-only",
+        "vsr",
+        "xsr",
+        "direct"
+      ]
+    },
+    {
+      "configuration": "concurrency-192",
+      "trial": 5,
+      "system_order": [
+        "xsr",
+        "envoy-only",
+        "direct",
+        "vsr"
+      ]
+    },
+    {
+      "configuration": "concurrency-256",
+      "trial": 1,
+      "system_order": [
+        "envoy-only",
+        "xsr",
+        "vsr",
+        "direct"
+      ]
+    },
+    {
+      "configuration": "concurrency-256",
+      "trial": 2,
+      "system_order": [
+        "xsr",
+        "envoy-only",
+        "direct",
+        "vsr"
+      ]
+    },
+    {
+      "configuration": "concurrency-256",
+      "trial": 3,
+      "system_order": [
+        "envoy-only",
+        "vsr",
+        "direct",
+        "xsr"
+      ]
+    },
+    {
+      "configuration": "concurrency-256",
+      "trial": 4,
+      "system_order": [
+        "vsr",
+        "envoy-only",
+        "xsr",
+        "direct"
+      ]
+    },
+    {
+      "configuration": "concurrency-256",
+      "trial": 5,
+      "system_order": [
+        "xsr",
+        "direct",
+        "vsr",
+        "envoy-only"
+      ]
+    },
+    {
+      "configuration": "concurrency-512",
+      "trial": 1,
+      "system_order": [
+        "envoy-only",
+        "direct",
+        "vsr",
+        "xsr"
+      ]
+    },
+    {
+      "configuration": "concurrency-512",
+      "trial": 2,
+      "system_order": [
+        "direct",
+        "envoy-only",
+        "vsr",
+        "xsr"
+      ]
+    },
+    {
+      "configuration": "concurrency-512",
+      "trial": 3,
+      "system_order": [
+        "vsr",
+        "direct",
+        "envoy-only",
+        "xsr"
+      ]
+    },
+    {
+      "configuration": "concurrency-512",
+      "trial": 4,
+      "system_order": [
+        "vsr",
+        "xsr",
+        "direct",
+        "envoy-only"
+      ]
+    },
+    {
+      "configuration": "concurrency-512",
+      "trial": 5,
+      "system_order": [
+        "vsr",
+        "envoy-only",
+        "xsr",
+        "direct"
+      ]
+    }
+  ],
+  "run_id": "20260827T013338Z-157571",
+  "profile": "paper",
+  "mode": "saturation",
+  "trial_count": 5,
+  "duration": "45s",
+  "warmup_duration": "5s",
+  "random_seed": 20260826
+}

@@ -1,0 +1,180 @@
+version: v0.3
+listeners:
+  - name: http-8899
+    address: 0.0.0.0
+    port: 8899
+    timeout: 300s
+
+providers:
+  defaults:
+    default_model: others
+  models:
+    - name: coding
+      provider_model_id: coding
+      backend_refs:
+        - name: benchmark
+          endpoint: host.docker.internal:18391
+          protocol: http
+          weight: 100
+    - name: math
+      provider_model_id: math
+      backend_refs:
+        - name: benchmark
+          endpoint: host.docker.internal:18392
+          protocol: http
+          weight: 100
+    - name: others
+      provider_model_id: others
+      backend_refs:
+        - name: benchmark
+          endpoint: host.docker.internal:18393
+          protocol: http
+          weight: 100
+    - name: qa
+      provider_model_id: qa
+      backend_refs:
+        - name: benchmark
+          endpoint: host.docker.internal:18394
+          protocol: http
+          weight: 100
+    - name: writing
+      provider_model_id: writing
+      backend_refs:
+        - name: benchmark
+          endpoint: host.docker.internal:18395
+          protocol: http
+          weight: 100
+    - name: benchmark-model
+      provider_model_id: benchmark-model
+      backend_refs:
+        - name: benchmark
+          endpoint: host.docker.internal:18393
+          protocol: http
+          weight: 100
+
+routing:
+  modelCards:
+    - name: coding
+      modality: text
+    - name: math
+      modality: text
+    - name: others
+      modality: text
+    - name: qa
+      modality: text
+    - name: writing
+      modality: text
+    - name: benchmark-model
+      modality: text
+  signals:
+    keywords:
+      - name: code_keywords
+        operator: OR
+        method: ngram
+        keywords: ["code", "function", "program", "implement"]
+        ngram_threshold: 0.8
+        ngram_arity: 3
+        case_sensitive: false
+      - name: math_keywords
+        operator: OR
+        method: ngram
+        keywords: ["solve", "equation", "derivative", "calculate"]
+        ngram_threshold: 0.8
+        ngram_arity: 3
+        case_sensitive: false
+      - name: qa_keywords
+        operator: OR
+        method: ngram
+        keywords: ["question", "answer", "explain", "define"]
+        ngram_threshold: 0.8
+        ngram_arity: 3
+        case_sensitive: false
+      - name: writing_keywords
+        operator: OR
+        method: ngram
+        keywords: ["write", "essay", "draft", "compose"]
+        ngram_threshold: 0.8
+        ngram_arity: 3
+        case_sensitive: false
+  decisions:
+    - name: coding
+      description: Route prompts that match the shared coding keyword policy.
+      priority: 100
+      rules:
+        operator: AND
+        conditions:
+          - type: keyword
+            name: code_keywords
+      modelRefs:
+        - model: coding
+          use_reasoning: false
+    - name: math
+      description: Route prompts that match the shared math keyword policy.
+      priority: 90
+      rules:
+        operator: AND
+        conditions:
+          - type: keyword
+            name: math_keywords
+      modelRefs:
+        - model: math
+          use_reasoning: false
+    - name: qa
+      description: Route question-answering prompts from SPEED-Bench.
+      priority: 80
+      rules:
+        operator: AND
+        conditions:
+          - type: keyword
+            name: qa_keywords
+      modelRefs:
+        - model: qa
+          use_reasoning: false
+    - name: writing
+      description: Route writing prompts from SPEED-Bench.
+      priority: 70
+      rules:
+        operator: AND
+        conditions:
+          - type: keyword
+            name: writing_keywords
+      modelRefs:
+        - model: writing
+          use_reasoning: false
+
+global:
+  router:
+    config_source: file
+    auto_model_name: MoM
+    include_config_models_in_list: true
+    clear_route_cache: true
+    streamed_body:
+      enabled: false
+    skip_processing:
+      enabled: false
+    model_selection:
+      method: static
+      enabled: false
+  services:
+    management_api:
+      bind_address: 127.0.0.1
+      port: 18080
+      auth:
+        mode: disabled
+    response_api:
+      enabled: false
+      store_backend: redis
+    observability:
+      tracing:
+        enabled: false
+      metrics:
+        enabled: false
+    router_replay:
+      enabled: false
+      store_backend: postgres
+    startup_status:
+      store_backend: file
+  stores:
+    semantic_cache:
+      backend_type: memory
+      enabled: false

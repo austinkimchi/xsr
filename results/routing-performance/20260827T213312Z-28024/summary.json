@@ -1,0 +1,1227 @@
+{
+  "metadata": {
+    "benchmark": {
+      "concurrency": "64",
+      "duration": "45s",
+      "mode": "fixed-rate",
+      "profile": "paper",
+      "rates": "100 250 500 750 900",
+      "trial_count": 5,
+      "warmup_duration": "5s",
+      "wrk": {
+        "path": "/root/xsr/.tools/wrk2/wrk",
+        "version": null
+      },
+      "wrk2": {
+        "binary_sha256": "ed5fabf7537f46c1d5675194e881fdee6800c6117220eb18275df94ba32e67ca",
+        "calibration_patch": {
+          "path": "/root/xsr/benchmarks/routing_wrk/wrk2-calibration-clock-reset.patch",
+          "sha256": "ebbd0d2f91c6ca73710f3c87021bfff2c298a7f82e9a34128d273d4d0d4d3a3f"
+        },
+        "path": "/root/xsr/.tools/wrk2/wrk",
+        "pinned_revision": "44a94c17d8e6a0bac8559b53da76848e430cb7a7"
+      }
+    },
+    "docker": {
+      "effective_envoy_config": {
+        "status": "unavailable"
+      },
+      "envoy": {
+        "status": "unavailable"
+      },
+      "envoy_version": null,
+      "installation_note": "Installation method: official vLLM Semantic Router production documentation; the deployment was the latest production build at installation time.",
+      "version": null,
+      "vsr": {
+        "status": "unavailable"
+      },
+      "vsr_version": null
+    },
+    "environment": {
+      "cpu_count": 4,
+      "interfaces": "6: veth0@if5: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc noqueue state UP mode DEFAULT group default qlen 1000\n    link/ether 12:45:12:1d:e5:32 brd ff:ff:ff:ff:ff:ff link-netns ns1 promiscuity 0  allmulti 0 minmtu 68 maxmtu 65535 \n    veth addrgenmode eui64 numtxqueues 4 numrxqueues 4 gso_max_size 65536 gso_max_segs 65535 tso_max_size 524280 tso_max_segs 65535 gro_max_size 65536",
+      "kernel": "6.8.0-138-generic",
+      "linux_distribution": "PRETTY_NAME=\"Ubuntu 24.04.4 LTS\"\nNAME=\"Ubuntu\"\nVERSION_ID=\"24.04\"\nVERSION=\"24.04.4 LTS (Noble Numbat)\"\nVERSION_CODENAME=noble\nID=ubuntu\nID_LIKE=debian\nHOME_URL=\"https://www.ubuntu.com/\"\nSUPPORT_URL=\"https://help.ubuntu.com/\"\nBUG_REPORT_URL=\"https://bugs.launchpad.net/ubuntu/\"\nPRIVACY_POLICY_URL=\"https://www.ubuntu.com/legal/terms-and-policies/privacy-policy\"\nUBUNTU_CODENAME=noble\nLOGO=ubuntu-logo\n",
+      "macos_host": {
+        "status": "unavailable"
+      },
+      "memory": "MemTotal:        3997984 kB",
+      "network_namespaces": "ns1 (id: 1)",
+      "offloads": "Features for veth0:\nrx-checksumming: on\ntx-checksumming: on\n\ttx-checksum-ipv4: off [fixed]\n\ttx-checksum-ip-generic: on\n\ttx-checksum-ipv6: off [fixed]\n\ttx-checksum-fcoe-crc: off [fixed]\n\ttx-checksum-sctp: on\nscatter-gather: on\n\ttx-scatter-gather: on\n\ttx-scatter-gather-fraglist: on\ntcp-segmentation-offload: off\n\ttx-tcp-segmentation: off\n\ttx-tcp-ecn-segmentation: off\n\ttx-tcp-mangleid-segmentation: off\n\ttx-tcp6-segmentation: off\ngeneric-segmentation-offload: off\ngeneric-receive-offload: off\nlarge-receive-offload: off [fixed]\nrx-vlan-offload: on\ntx-vlan-offload: on\nntuple-filters: off [fixed]\nreceive-hashing: off [fixed]\nhighdma: on\nrx-vlan-filter: off [fixed]\nvlan-challenged: off [fixed]\ntx-lockless: on [fixed]\nnetns-local: off [fixed]\ntx-gso-robust: off [fixed]\ntx-fcoe-segmentation: off [fixed]\ntx-gre-segmentation: on\ntx-gre-csum-segmentation: on\ntx-ipxip4-segmentation: on\ntx-ipxip6-segmentation: on\ntx-udp_tnl-segmentation: on\ntx-udp_tnl-csum-segmentation: on\ntx-gso-partial: off [fixed]\ntx-tunnel-remcsum-segmentation: off [fixed]\ntx-sctp-segmentation: on\ntx-esp-segmentation: off [fixed]\ntx-udp-segmentation: on\ntx-gso-list: on\nfcoe-mtu: off [fixed]\ntx-nocache-copy: off\nloopback: off [fixed]\nrx-fcs: off [fixed]\nrx-all: off [fixed]\ntx-vlan-stag-hw-insert: on\nrx-vlan-stag-hw-parse: on\nrx-vlan-stag-filter: off [fixed]\nl2-fwd-offload: off [fixed]\nhw-tc-offload: off [fixed]\nesp-hw-offload: off [fixed]\nesp-tx-csum-hw-offload: off [fixed]\nrx-udp_tunnel-port-offload: off [fixed]\ntls-hw-tx-offload: off [fixed]\ntls-hw-rx-offload: off [fixed]\nrx-gro-hw: off [fixed]\ntls-hw-record: off [fixed]\nrx-gro-list: off\nmacsec-hw-offload: off [fixed]\nrx-udp-gro-forwarding: off\nhsr-tag-ins-offload: off [fixed]\nhsr-tag-rm-offload: off [fixed]\nhsr-fwd-offload: off [fixed]\nhsr-dup-offload: off [fixed]",
+      "virtualization": {
+        "status": "unavailable"
+      }
+    },
+    "workload": {
+      "policy_path": "/root/xsr/config/policy_ngram.yaml",
+      "policy_sha256": "957a72503a39b2360a94ad2ba8f56f6c1f6da51e3b7182e5d768315ab9c37ec8",
+      "prompts": {
+        "dataset": {
+          "config": "qualitative",
+          "name": "speed-bench",
+          "split": "test"
+        },
+        "path": "/root/xsr/benchmarks/dataset_prompts.jsonl",
+        "prompt_count": 240,
+        "route_distribution": {
+          "coding": 90,
+          "math": 93,
+          "others": 57
+        },
+        "sha256": "6664c3bf2fc9fc04ccd724da99a921a2afadf1a438dd10df5a523b6f08a7d582"
+      }
+    },
+    "xsr": {
+      "branch": "keyword-router",
+      "build_profile": "prod",
+      "commit": "e1e6258d1e1d74f8d0d6fdcaafecfe54729148e9",
+      "compile_flags": "Makefile OPT_CFLAGS / BPF_CFLAGS",
+      "compiler": "cc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0\nCopyright (C) 2023 Free Software Foundation, Inc.\nThis is free software; see the source for copying conditions.  There is NO\nwarranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.",
+      "repository_url": "https://github.com/austinkimchi/xsr",
+      "routing_mode": "SK_SKB/SOCKMAP",
+      "working_tree": "dirty"
+    }
+  },
+  "results": [
+    {
+      "mode": "fixed-rate",
+      "configuration": "rate-100_concurrency-64",
+      "system": "Direct backend",
+      "topology": "host-veth",
+      "valid_trial_count": 5,
+      "failed_trial_count": 0,
+      "raw_results": [
+        "/root/xsr/results/routing-performance/20260827T213312Z-28024/raw/fixed-rate/rate-100_concurrency-64/trial-01/direct/wrk.txt",
+        "/root/xsr/results/routing-performance/20260827T213312Z-28024/raw/fixed-rate/rate-100_concurrency-64/trial-02/direct/wrk.txt",
+        "/root/xsr/results/routing-performance/20260827T213312Z-28024/raw/fixed-rate/rate-100_concurrency-64/trial-03/direct/wrk.txt",
+        "/root/xsr/results/routing-performance/20260827T213312Z-28024/raw/fixed-rate/rate-100_concurrency-64/trial-04/direct/wrk.txt",
+        "/root/xsr/results/routing-performance/20260827T213312Z-28024/raw/fixed-rate/rate-100_concurrency-64/trial-05/direct/wrk.txt"
+      ],
+      "metrics": {
+        "throughput_rps": {
+          "mean": 100.08,
+          "stdev": 0.0,
+          "median": 100.08,
+          "minimum": 100.08,
+          "maximum": 100.08,
+          "ci95": 0.0
+        },
+        "average_latency_us": {
+          "mean": 1228.0,
+          "stdev": 112.1160113453917,
+          "median": 1160.0,
+          "minimum": 1130.0,
+          "maximum": 1360.0,
+          "ci95": 98.27401691189792
+        },
+        "p50_latency_us": {
+          "mean": 1179.6,
+          "stdev": 96.42510046663162,
+          "median": 1137.0,
+          "minimum": 1085.0,
+          "maximum": 1293.0,
+          "ci95": 84.52032711720891
+        },
+        "p95_latency_us": {
+          "mean": 2237.8,
+          "stdev": 249.58305230924634,
+          "median": 2091.0,
+          "minimum": 2034.0,
+          "maximum": 2523.0,
+          "ci95": 218.76919103018136
+        },
+        "p99_latency_us": {
+          "mean": 2843.8,
+          "stdev": 373.75018394644303,
+          "median": 2629.0,
+          "minimum": 2525.0,
+          "maximum": 3267.0,
+          "ci95": 327.6064806196605
+        }
+      }
+    },
+    {
+      "mode": "fixed-rate",
+      "configuration": "rate-100_concurrency-64",
+      "system": "Envoy only",
+      "topology": "docker-bridge",
+      "valid_trial_count": 5,
+      "failed_trial_count": 0,
+      "raw_results": [
+        "/root/xsr/results/routing-performance/20260827T213312Z-28024/raw/fixed-rate/rate-100_concurrency-64/trial-01/envoy-only/wrk.txt",
+        "/root/xsr/results/routing-performance/20260827T213312Z-28024/raw/fixed-rate/rate-100_concurrency-64/trial-02/envoy-only/wrk.txt",
+        "/root/xsr/results/routing-performance/20260827T213312Z-28024/raw/fixed-rate/rate-100_concurrency-64/trial-03/envoy-only/wrk.txt",
+        "/root/xsr/results/routing-performance/20260827T213312Z-28024/raw/fixed-rate/rate-100_concurrency-64/trial-04/envoy-only/wrk.txt",
+        "/root/xsr/results/routing-performance/20260827T213312Z-28024/raw/fixed-rate/rate-100_concurrency-64/trial-05/envoy-only/wrk.txt"
+      ],
+      "metrics": {
+        "throughput_rps": {
+          "mean": 100.074,
+          "stdev": 0.005477225575054463,
+          "median": 100.07,
+          "minimum": 100.07,
+          "maximum": 100.08,
+          "ci95": 0.004800999895857485
+        },
+        "average_latency_us": {
+          "mean": 3758.0,
+          "stdev": 198.4187491140895,
+          "median": 3740.0,
+          "minimum": 3550.0,
+          "maximum": 4050.0,
+          "ci95": 173.92170192359546
+        },
+        "p50_latency_us": {
+          "mean": 3637.0,
+          "stdev": 200.28979005431106,
+          "median": 3637.0,
+          "minimum": 3399.0,
+          "maximum": 3919.0,
+          "ci95": 175.5617416181555
+        },
+        "p95_latency_us": {
+          "mean": 5615.8,
+          "stdev": 356.50974741232534,
+          "median": 5595.0,
+          "minimum": 5155.0,
+          "maximum": 6031.0,
+          "ci95": 312.4945717032537
+        },
+        "p99_latency_us": {
+          "mean": 7593.4,
+          "stdev": 617.4891092157011,
+          "median": 7627.0,
+          "minimum": 6847.0,
+          "maximum": 8231.0,
+          "ci95": 541.253068440263
+        }
+      }
+    },
+    {
+      "mode": "fixed-rate",
+      "configuration": "rate-100_concurrency-64",
+      "system": "VSR (Envoy ExtProc)",
+      "topology": "docker-bridge",
+      "valid_trial_count": 5,
+      "failed_trial_count": 0,
+      "raw_results": [
+        "/root/xsr/results/routing-performance/20260827T213312Z-28024/raw/fixed-rate/rate-100_concurrency-64/trial-01/vsr/wrk.txt",
+        "/root/xsr/results/routing-performance/20260827T213312Z-28024/raw/fixed-rate/rate-100_concurrency-64/trial-02/vsr/wrk.txt",
+        "/root/xsr/results/routing-performance/20260827T213312Z-28024/raw/fixed-rate/rate-100_concurrency-64/trial-03/vsr/wrk.txt",
+        "/root/xsr/results/routing-performance/20260827T213312Z-28024/raw/fixed-rate/rate-100_concurrency-64/trial-04/vsr/wrk.txt",
+        "/root/xsr/results/routing-performance/20260827T213312Z-28024/raw/fixed-rate/rate-100_concurrency-64/trial-05/vsr/wrk.txt"
+      ],
+      "metrics": {
+        "throughput_rps": {
+          "mean": 100.046,
+          "stdev": 0.015165750888098678,
+          "median": 100.04,
+          "minimum": 100.03,
+          "maximum": 100.07,
+          "ci95": 0.013293366766921647
+        },
+        "average_latency_us": {
+          "mean": 19608.0,
+          "stdev": 266.0263144878717,
+          "median": 19660.0,
+          "minimum": 19200.0,
+          "maximum": 19860.0,
+          "ci95": 233.18234581545835
+        },
+        "p50_latency_us": {
+          "mean": 18978.2,
+          "stdev": 404.6766610517587,
+          "median": 19023.0,
+          "minimum": 18463.0,
+          "maximum": 19439.0,
+          "ci95": 354.7147330235946
+        },
+        "p95_latency_us": {
+          "mean": 36101.4,
+          "stdev": 1769.9211281862251,
+          "median": 35871.0,
+          "minimum": 33887.0,
+          "maximum": 38495.0,
+          "ci95": 1551.404271315507
+        },
+        "p99_latency_us": {
+          "mean": 45285.4,
+          "stdev": 1864.9988739942983,
+          "median": 44223.0,
+          "minimum": 43679.0,
+          "maximum": 47519.0,
+          "ci95": 1634.7435900030316
+        }
+      }
+    },
+    {
+      "mode": "fixed-rate",
+      "configuration": "rate-100_concurrency-64",
+      "system": "XSR (SK_SKB/SOCKMAP)",
+      "topology": "host-veth",
+      "valid_trial_count": 5,
+      "failed_trial_count": 0,
+      "raw_results": [
+        "/root/xsr/results/routing-performance/20260827T213312Z-28024/raw/fixed-rate/rate-100_concurrency-64/trial-01/xsr/wrk.txt",
+        "/root/xsr/results/routing-performance/20260827T213312Z-28024/raw/fixed-rate/rate-100_concurrency-64/trial-02/xsr/wrk.txt",
+        "/root/xsr/results/routing-performance/20260827T213312Z-28024/raw/fixed-rate/rate-100_concurrency-64/trial-03/xsr/wrk.txt",
+        "/root/xsr/results/routing-performance/20260827T213312Z-28024/raw/fixed-rate/rate-100_concurrency-64/trial-04/xsr/wrk.txt",
+        "/root/xsr/results/routing-performance/20260827T213312Z-28024/raw/fixed-rate/rate-100_concurrency-64/trial-05/xsr/wrk.txt"
+      ],
+      "metrics": {
+        "throughput_rps": {
+          "mean": 100.08,
+          "stdev": 0.0,
+          "median": 100.08,
+          "minimum": 100.08,
+          "maximum": 100.08,
+          "ci95": 0.0
+        },
+        "average_latency_us": {
+          "mean": 1838.0,
+          "stdev": 109.63576058932597,
+          "median": 1800.0,
+          "minimum": 1710.0,
+          "maximum": 1980.0,
+          "ci95": 96.0999812695091
+        },
+        "p50_latency_us": {
+          "mean": 1771.0,
+          "stdev": 99.57158229133451,
+          "median": 1755.0,
+          "minimum": 1640.0,
+          "maximum": 1890.0,
+          "ci95": 87.27834003921018
+        },
+        "p95_latency_us": {
+          "mean": 3058.6,
+          "stdev": 198.7027931358792,
+          "median": 2943.0,
+          "minimum": 2885.0,
+          "maximum": 3319.0,
+          "ci95": 174.17067748619456
+        },
+        "p99_latency_us": {
+          "mean": 3861.8,
+          "stdev": 366.10271782656844,
+          "median": 3647.0,
+          "minimum": 3569.0,
+          "maximum": 4283.0,
+          "ci95": 320.90318101259135
+        }
+      }
+    },
+    {
+      "mode": "fixed-rate",
+      "configuration": "rate-250_concurrency-64",
+      "system": "Direct backend",
+      "topology": "host-veth",
+      "valid_trial_count": 5,
+      "failed_trial_count": 0,
+      "raw_results": [
+        "/root/xsr/results/routing-performance/20260827T213312Z-28024/raw/fixed-rate/rate-250_concurrency-64/trial-01/direct/wrk.txt",
+        "/root/xsr/results/routing-performance/20260827T213312Z-28024/raw/fixed-rate/rate-250_concurrency-64/trial-02/direct/wrk.txt",
+        "/root/xsr/results/routing-performance/20260827T213312Z-28024/raw/fixed-rate/rate-250_concurrency-64/trial-03/direct/wrk.txt",
+        "/root/xsr/results/routing-performance/20260827T213312Z-28024/raw/fixed-rate/rate-250_concurrency-64/trial-04/direct/wrk.txt",
+        "/root/xsr/results/routing-performance/20260827T213312Z-28024/raw/fixed-rate/rate-250_concurrency-64/trial-05/direct/wrk.txt"
+      ],
+      "metrics": {
+        "throughput_rps": {
+          "mean": 249.564,
+          "stdev": 0.7065620991816755,
+          "median": 250.08,
+          "minimum": 248.79,
+          "maximum": 250.08,
+          "ci95": 0.6193289865653085
+        },
+        "average_latency_us": {
+          "mean": 1262.0,
+          "stdev": 129.88456413292536,
+          "median": 1280.0,
+          "minimum": 1110.0,
+          "maximum": 1410.0,
+          "ci95": 113.84884013462762
+        },
+        "p50_latency_us": {
+          "mean": 1221.8,
+          "stdev": 108.56656944013659,
+          "median": 1233.0,
+          "minimum": 1098.0,
+          "maximum": 1350.0,
+          "ci95": 95.1627939060219
+        },
+        "p95_latency_us": {
+          "mean": 2244.8,
+          "stdev": 260.58242458001655,
+          "median": 2291.0,
+          "minimum": 1971.0,
+          "maximum": 2541.0,
+          "ci95": 228.4105659202306
+        },
+        "p99_latency_us": {
+          "mean": 2763.8,
+          "stdev": 373.77426342646976,
+          "median": 2801.0,
+          "minimum": 2357.0,
+          "maximum": 3169.0,
+          "ci95": 327.6275872145079
+        }
+      }
+    },
+    {
+      "mode": "fixed-rate",
+      "configuration": "rate-250_concurrency-64",
+      "system": "Envoy only",
+      "topology": "docker-bridge",
+      "valid_trial_count": 5,
+      "failed_trial_count": 0,
+      "raw_results": [
+        "/root/xsr/results/routing-performance/20260827T213312Z-28024/raw/fixed-rate/rate-250_concurrency-64/trial-01/envoy-only/wrk.txt",
+        "/root/xsr/results/routing-performance/20260827T213312Z-28024/raw/fixed-rate/rate-250_concurrency-64/trial-02/envoy-only/wrk.txt",
+        "/root/xsr/results/routing-performance/20260827T213312Z-28024/raw/fixed-rate/rate-250_concurrency-64/trial-03/envoy-only/wrk.txt",
+        "/root/xsr/results/routing-performance/20260827T213312Z-28024/raw/fixed-rate/rate-250_concurrency-64/trial-04/envoy-only/wrk.txt",
+        "/root/xsr/results/routing-performance/20260827T213312Z-28024/raw/fixed-rate/rate-250_concurrency-64/trial-05/envoy-only/wrk.txt"
+      ],
+      "metrics": {
+        "throughput_rps": {
+          "mean": 250.062,
+          "stdev": 0.004472135954995512,
+          "median": 250.06,
+          "minimum": 250.06,
+          "maximum": 250.07,
+          "ci95": 0.003919999999996434
+        },
+        "average_latency_us": {
+          "mean": 3590.0,
+          "stdev": 181.6590212458495,
+          "median": 3680.0,
+          "minimum": 3320.0,
+          "maximum": 3760.0,
+          "ci95": 159.2311527308648
+        },
+        "p50_latency_us": {
+          "mean": 3479.8,
+          "stdev": 182.13511468138154,
+          "median": 3513.0,
+          "minimum": 3215.0,
+          "maximum": 3653.0,
+          "ci95": 159.64846702677733
+        },
+        "p95_latency_us": {
+          "mean": 5355.8,
+          "stdev": 233.8272866882734,
+          "median": 5403.0,
+          "minimum": 4971.0,
+          "maximum": 5607.0,
+          "ci95": 204.95865354748992
+        },
+        "p99_latency_us": {
+          "mean": 7035.8,
+          "stdev": 381.7894707820005,
+          "median": 7083.0,
+          "minimum": 6427.0,
+          "maximum": 7471.0,
+          "ci95": 334.65322622679133
+        }
+      }
+    },
+    {
+      "mode": "fixed-rate",
+      "configuration": "rate-250_concurrency-64",
+      "system": "VSR (Envoy ExtProc)",
+      "topology": "docker-bridge",
+      "valid_trial_count": 5,
+      "failed_trial_count": 0,
+      "raw_results": [
+        "/root/xsr/results/routing-performance/20260827T213312Z-28024/raw/fixed-rate/rate-250_concurrency-64/trial-01/vsr/wrk.txt",
+        "/root/xsr/results/routing-performance/20260827T213312Z-28024/raw/fixed-rate/rate-250_concurrency-64/trial-02/vsr/wrk.txt",
+        "/root/xsr/results/routing-performance/20260827T213312Z-28024/raw/fixed-rate/rate-250_concurrency-64/trial-03/vsr/wrk.txt",
+        "/root/xsr/results/routing-performance/20260827T213312Z-28024/raw/fixed-rate/rate-250_concurrency-64/trial-04/vsr/wrk.txt",
+        "/root/xsr/results/routing-performance/20260827T213312Z-28024/raw/fixed-rate/rate-250_concurrency-64/trial-05/vsr/wrk.txt"
+      ],
+      "metrics": {
+        "throughput_rps": {
+          "mean": 249.718,
+          "stdev": 0.6315615567781167,
+          "median": 249.98,
+          "minimum": 248.59,
+          "maximum": 250.06,
+          "ci95": 0.5535881125891331
+        },
+        "average_latency_us": {
+          "mean": 12694.0,
+          "stdev": 2005.2755421637196,
+          "median": 13390.0,
+          "minimum": 9150.0,
+          "maximum": 14110.0,
+          "ci95": 1757.7015109511624
+        },
+        "p50_latency_us": {
+          "mean": 11095.0,
+          "stdev": 3225.5628966120007,
+          "median": 12431.0,
+          "minimum": 5351.0,
+          "maximum": 12903.0,
+          "ci95": 2827.330537790019
+        },
+        "p95_latency_us": {
+          "mean": 28943.0,
+          "stdev": 2947.7584704313886,
+          "median": 29439.0,
+          "minimum": 24239.0,
+          "maximum": 32399.0,
+          "ci95": 2583.8242218850723
+        },
+        "p99_latency_us": {
+          "mean": 37567.0,
+          "stdev": 3792.506295314485,
+          "median": 38783.0,
+          "minimum": 30943.0,
+          "maximum": 40159.0,
+          "ci95": 3324.27833751628
+        }
+      }
+    },
+    {
+      "mode": "fixed-rate",
+      "configuration": "rate-250_concurrency-64",
+      "system": "XSR (SK_SKB/SOCKMAP)",
+      "topology": "host-veth",
+      "valid_trial_count": 5,
+      "failed_trial_count": 0,
+      "raw_results": [
+        "/root/xsr/results/routing-performance/20260827T213312Z-28024/raw/fixed-rate/rate-250_concurrency-64/trial-01/xsr/wrk.txt",
+        "/root/xsr/results/routing-performance/20260827T213312Z-28024/raw/fixed-rate/rate-250_concurrency-64/trial-02/xsr/wrk.txt",
+        "/root/xsr/results/routing-performance/20260827T213312Z-28024/raw/fixed-rate/rate-250_concurrency-64/trial-03/xsr/wrk.txt",
+        "/root/xsr/results/routing-performance/20260827T213312Z-28024/raw/fixed-rate/rate-250_concurrency-64/trial-04/xsr/wrk.txt",
+        "/root/xsr/results/routing-performance/20260827T213312Z-28024/raw/fixed-rate/rate-250_concurrency-64/trial-05/xsr/wrk.txt"
+      ],
+      "metrics": {
+        "throughput_rps": {
+          "mean": 250.076,
+          "stdev": 0.005477225575062247,
+          "median": 250.08,
+          "minimum": 250.07,
+          "maximum": 250.08,
+          "ci95": 0.0048009998958643075
+        },
+        "average_latency_us": {
+          "mean": 1894.0,
+          "stdev": 123.61229712289955,
+          "median": 1890.0,
+          "minimum": 1730.0,
+          "maximum": 2050.0,
+          "ci95": 108.35095569490838
+        },
+        "p50_latency_us": {
+          "mean": 1808.6,
+          "stdev": 125.85428081714186,
+          "median": 1747.0,
+          "minimum": 1679.0,
+          "maximum": 1988.0,
+          "ci95": 110.31614104925896
+        },
+        "p95_latency_us": {
+          "mean": 3115.8,
+          "stdev": 210.39771861881013,
+          "median": 3063.0,
+          "minimum": 2839.0,
+          "maximum": 3371.0,
+          "ci95": 184.42173164787278
+        },
+        "p99_latency_us": {
+          "mean": 3926.6,
+          "stdev": 205.6132291463757,
+          "median": 3997.0,
+          "minimum": 3569.0,
+          "maximum": 4085.0,
+          "ci95": 180.22794171825853
+        }
+      }
+    },
+    {
+      "mode": "fixed-rate",
+      "configuration": "rate-500_concurrency-64",
+      "system": "Direct backend",
+      "topology": "host-veth",
+      "valid_trial_count": 5,
+      "failed_trial_count": 0,
+      "raw_results": [
+        "/root/xsr/results/routing-performance/20260827T213312Z-28024/raw/fixed-rate/rate-500_concurrency-64/trial-01/direct/wrk.txt",
+        "/root/xsr/results/routing-performance/20260827T213312Z-28024/raw/fixed-rate/rate-500_concurrency-64/trial-02/direct/wrk.txt",
+        "/root/xsr/results/routing-performance/20260827T213312Z-28024/raw/fixed-rate/rate-500_concurrency-64/trial-03/direct/wrk.txt",
+        "/root/xsr/results/routing-performance/20260827T213312Z-28024/raw/fixed-rate/rate-500_concurrency-64/trial-04/direct/wrk.txt",
+        "/root/xsr/results/routing-performance/20260827T213312Z-28024/raw/fixed-rate/rate-500_concurrency-64/trial-05/direct/wrk.txt"
+      ],
+      "metrics": {
+        "throughput_rps": {
+          "mean": 500.534,
+          "stdev": 0.008944271910019622,
+          "median": 500.54,
+          "minimum": 500.52,
+          "maximum": 500.54,
+          "ci95": 0.007840000000017937
+        },
+        "average_latency_us": {
+          "mean": 1294.0,
+          "stdev": 26.076809620810597,
+          "median": 1280.0,
+          "minimum": 1280.0,
+          "maximum": 1340.0,
+          "ci95": 22.857331427793575
+        },
+        "p50_latency_us": {
+          "mean": 1235.8,
+          "stdev": 23.742367194532225,
+          "median": 1233.0,
+          "minimum": 1213.0,
+          "maximum": 1275.0,
+          "ci95": 20.81110242154413
+        },
+        "p95_latency_us": {
+          "mean": 2410.2,
+          "stdev": 49.89188310737529,
+          "median": 2437.0,
+          "minimum": 2341.0,
+          "maximum": 2459.0,
+          "ci95": 43.73216372419732
+        },
+        "p99_latency_us": {
+          "mean": 3179.8,
+          "stdev": 99.44445685909295,
+          "median": 3139.0,
+          "minimum": 3103.0,
+          "maximum": 3353.0,
+          "ci95": 87.166909684811
+        }
+      }
+    },
+    {
+      "mode": "fixed-rate",
+      "configuration": "rate-500_concurrency-64",
+      "system": "Envoy only",
+      "topology": "docker-bridge",
+      "valid_trial_count": 5,
+      "failed_trial_count": 0,
+      "raw_results": [
+        "/root/xsr/results/routing-performance/20260827T213312Z-28024/raw/fixed-rate/rate-500_concurrency-64/trial-01/envoy-only/wrk.txt",
+        "/root/xsr/results/routing-performance/20260827T213312Z-28024/raw/fixed-rate/rate-500_concurrency-64/trial-02/envoy-only/wrk.txt",
+        "/root/xsr/results/routing-performance/20260827T213312Z-28024/raw/fixed-rate/rate-500_concurrency-64/trial-03/envoy-only/wrk.txt",
+        "/root/xsr/results/routing-performance/20260827T213312Z-28024/raw/fixed-rate/rate-500_concurrency-64/trial-04/envoy-only/wrk.txt",
+        "/root/xsr/results/routing-performance/20260827T213312Z-28024/raw/fixed-rate/rate-500_concurrency-64/trial-05/envoy-only/wrk.txt"
+      ],
+      "metrics": {
+        "throughput_rps": {
+          "mean": 500.48400000000004,
+          "stdev": 0.016733200530666292,
+          "median": 500.48,
+          "minimum": 500.47,
+          "maximum": 500.51,
+          "ci95": 0.01466729695614051
+        },
+        "average_latency_us": {
+          "mean": 3712.0,
+          "stdev": 264.14011433328335,
+          "median": 3580.0,
+          "minimum": 3490.0,
+          "maximum": 4100.0,
+          "ci95": 231.5290184836449
+        },
+        "p50_latency_us": {
+          "mean": 3546.2,
+          "stdev": 269.8614459310555,
+          "median": 3371.0,
+          "minimum": 3351.0,
+          "maximum": 3959.0,
+          "ci95": 236.54398674242387
+        },
+        "p95_latency_us": {
+          "mean": 5613.4,
+          "stdev": 256.2748524533767,
+          "median": 5579.0,
+          "minimum": 5395.0,
+          "maximum": 6015.0,
+          "ci95": 224.63481247571576
+        },
+        "p99_latency_us": {
+          "mean": 8033.4,
+          "stdev": 490.33539541827895,
+          "median": 8115.0,
+          "minimum": 7327.0,
+          "maximum": 8543.0,
+          "ci95": 429.79792416436817
+        }
+      }
+    },
+    {
+      "mode": "fixed-rate",
+      "configuration": "rate-500_concurrency-64",
+      "system": "VSR (Envoy ExtProc)",
+      "topology": "docker-bridge",
+      "valid_trial_count": 5,
+      "failed_trial_count": 0,
+      "raw_results": [
+        "/root/xsr/results/routing-performance/20260827T213312Z-28024/raw/fixed-rate/rate-500_concurrency-64/trial-01/vsr/wrk.txt",
+        "/root/xsr/results/routing-performance/20260827T213312Z-28024/raw/fixed-rate/rate-500_concurrency-64/trial-02/vsr/wrk.txt",
+        "/root/xsr/results/routing-performance/20260827T213312Z-28024/raw/fixed-rate/rate-500_concurrency-64/trial-03/vsr/wrk.txt",
+        "/root/xsr/results/routing-performance/20260827T213312Z-28024/raw/fixed-rate/rate-500_concurrency-64/trial-04/vsr/wrk.txt",
+        "/root/xsr/results/routing-performance/20260827T213312Z-28024/raw/fixed-rate/rate-500_concurrency-64/trial-05/vsr/wrk.txt"
+      ],
+      "metrics": {
+        "throughput_rps": {
+          "mean": 500.454,
+          "stdev": 0.020736441353337645,
+          "median": 500.45,
+          "minimum": 500.43,
+          "maximum": 500.48,
+          "ci95": 0.018176292251180275
+        },
+        "average_latency_us": {
+          "mean": 4822.0,
+          "stdev": 200.922870773837,
+          "median": 4920.0,
+          "minimum": 4490.0,
+          "maximum": 4990.0,
+          "ci95": 176.11666133560445
+        },
+        "p50_latency_us": {
+          "mean": 4043.4,
+          "stdev": 141.24022090042197,
+          "median": 4099.0,
+          "minimum": 3811.0,
+          "maximum": 4171.0,
+          "ci95": 123.80251215544858
+        },
+        "p95_latency_us": {
+          "mean": 10357.4,
+          "stdev": 456.5400311035167,
+          "median": 10463.0,
+          "minimum": 9695.0,
+          "maximum": 10951.0,
+          "ci95": 400.17498124695396
+        },
+        "p99_latency_us": {
+          "mean": 14335.0,
+          "stdev": 597.9431411095875,
+          "median": 14311.0,
+          "minimum": 13519.0,
+          "maximum": 15199.0,
+          "ci95": 524.1202719987083
+        }
+      }
+    },
+    {
+      "mode": "fixed-rate",
+      "configuration": "rate-500_concurrency-64",
+      "system": "XSR (SK_SKB/SOCKMAP)",
+      "topology": "host-veth",
+      "valid_trial_count": 5,
+      "failed_trial_count": 0,
+      "raw_results": [
+        "/root/xsr/results/routing-performance/20260827T213312Z-28024/raw/fixed-rate/rate-500_concurrency-64/trial-01/xsr/wrk.txt",
+        "/root/xsr/results/routing-performance/20260827T213312Z-28024/raw/fixed-rate/rate-500_concurrency-64/trial-02/xsr/wrk.txt",
+        "/root/xsr/results/routing-performance/20260827T213312Z-28024/raw/fixed-rate/rate-500_concurrency-64/trial-03/xsr/wrk.txt",
+        "/root/xsr/results/routing-performance/20260827T213312Z-28024/raw/fixed-rate/rate-500_concurrency-64/trial-04/xsr/wrk.txt",
+        "/root/xsr/results/routing-performance/20260827T213312Z-28024/raw/fixed-rate/rate-500_concurrency-64/trial-05/xsr/wrk.txt"
+      ],
+      "metrics": {
+        "throughput_rps": {
+          "mean": 500.506,
+          "stdev": 0.030495901363947513,
+          "median": 500.52,
+          "minimum": 500.46,
+          "maximum": 500.53,
+          "ci95": 0.026730836126086753
+        },
+        "average_latency_us": {
+          "mean": 2070.0,
+          "stdev": 95.13148795220226,
+          "median": 2130.0,
+          "minimum": 1920.0,
+          "maximum": 2140.0,
+          "ci95": 83.386425753836
+        },
+        "p50_latency_us": {
+          "mean": 1967.6,
+          "stdev": 88.27683727909604,
+          "median": 2025.0,
+          "minimum": 1841.0,
+          "maximum": 2033.0,
+          "ci95": 77.37805952594056
+        },
+        "p95_latency_us": {
+          "mean": 3368.2,
+          "stdev": 106.17532670069822,
+          "median": 3423.0,
+          "minimum": 3197.0,
+          "maximum": 3449.0,
+          "ci95": 93.06677723011579
+        },
+        "p99_latency_us": {
+          "mean": 4273.0,
+          "stdev": 142.81456508353762,
+          "median": 4303.0,
+          "minimum": 4057.0,
+          "maximum": 4427.0,
+          "ci95": 125.18248567591235
+        }
+      }
+    },
+    {
+      "mode": "fixed-rate",
+      "configuration": "rate-750_concurrency-64",
+      "system": "Direct backend",
+      "topology": "host-veth",
+      "valid_trial_count": 5,
+      "failed_trial_count": 0,
+      "raw_results": [
+        "/root/xsr/results/routing-performance/20260827T213312Z-28024/raw/fixed-rate/rate-750_concurrency-64/trial-01/direct/wrk.txt",
+        "/root/xsr/results/routing-performance/20260827T213312Z-28024/raw/fixed-rate/rate-750_concurrency-64/trial-02/direct/wrk.txt",
+        "/root/xsr/results/routing-performance/20260827T213312Z-28024/raw/fixed-rate/rate-750_concurrency-64/trial-03/direct/wrk.txt",
+        "/root/xsr/results/routing-performance/20260827T213312Z-28024/raw/fixed-rate/rate-750_concurrency-64/trial-04/direct/wrk.txt",
+        "/root/xsr/results/routing-performance/20260827T213312Z-28024/raw/fixed-rate/rate-750_concurrency-64/trial-05/direct/wrk.txt"
+      ],
+      "metrics": {
+        "throughput_rps": {
+          "mean": 750.072,
+          "stdev": 0.00836660026537391,
+          "median": 750.07,
+          "minimum": 750.06,
+          "maximum": 750.08,
+          "ci95": 0.007333648478105987
+        },
+        "average_latency_us": {
+          "mean": 1246.0,
+          "stdev": 19.493588689617926,
+          "median": 1240.0,
+          "minimum": 1220.0,
+          "maximum": 1270.0,
+          "ci95": 17.08688385867944
+        },
+        "p50_latency_us": {
+          "mean": 1211.8,
+          "stdev": 16.946976131451887,
+          "median": 1220.0,
+          "minimum": 1190.0,
+          "maximum": 1230.0,
+          "ci95": 14.85467953205319
+        },
+        "p95_latency_us": {
+          "mean": 2197.8,
+          "stdev": 38.69366873275265,
+          "median": 2211.0,
+          "minimum": 2133.0,
+          "maximum": 2233.0,
+          "ci95": 33.916496045434876
+        },
+        "p99_latency_us": {
+          "mean": 2745.4,
+          "stdev": 53.6730845023835,
+          "median": 2757.0,
+          "minimum": 2657.0,
+          "maximum": 2793.0,
+          "ci95": 47.04653287969263
+        }
+      }
+    },
+    {
+      "mode": "fixed-rate",
+      "configuration": "rate-750_concurrency-64",
+      "system": "Envoy only",
+      "topology": "docker-bridge",
+      "valid_trial_count": 5,
+      "failed_trial_count": 0,
+      "raw_results": [
+        "/root/xsr/results/routing-performance/20260827T213312Z-28024/raw/fixed-rate/rate-750_concurrency-64/trial-01/envoy-only/wrk.txt",
+        "/root/xsr/results/routing-performance/20260827T213312Z-28024/raw/fixed-rate/rate-750_concurrency-64/trial-02/envoy-only/wrk.txt",
+        "/root/xsr/results/routing-performance/20260827T213312Z-28024/raw/fixed-rate/rate-750_concurrency-64/trial-03/envoy-only/wrk.txt",
+        "/root/xsr/results/routing-performance/20260827T213312Z-28024/raw/fixed-rate/rate-750_concurrency-64/trial-04/envoy-only/wrk.txt",
+        "/root/xsr/results/routing-performance/20260827T213312Z-28024/raw/fixed-rate/rate-750_concurrency-64/trial-05/envoy-only/wrk.txt"
+      ],
+      "metrics": {
+        "throughput_rps": {
+          "mean": 750.056,
+          "stdev": 0.013416407865045853,
+          "median": 750.05,
+          "minimum": 750.04,
+          "maximum": 750.07,
+          "ci95": 0.011760000000041296
+        },
+        "average_latency_us": {
+          "mean": 3388.0,
+          "stdev": 607.4701638763834,
+          "median": 3150.0,
+          "minimum": 3030.0,
+          "maximum": 4470.0,
+          "ci95": 532.4710756463679
+        },
+        "p50_latency_us": {
+          "mean": 3252.6,
+          "stdev": 640.6627818127099,
+          "median": 2985.0,
+          "minimum": 2885.0,
+          "maximum": 4395.0,
+          "ci95": 561.5656880686354
+        },
+        "p95_latency_us": {
+          "mean": 4983.8,
+          "stdev": 657.0686417719232,
+          "median": 4727.0,
+          "minimum": 4523.0,
+          "maximum": 6127.0,
+          "ci95": 575.9460583631075
+        },
+        "p99_latency_us": {
+          "mean": 6146.2,
+          "stdev": 929.5908777521432,
+          "median": 5699.0,
+          "minimum": 5503.0,
+          "maximum": 7703.0,
+          "ci95": 814.8223304156556
+        }
+      }
+    },
+    {
+      "mode": "fixed-rate",
+      "configuration": "rate-750_concurrency-64",
+      "system": "VSR (Envoy ExtProc)",
+      "topology": "docker-bridge",
+      "valid_trial_count": 5,
+      "failed_trial_count": 0,
+      "raw_results": [
+        "/root/xsr/results/routing-performance/20260827T213312Z-28024/raw/fixed-rate/rate-750_concurrency-64/trial-01/vsr/wrk.txt",
+        "/root/xsr/results/routing-performance/20260827T213312Z-28024/raw/fixed-rate/rate-750_concurrency-64/trial-02/vsr/wrk.txt",
+        "/root/xsr/results/routing-performance/20260827T213312Z-28024/raw/fixed-rate/rate-750_concurrency-64/trial-03/vsr/wrk.txt",
+        "/root/xsr/results/routing-performance/20260827T213312Z-28024/raw/fixed-rate/rate-750_concurrency-64/trial-04/vsr/wrk.txt",
+        "/root/xsr/results/routing-performance/20260827T213312Z-28024/raw/fixed-rate/rate-750_concurrency-64/trial-05/vsr/wrk.txt"
+      ],
+      "metrics": {
+        "throughput_rps": {
+          "mean": 749.988,
+          "stdev": 0.017888543819982047,
+          "median": 749.98,
+          "minimum": 749.98,
+          "maximum": 750.02,
+          "ci95": 0.015679999999985737
+        },
+        "average_latency_us": {
+          "mean": 4530.0,
+          "stdev": 169.26310879810757,
+          "median": 4410.0,
+          "minimum": 4400.0,
+          "maximum": 4730.0,
+          "ci95": 148.3656564033604
+        },
+        "p50_latency_us": {
+          "mean": 3822.2,
+          "stdev": 137.23410654789865,
+          "median": 3781.0,
+          "minimum": 3679.0,
+          "maximum": 3975.0,
+          "ci95": 120.29099810043974
+        },
+        "p95_latency_us": {
+          "mean": 9655.0,
+          "stdev": 231.44761826383092,
+          "median": 9647.0,
+          "minimum": 9311.0,
+          "maximum": 9887.0,
+          "ci95": 202.8727822059923
+        },
+        "p99_latency_us": {
+          "mean": 13482.2,
+          "stdev": 506.04663816687884,
+          "median": 13471.0,
+          "minimum": 12759.0,
+          "maximum": 14159.0,
+          "ci95": 443.5694356287412
+        }
+      }
+    },
+    {
+      "mode": "fixed-rate",
+      "configuration": "rate-750_concurrency-64",
+      "system": "XSR (SK_SKB/SOCKMAP)",
+      "topology": "host-veth",
+      "valid_trial_count": 5,
+      "failed_trial_count": 0,
+      "raw_results": [
+        "/root/xsr/results/routing-performance/20260827T213312Z-28024/raw/fixed-rate/rate-750_concurrency-64/trial-01/xsr/wrk.txt",
+        "/root/xsr/results/routing-performance/20260827T213312Z-28024/raw/fixed-rate/rate-750_concurrency-64/trial-02/xsr/wrk.txt",
+        "/root/xsr/results/routing-performance/20260827T213312Z-28024/raw/fixed-rate/rate-750_concurrency-64/trial-03/xsr/wrk.txt",
+        "/root/xsr/results/routing-performance/20260827T213312Z-28024/raw/fixed-rate/rate-750_concurrency-64/trial-04/xsr/wrk.txt",
+        "/root/xsr/results/routing-performance/20260827T213312Z-28024/raw/fixed-rate/rate-750_concurrency-64/trial-05/xsr/wrk.txt"
+      ],
+      "metrics": {
+        "throughput_rps": {
+          "mean": 750.054,
+          "stdev": 0.01341640786502043,
+          "median": 750.06,
+          "minimum": 750.04,
+          "maximum": 750.07,
+          "ci95": 0.011760000000019014
+        },
+        "average_latency_us": {
+          "mean": 1876.0,
+          "stdev": 68.7749954561976,
+          "median": 1890.0,
+          "minimum": 1780.0,
+          "maximum": 1960.0,
+          "ci95": 60.28394147698041
+        },
+        "p50_latency_us": {
+          "mean": 1815.2,
+          "stdev": 69.68285298407349,
+          "median": 1823.0,
+          "minimum": 1730.0,
+          "maximum": 1910.0,
+          "ci95": 61.079713686296856
+        },
+        "p95_latency_us": {
+          "mean": 3036.2,
+          "stdev": 105.84516994175974,
+          "median": 3083.0,
+          "minimum": 2879.0,
+          "maximum": 3143.0,
+          "ci95": 92.77738207127855
+        },
+        "p99_latency_us": {
+          "mean": 3714.6,
+          "stdev": 146.3516313540782,
+          "median": 3773.0,
+          "minimum": 3495.0,
+          "maximum": 3845.0,
+          "ci95": 128.2828609596777
+        }
+      }
+    },
+    {
+      "mode": "fixed-rate",
+      "configuration": "rate-900_concurrency-64",
+      "system": "Direct backend",
+      "topology": "host-veth",
+      "valid_trial_count": 5,
+      "failed_trial_count": 0,
+      "raw_results": [
+        "/root/xsr/results/routing-performance/20260827T213312Z-28024/raw/fixed-rate/rate-900_concurrency-64/trial-01/direct/wrk.txt",
+        "/root/xsr/results/routing-performance/20260827T213312Z-28024/raw/fixed-rate/rate-900_concurrency-64/trial-02/direct/wrk.txt",
+        "/root/xsr/results/routing-performance/20260827T213312Z-28024/raw/fixed-rate/rate-900_concurrency-64/trial-03/direct/wrk.txt",
+        "/root/xsr/results/routing-performance/20260827T213312Z-28024/raw/fixed-rate/rate-900_concurrency-64/trial-04/direct/wrk.txt",
+        "/root/xsr/results/routing-performance/20260827T213312Z-28024/raw/fixed-rate/rate-900_concurrency-64/trial-05/direct/wrk.txt"
+      ],
+      "metrics": {
+        "throughput_rps": {
+          "mean": 897.842,
+          "stdev": 2.841376427015632,
+          "median": 899.88,
+          "minimum": 894.66,
+          "maximum": 899.94,
+          "ci95": 2.4905762494651897
+        },
+        "average_latency_us": {
+          "mean": 1148.0,
+          "stdev": 69.06518659932803,
+          "median": 1130.0,
+          "minimum": 1060.0,
+          "maximum": 1240.0,
+          "ci95": 60.538305229003555
+        },
+        "p50_latency_us": {
+          "mean": 1121.6,
+          "stdev": 61.88941751220478,
+          "median": 1112.0,
+          "minimum": 1040.0,
+          "maximum": 1202.0,
+          "ci95": 54.24846630090107
+        },
+        "p95_latency_us": {
+          "mean": 2028.2,
+          "stdev": 122.44468138714723,
+          "median": 2002.0,
+          "minimum": 1881.0,
+          "maximum": 2179.0,
+          "ci95": 107.32749537746605
+        },
+        "p99_latency_us": {
+          "mean": 2469.4,
+          "stdev": 196.56245826708619,
+          "median": 2453.0,
+          "minimum": 2257.0,
+          "maximum": 2699.0,
+          "ci95": 172.2945912557907
+        }
+      }
+    },
+    {
+      "mode": "fixed-rate",
+      "configuration": "rate-900_concurrency-64",
+      "system": "Envoy only",
+      "topology": "docker-bridge",
+      "valid_trial_count": 5,
+      "failed_trial_count": 0,
+      "raw_results": [
+        "/root/xsr/results/routing-performance/20260827T213312Z-28024/raw/fixed-rate/rate-900_concurrency-64/trial-01/envoy-only/wrk.txt",
+        "/root/xsr/results/routing-performance/20260827T213312Z-28024/raw/fixed-rate/rate-900_concurrency-64/trial-02/envoy-only/wrk.txt",
+        "/root/xsr/results/routing-performance/20260827T213312Z-28024/raw/fixed-rate/rate-900_concurrency-64/trial-03/envoy-only/wrk.txt",
+        "/root/xsr/results/routing-performance/20260827T213312Z-28024/raw/fixed-rate/rate-900_concurrency-64/trial-04/envoy-only/wrk.txt",
+        "/root/xsr/results/routing-performance/20260827T213312Z-28024/raw/fixed-rate/rate-900_concurrency-64/trial-05/envoy-only/wrk.txt"
+      ],
+      "metrics": {
+        "throughput_rps": {
+          "mean": 899.9,
+          "stdev": 0.01870828693385269,
+          "median": 899.89,
+          "minimum": 899.88,
+          "maximum": 899.92,
+          "ci95": 0.016398536520052964
+        },
+        "average_latency_us": {
+          "mean": 2914.0,
+          "stdev": 321.6830738475371,
+          "median": 2920.0,
+          "minimum": 2480.0,
+          "maximum": 3360.0,
+          "ci95": 281.96764637099767
+        },
+        "p50_latency_us": {
+          "mean": 2779.8,
+          "stdev": 325.73179150951785,
+          "median": 2767.0,
+          "minimum": 2337.0,
+          "maximum": 3239.0,
+          "ci95": 285.5165038732437
+        },
+        "p95_latency_us": {
+          "mean": 4400.6,
+          "stdev": 387.87214388249123,
+          "median": 4395.0,
+          "minimum": 3871.0,
+          "maximum": 4915.0,
+          "ci95": 339.98492427753314
+        },
+        "p99_latency_us": {
+          "mean": 5326.2,
+          "stdev": 367.59107714959566,
+          "median": 5323.0,
+          "minimum": 4883.0,
+          "maximum": 5835.0,
+          "ci95": 322.20778548011526
+        }
+      }
+    },
+    {
+      "mode": "fixed-rate",
+      "configuration": "rate-900_concurrency-64",
+      "system": "VSR (Envoy ExtProc)",
+      "topology": "docker-bridge",
+      "valid_trial_count": 5,
+      "failed_trial_count": 0,
+      "raw_results": [
+        "/root/xsr/results/routing-performance/20260827T213312Z-28024/raw/fixed-rate/rate-900_concurrency-64/trial-01/vsr/wrk.txt",
+        "/root/xsr/results/routing-performance/20260827T213312Z-28024/raw/fixed-rate/rate-900_concurrency-64/trial-02/vsr/wrk.txt",
+        "/root/xsr/results/routing-performance/20260827T213312Z-28024/raw/fixed-rate/rate-900_concurrency-64/trial-03/vsr/wrk.txt",
+        "/root/xsr/results/routing-performance/20260827T213312Z-28024/raw/fixed-rate/rate-900_concurrency-64/trial-04/vsr/wrk.txt",
+        "/root/xsr/results/routing-performance/20260827T213312Z-28024/raw/fixed-rate/rate-900_concurrency-64/trial-05/vsr/wrk.txt"
+      ],
+      "metrics": {
+        "throughput_rps": {
+          "mean": 899.748,
+          "stdev": 0.19524343778986852,
+          "median": 899.83,
+          "minimum": 899.4,
+          "maximum": 899.85,
+          "ci95": 0.17113841883108774
+        },
+        "average_latency_us": {
+          "mean": 6308.0,
+          "stdev": 214.75567512873786,
+          "median": 6310.0,
+          "minimum": 6030.0,
+          "maximum": 6630.0,
+          "ci95": 188.24164895155374
+        },
+        "p50_latency_us": {
+          "mean": 4613.4,
+          "stdev": 136.75086837018623,
+          "median": 4587.0,
+          "minimum": 4439.0,
+          "maximum": 4763.0,
+          "ci95": 119.86742116188202
+        },
+        "p95_latency_us": {
+          "mean": 15591.0,
+          "stdev": 530.1169682249381,
+          "median": 15599.0,
+          "minimum": 14927.0,
+          "maximum": 16255.0,
+          "ci95": 464.66801017500654
+        },
+        "p99_latency_us": {
+          "mean": 23039.0,
+          "stdev": 6291.144252041913,
+          "median": 21599.0,
+          "minimum": 18431.0,
+          "maximum": 33855.0,
+          "ci95": 5514.4310718985325
+        }
+      }
+    },
+    {
+      "mode": "fixed-rate",
+      "configuration": "rate-900_concurrency-64",
+      "system": "XSR (SK_SKB/SOCKMAP)",
+      "topology": "host-veth",
+      "valid_trial_count": 5,
+      "failed_trial_count": 0,
+      "raw_results": [
+        "/root/xsr/results/routing-performance/20260827T213312Z-28024/raw/fixed-rate/rate-900_concurrency-64/trial-01/xsr/wrk.txt",
+        "/root/xsr/results/routing-performance/20260827T213312Z-28024/raw/fixed-rate/rate-900_concurrency-64/trial-02/xsr/wrk.txt",
+        "/root/xsr/results/routing-performance/20260827T213312Z-28024/raw/fixed-rate/rate-900_concurrency-64/trial-03/xsr/wrk.txt",
+        "/root/xsr/results/routing-performance/20260827T213312Z-28024/raw/fixed-rate/rate-900_concurrency-64/trial-04/xsr/wrk.txt",
+        "/root/xsr/results/routing-performance/20260827T213312Z-28024/raw/fixed-rate/rate-900_concurrency-64/trial-05/xsr/wrk.txt"
+      ],
+      "metrics": {
+        "throughput_rps": {
+          "mean": 899.892,
+          "stdev": 0.03193743884535629,
+          "median": 899.89,
+          "minimum": 899.85,
+          "maximum": 899.94,
+          "ci95": 0.027994399439899953
+        },
+        "average_latency_us": {
+          "mean": 1880.0,
+          "stdev": 118.95377253370319,
+          "median": 1840.0,
+          "minimum": 1800.0,
+          "maximum": 2090.0,
+          "ci95": 104.26757885363982
+        },
+        "p50_latency_us": {
+          "mean": 1803.6,
+          "stdev": 123.15965248408263,
+          "median": 1754.0,
+          "minimum": 1724.0,
+          "maximum": 2022.0,
+          "ci95": 107.95419517554656
+        },
+        "p95_latency_us": {
+          "mean": 3086.2,
+          "stdev": 174.1240936803405,
+          "median": 3019.0,
+          "minimum": 2997.0,
+          "maximum": 3397.0,
+          "ci95": 152.62649751599488
+        },
+        "p99_latency_us": {
+          "mean": 3830.6,
+          "stdev": 200.8800637196235,
+          "median": 3741.0,
+          "minimum": 3707.0,
+          "maximum": 4183.0,
+          "ci95": 176.07913929821441
+        }
+      }
+    }
+  ]
+}

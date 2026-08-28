@@ -1,0 +1,18 @@
+{
+  "configuration": "concurrency-8",
+  "failure_reasons": [],
+  "metrics": {
+    "average_latency_us": 275.35,
+    "p50_latency_us": 228.0,
+    "p95_latency_us": 548.0,
+    "p99_latency_us": 1411.0,
+    "throughput_rps": 26453.03
+  },
+  "mode": "saturation",
+  "raw_output": "/root/xsr/results/routing-performance/20260827T013338Z-157571/raw/saturation/concurrency-8/trial-01/xsr/wrk.txt",
+  "system": "XSR (SK_SKB/SOCKMAP)",
+  "tool": "wrk",
+  "topology": "host-veth",
+  "trial": 1,
+  "valid": true
+}

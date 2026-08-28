@@ -1,0 +1,18 @@
+{
+  "configuration": "rate-750_concurrency-64",
+  "failure_reasons": [],
+  "metrics": {
+    "average_latency_us": 4470.0,
+    "p50_latency_us": 4395.0,
+    "p95_latency_us": 6127.0,
+    "p99_latency_us": 7703.0,
+    "throughput_rps": 750.05
+  },
+  "mode": "fixed-rate",
+  "raw_output": "/root/xsr/results/routing-performance/20260827T213312Z-28024/raw/fixed-rate/rate-750_concurrency-64/trial-04/envoy-only/wrk.txt",
+  "system": "Envoy only",
+  "tool": "/root/xsr/.tools/wrk2/wrk",
+  "topology": "docker-bridge",
+  "trial": 4,
+  "valid": true
+}

@@ -1,0 +1,18 @@
+{
+  "configuration": "concurrency-4",
+  "failure_reasons": [],
+  "metrics": {
+    "average_latency_us": 9.73,
+    "p50_latency_us": 7.0,
+    "p95_latency_us": 10.0,
+    "p99_latency_us": 14.0,
+    "throughput_rps": 343774.22
+  },
+  "mode": "saturation",
+  "raw_output": "/root/xsr/results/routing-performance/20260827T013338Z-157571/raw/saturation/concurrency-4/trial-04/direct/wrk.txt",
+  "system": "Direct backend",
+  "tool": "wrk",
+  "topology": "host-veth",
+  "trial": 4,
+  "valid": true
+}
