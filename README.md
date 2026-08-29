@@ -21,8 +21,9 @@ cd xsr/tools/XDP
 make install
 ```
 
-Production builds do not need Python. The generated policy header is checked in
-and compiled directly into the router.
+Generated policy headers are checked in for review and reproducibility. `make`
+reruns the small standard-library-only Python generator so `KEYWORD_POLICY`
+always controls the modules and map initializers compiled into the router.
 
 The router expects five HTTP backends on localhost:
 
@@ -53,12 +54,13 @@ client
   -> selected model backend
 ```
 
-The shared policy is [`config/policy_ngram.yaml`](config/policy_ngram.yaml). Each
-route has a short keyword list. xsr compares three-character pieces so small
-spelling differences can still match, then applies the policy's priority order.
-Matching operates on Unicode code points, accepts raw UTF-8 and JSON `\uXXXX`
+The checked-in examples are `config/policy_ngram.yaml`,
+`config/policy_bm25.yaml`, and `config/policy_mixed.yaml`. `method: ngram` uses
+the ngrammatic-compatible multiset Jaccard matcher, while `method: bm25` uses
+BM25. N-Gram matching operates on Unicode code points, accepts raw UTF-8 and JSON `\uXXXX`
 escapes, and performs both per-word matching and a full-text pass for multi-word
-phrases. Prompts without a match use the fallback backend.
+phrases. Rules from either module feed the same priority and backend path.
+Prompts without a match use the fallback backend.
 
 The kernel implementation is deliberately bounded for verifier safety: at most
 16 keywords across 8 rules, 32 trigrams per keyword or word, and 128 trigrams
@@ -76,9 +78,32 @@ environment and rebuild:
 
 ```bash
 make benchmark
-make policy
-make
+make KEYWORD_POLICY=config/policy_bm25.yaml policy
+make KEYWORD_POLICY=config/policy_bm25.yaml
 ```
+
+The policy generator writes `bpf/xdp_keyword_modules.generated.h`. Its two
+feature definitions select the N-Gram and BM25 headers before clang compiles
+the eBPF object, so an N-Gram-only object has no BM25 maps/code and vice versa.
+Mixed policies compile both modules. This generated selection and the
+userspace map initializers come from the same YAML in one generation step.
+
+BM25 follows VSR's `bm25` 2.3 path: every rule has an independent corpus,
+every keyword is one document, the request is the query, score comparison is
+inclusive, and OR/AND/NOR are evaluated after per-document matching. Userspace
+precomputes `k1=1.2`, `b=0.75`, average document length, BM25 IDF, and document
+term weights. eBPF accumulates Q1e6 integer weights; it does not use floating
+point or allocate memory.
+
+The verifier-bounded BM25 domain is at most 8 BM25 rules, 16 total keyword
+documents, 16 tokens per document, 128 corpus terms, 32 ASCII alphanumeric
+bytes per query token, and 256 query tokens. Corpus FNV-1a collisions are
+rejected during generation. Compatibility covers lowercased ASCII tokenization
+when a match does not depend on Unicode normalization, English stop-word
+removal, or stemming different surface forms (for example, `solve` versus
+`solving`). Those transformations remain outside the eBPF-supported domain.
+Threshold decisions within the Q1e6 rounding error of a VSR floating score are
+also boundary-limited; use thresholds with at least a small margin.
 
 ## Benchmarks and results
 
@@ -90,6 +115,20 @@ sudo make correctness
 sudo BENCHMARK_PROFILE=quick make performance
 sudo BENCHMARK_PROFILE=quick RATES="100 250 500" make performance-fixed-rate
 ```
+
+Select BM25 in the existing workflow with:
+
+```bash
+sudo make correctness # runs N-Gram and BM25 policies
+sudo make performance args="KEYWORD_POLICY=config/policy_bm25.yaml BENCHMARK_PROFILE=quick"
+sudo make performance-fixed-rate args="KEYWORD_POLICY=config/policy_bm25.yaml BENCHMARK_PROFILE=quick RATES='100 250 500'"
+```
+
+For XSR/VSR agreement or comparative timing, mount that same policy into the
+external VSR deployment before running the command; the benchmark does not
+restart or rewrite a user-managed VSR container.
+Use `KEYWORD_METHODS=bm25` (or `ngram`) to run one correctness configuration
+after the matching VSR policy is active.
 
 The correctness command runs the combined 9,280-entry routing-equivalence
 corpus by default: SPEED-Bench `qualitative/test` (880) plus the pinned
@@ -129,6 +168,8 @@ make legacy
 - [Linux SOCKMAP documentation](https://docs.kernel.org/bpf/map_sockmap.html)
 - [eBPF and XDP](https://ebpf.io/)
 - [vLLM Semantic Router](https://vllm-semantic-router.com/)
+- [VSR BM25 classifier source](https://github.com/vllm-project/semantic-router/blob/main/nlp-binding/src/bm25_classifier.rs)
+- [`bm25` 2.3 crate](https://docs.rs/bm25/2.3.2/bm25/)
 
 ## File Structure
 

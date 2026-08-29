@@ -32,6 +32,7 @@ sys.path.insert(0, str(ROOT / "benchmarks" / "policy"))
 
 from generate_keyword_header import load_policy, validate_policy  # noqa: E402
 from jaccard_reference import rule_matches  # noqa: E402
+from bm25_reference import rule_matches as bm25_rule_matches  # noqa: E402
 
 
 DEFAULT_CONFIG = ROOT / "config" / "policy_ngram.yaml"
@@ -558,19 +559,27 @@ def expected_route(
     case_sensitive: bool,
 ) -> tuple[str, str | None]:
     for route in routes:
-        if str(route.get("method", "")).lower() != "ngram":
-            raise ValueError("benchmark policy must use the XDP Jaccard ngram matcher")
+        method = str(route.get("method", "")).lower()
         keywords = [str(keyword) for keyword in route["keywords"]]  # type: ignore[index]
         operator = str(route.get("operator", "OR"))
-        arity = int(route.get("ngram_arity", 3))
-        threshold = route.get("ngram_threshold", 0.4)
-        if not rule_matches(prompt, keywords, operator, arity, threshold, case_sensitive):
+        if method == "ngram":
+            arity = int(route.get("ngram_arity", 3))
+            threshold = route.get("ngram_threshold", 0.4)
+            matched = rule_matches(prompt, keywords, operator, arity, threshold, case_sensitive)
+            single_match = lambda keyword: rule_matches(prompt, [keyword], "OR", arity, threshold, case_sensitive)
+        elif method == "bm25":
+            threshold = route.get("bm25_threshold", 0.1)
+            matched = bm25_rule_matches(prompt, keywords, operator, threshold)
+            single_match = lambda keyword: bm25_rule_matches(prompt, [keyword], "OR", threshold)
+        else:
+            raise ValueError(f"benchmark policy uses unsupported method {method!r}")
+        if not matched:
             continue
         matching_keyword = next(
             (
                 keyword
                 for keyword in keywords
-                if rule_matches(prompt, [keyword], "OR", arity, threshold, case_sensitive)
+                if single_match(keyword)
             ),
             None,
         )

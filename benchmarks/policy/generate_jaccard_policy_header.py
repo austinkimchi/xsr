@@ -107,7 +107,9 @@ def casefold_entries(texts: list[str]) -> list[tuple[int, int]]:
     return sorted(entries.items())
 
 
-def parse(path: Path) -> tuple[list[dict[str, object]], list[dict[str, object]], list[tuple[int, int]]]:
+def parse(
+    path: Path, allow_other_methods: bool = False
+) -> tuple[list[dict[str, object]], list[dict[str, object]], list[tuple[int, int]]]:
     policy = load_policy(path)
     signals = keyword_signals(policy)
     decision_routes, priorities = decision_keyword_routes(policy)
@@ -116,7 +118,11 @@ def parse(path: Path) -> tuple[list[dict[str, object]], list[dict[str, object]],
     insensitive_texts: list[str] = []
     policy_case_sensitive: bool | None = None
     for signal in signals:
-        if not isinstance(signal, dict) or str(signal.get("method", "")).lower() != "ngram":
+        if not isinstance(signal, dict):
+            raise ValueError("keyword signals must be objects")
+        if str(signal.get("method", "")).lower() != "ngram":
+            if allow_other_methods:
+                continue
             raise ValueError("XDP Jaccard policies must contain only method: ngram keyword signals")
         name = str(signal.get("name", ""))
         route_name = signal_route_name(signal, decision_routes)

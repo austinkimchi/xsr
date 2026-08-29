@@ -94,9 +94,12 @@ benchmark:
 	$(MAKE) install-wrk2
 	$(MAKE) check-benchmark
 
-policy:
-	$(PYTHON) benchmarks/policy/generate_jaccard_policy_header.py $(KEYWORD_POLICY) bpf/xdp_jaccard_policy.generated.h
-	$(PYTHON) benchmarks/policy/generate_unicode_word_header.py bpf/xdp_unicode_word.generated.h
+policy: bpf/xdp_keyword_modules.generated.h
+
+bpf/xdp_keyword_modules.generated.h: FORCE
+	$(PYTHON) benchmarks/policy/generate_policy_modules.py $(KEYWORD_POLICY) bpf
+
+FORCE:
 
 define require_sudo
 	@if [ "$$(id -u)" -ne 0 ]; then \
@@ -163,19 +166,19 @@ install-wrk:
 install-wrk2:
 	./benchmarks/routing_wrk/install_wrk2.sh
 
-xdp_router: xdp_router.c xdp_router.h bpf/xdp_jaccard_classifier.bpf.h bpf/xdp_jaccard_policy.generated.h
+xdp_router: xdp_router.c xdp_router.h bpf/xdp_classifier.bpf.h bpf/xdp_ngram_classifier.bpf.h bpf/xdp_bm25_classifier.bpf.h bpf/xdp_keyword_policy_loader.h bpf/xdp_keyword_modules.generated.h
 	$(CC) $(USER_CFLAGS) $< -o $@ $(LIBBPF_FLAGS)
 
-sk_router: sk_router.c xdp_router.h bpf/xdp_decision.bpf.h bpf/xdp_signals.bpf.h bpf/xdp_jaccard_classifier.bpf.h bpf/xdp_jaccard_policy.generated.h
+sk_router: sk_router.c xdp_router.h bpf/xdp_decision.bpf.h bpf/xdp_signals.bpf.h bpf/xdp_classifier.bpf.h bpf/xdp_ngram_classifier.bpf.h bpf/xdp_bm25_classifier.bpf.h bpf/xdp_keyword_policy_loader.h bpf/xdp_keyword_modules.generated.h
 	$(CC) $(USER_CFLAGS) $< -o $@ $(LIBBPF_FLAGS) -lpthread
 
 benchmarks/mock_backend: benchmarks/mock_backend.c
 	$(CC) -O3 $< -o $@ -lpthread
 
-xdp_router.bpf.o: bpf/xdp_router.bpf.c xdp_router.h bpf/xdp_http_parser.bpf.h bpf/xdp_classifier.bpf.h bpf/xdp_jaccard_classifier.bpf.h bpf/xdp_jaccard_policy.generated.h bpf/xdp_unicode_word.generated.h
+xdp_router.bpf.o: bpf/xdp_router.bpf.c xdp_router.h bpf/xdp_http_parser.bpf.h bpf/xdp_classifier.bpf.h bpf/xdp_ngram_classifier.bpf.h bpf/xdp_jaccard_classifier.bpf.h bpf/xdp_bm25_classifier.bpf.h bpf/xdp_keyword_modules.generated.h bpf/xdp_unicode_word.generated.h
 	$(BPF_CLANG) $(BPF_CFLAGS) -c $< -o $@
 
-sk_router.bpf.o: bpf/sk_router.bpf.c xdp_router.h bpf/xdp_decision.bpf.h bpf/xdp_signals.bpf.h bpf/xdp_classifier.bpf.h bpf/xdp_jaccard_classifier.bpf.h bpf/xdp_jaccard_policy.generated.h bpf/xdp_unicode_word.generated.h
+sk_router.bpf.o: bpf/sk_router.bpf.c xdp_router.h bpf/xdp_decision.bpf.h bpf/xdp_signals.bpf.h bpf/xdp_classifier.bpf.h bpf/xdp_ngram_classifier.bpf.h bpf/xdp_jaccard_classifier.bpf.h bpf/xdp_bm25_classifier.bpf.h bpf/xdp_keyword_modules.generated.h bpf/xdp_unicode_word.generated.h
 	$(BPF_CLANG) $(BPF_CFLAGS) -c $< -o $@
 
 clean:
@@ -221,4 +224,4 @@ iproutes:
 	done
 	@echo "benchmark backend ports allowed: $(VSR_BACKEND_PORTS)"
 
-.PHONY: help all build legacy benchmark-build prod dev install benchmark policy correctness performance performance-fixed-rate wrk check-build check check-benchmark check-performance check-performance-fixed-rate install-wrk install-wrk2 clean clean-setup setup iproutes
+.PHONY: help all build legacy benchmark-build prod dev install benchmark policy FORCE correctness performance performance-fixed-rate wrk check-build check check-benchmark check-performance check-performance-fixed-rate install-wrk install-wrk2 clean clean-setup setup iproutes

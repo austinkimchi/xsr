@@ -23,6 +23,7 @@ for benchmark_arg in "$@"; do
         RATES=*) RATES="${benchmark_arg#RATES=}" ;;
         VALIDATE_LOAD=*) VALIDATE_LOAD="${benchmark_arg#VALIDATE_LOAD=}" ;;
         INCLUDE_XDP=*) INCLUDE_XDP="${benchmark_arg#INCLUDE_XDP=}" ;;
+        KEYWORD_POLICY=*) KEYWORD_POLICY="${benchmark_arg#KEYWORD_POLICY=}" ;;
     esac
 done
 
@@ -82,6 +83,7 @@ ENVOY_ONLY_PORT="${ENVOY_ONLY_PORT:-8898}"
 ENVOY_ONLY_CONTAINER="${ENVOY_ONLY_CONTAINER:-xsr-benchmark-envoy-only-${RUN_ID:-$$}}"
 ENVOY_ONLY_URL="${ENVOY_ONLY_URL:-}"
 REPORT_DIR="${ROOT_DIR}/results/routing-performance"
+KEYWORD_POLICY="${KEYWORD_POLICY:-${ROOT_DIR}/config/policy_ngram.yaml}"
 
 if [ "$EUID" -ne 0 ]; then
     echo "Routing benchmark uses sudo for cleanup and firewall setup. Elevating..."
@@ -102,6 +104,7 @@ if [ "$EUID" -ne 0 ]; then
         VALIDATE_LOAD="$VALIDATE_LOAD"
         TOPOLOGY_MODE="$TOPOLOGY_MODE"
         INCLUDE_XDP="$INCLUDE_XDP"
+        KEYWORD_POLICY="$KEYWORD_POLICY"
         XDP_PORT="$XDP_PORT"
         CODING_BACKEND_PORT="$CODING_BACKEND_PORT"
         MATH_BACKEND_PORT="$MATH_BACKEND_PORT"
@@ -208,7 +211,7 @@ mkdir -p "$RAW_DIR"
     --profile "$BENCHMARK_PROFILE" --trials "$TRIALS" --duration "$DURATION" --warmup-duration "$WARMUP_DURATION" \
     --concurrency "${CONCURRENCY:-${DEFAULT_CONCURRENCIES[*]}}" --rates "$RATES" --wrk-bin "$WRK_BIN" --wrk2-bin "$WRK2_BIN" \
     --vllm-container "$VLLM_HOST" --vsr-container "${VSR_CONTAINER:-${VLLM_HOST/envoy/router}}" \
-    --policy "${ROOT_DIR}/config/policy_ngram.yaml" --prompts "${ROOT_DIR}/benchmarks/dataset_prompts.jsonl"
+    --policy "$KEYWORD_POLICY" --prompts "${ROOT_DIR}/benchmarks/dataset_prompts.jsonl"
 
 if ! ip netns exec "$NETNS" ip link show dev "$XDP_PEER_IF" >/dev/null 2>&1; then
     echo "Error: ${NETNS}/${XDP_PEER_IF} is missing. Run 'make setup' first." >&2
@@ -228,18 +231,18 @@ pkill -9 sk_router >/dev/null 2>&1 || true
 # Generate prompt dataset if missing or from the older no-route-metadata format.
 if [ ! -f "benchmarks/dataset_prompts.jsonl" ] || ! head -n 1 benchmarks/dataset_prompts.jsonl | grep -q '"x_expected_route"'; then
     echo "Generating dataset_prompts.jsonl..."
-    "$PYTHON_BIN" "${SCRIPT_DIR}/export_prompts.py"
+    "$PYTHON_BIN" "${SCRIPT_DIR}/export_prompts.py" --config "$KEYWORD_POLICY"
 fi
 
 echo "Building routing proxy and mock backends..."
 if [ "$BENCHMARK_PROFILE" = "paper" ]; then
-    make prod
+    make KEYWORD_POLICY="$KEYWORD_POLICY" prod
     make benchmarks/mock_backend
 else
-    make dev
+    make KEYWORD_POLICY="$KEYWORD_POLICY" dev
 fi
 if [ "$INCLUDE_XDP" = "1" ]; then
-    make legacy
+    make KEYWORD_POLICY="$KEYWORD_POLICY" legacy
 fi
 
 # Flush old iptables rules for these ports

@@ -143,6 +143,21 @@ class RouterArenaAdapterTests(unittest.TestCase):
 
 
 class RoutingCorrectnessComparisonTests(unittest.TestCase):
+    def test_bm25_reference_drives_final_route_priority(self) -> None:
+        routes = [
+            {"name": "coding", "priority": 100, "method": "bm25", "operator": "OR", "keywords": ["code"], "bm25_threshold": 0.1},
+            {"name": "math", "priority": 90, "method": "bm25", "operator": "OR", "keywords": ["solve"], "bm25_threshold": 0.1},
+        ]
+        self.assertEqual(benchmark.expected_route("solve then code", routes, False)[0], "coding")
+        self.assertEqual(benchmark.expected_route("nothing relevant", routes, False)[0], "others")
+
+    def test_mixed_methods_use_the_shared_policy_order(self) -> None:
+        routes = [
+            {"name": "coding", "priority": 100, "method": "ngram", "operator": "OR", "keywords": ["code"], "ngram_arity": 3, "ngram_threshold": 0.8},
+            {"name": "math", "priority": 90, "method": "bm25", "operator": "OR", "keywords": ["solve"], "bm25_threshold": 0.1},
+        ]
+        self.assertEqual(benchmark.expected_route("solve", routes, False)[0], "math")
+
     def test_source_index_collisions_use_case_id_and_report_per_source(self) -> None:
         xdp_observations = [
             observation("speed:0", "speed-bench", 0, "same", "coding", "coding", "dataset-category"),

@@ -18,8 +18,15 @@
 #include <unistd.h>
 
 #include "xdp_router.h"
-#include "bpf/xdp_jaccard_classifier.bpf.h"
+#include "bpf/xdp_keyword_modules.generated.h"
+#if XDP_KEYWORD_ENABLE_NGRAM
+#include "bpf/xdp_ngram_classifier.bpf.h"
 #include "bpf/xdp_jaccard_policy.generated.h"
+#endif
+#if XDP_KEYWORD_ENABLE_BM25
+#include "bpf/xdp_bm25_classifier.bpf.h"
+#include "bpf/xdp_bm25_policy.generated.h"
+#endif
 #include "bpf/xdp_signals.bpf.h"
 
 #define XDP_MODEL_CODING 1
@@ -103,6 +110,7 @@ __u64 read_percpu_counter(int map_fd, __u32 key, int cpu_count) {
   return total;
 }
 
+#if XDP_KEYWORD_ENABLE_NGRAM
 static int populate_jaccard_policy(struct bpf_object *obj) {
   int config_fd = bpf_object__find_map_fd_by_name(obj, "xdp_jaccard_config");
   int rules_fd = bpf_object__find_map_fd_by_name(obj, "xdp_jaccard_rules");
@@ -151,6 +159,9 @@ static int populate_jaccard_policy(struct bpf_object *obj) {
       return -1;
   return 0;
 }
+#endif
+
+#include "bpf/xdp_keyword_policy_loader.h"
 
 static int populate_decision_rules(struct bpf_object *obj) {
   int rules_fd = bpf_object__find_map_fd_by_name(obj, "xdp_decision_rules");
@@ -227,8 +238,8 @@ int main(void) {
     return 1;
   }
 
-  if (populate_jaccard_policy(obj) != 0) {
-    perror("populate_jaccard_policy");
+  if (populate_keyword_policy(obj) != 0) {
+    perror("populate_keyword_policy");
     return 1;
   }
   if (populate_decision_rules(obj) != 0) {

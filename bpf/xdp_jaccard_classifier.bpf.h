@@ -296,11 +296,12 @@ static __noinline void xdp_jaccard_finish(struct xdp_jaccard_state *s) {
   xdp_jaccard_match_query(s, &s->full);
 }
 
-static __noinline __u32 xdp_jaccard_route(struct xdp_jaccard_state *s) {
+static __noinline __u32 xdp_jaccard_route_priority(struct xdp_jaccard_state *s,
+                                                   __u32 *priority) {
   __u32 config_key = 0, best_route = XDP_ROUTE_GENERAL, best_priority = 0;
   struct xdp_jaccard_policy_config *config = bpf_map_lookup_elem(&xdp_jaccard_config, &config_key);
   if (!config)
-    return best_route;
+    goto out;
 #pragma clang loop unroll(disable)
   for (int i = 0; i < XDP_JACCARD_MAX_RULES; i++) {
     __u32 key = i, matched = (s->rule_match_counts >> (i * 8)) & 255;
@@ -317,7 +318,13 @@ static __noinline __u32 xdp_jaccard_route(struct xdp_jaccard_state *s) {
       best_route = rule->route;
     }
   }
+out:
+  *priority = best_priority;
   return best_route;
+}
+static __noinline __u32 xdp_jaccard_route(struct xdp_jaccard_state *s) {
+  __u32 priority = 0;
+  return xdp_jaccard_route_priority(s, &priority);
 }
 static __noinline __u8 xdp_jaccard_rule_matches(struct xdp_jaccard_state *s, __u32 route) { return xdp_jaccard_route(s) == route; }
 #endif

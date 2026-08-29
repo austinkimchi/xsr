@@ -119,7 +119,6 @@ struct sk_classify_ctx {
   struct sk_http_flow_state *flow;
   __u32 start;
   __u32 scan_len;
-  struct xdp_classifier_state classifier;
 };
 
 static __always_inline unsigned char content_length_char(__u32 pos) {
