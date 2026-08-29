@@ -20,6 +20,7 @@ from generate_keyword_header import (
 MAX_RULES = 8
 MAX_DOCUMENTS = 16
 MAX_DOCUMENT_TOKENS = 16
+MAX_TOKEN_LEN = 32
 MAX_TERMS = 128
 SCORE_SCALE = 1_000_000
 ROUTES = {"coding": "XDP_ROUTE_CODING", "math": "XDP_ROUTE_MATH", "qa": "XDP_ROUTE_QA", "writing": "XDP_ROUTE_WRITING"}
@@ -81,6 +82,14 @@ def parse(path: Path) -> tuple[list[dict[str, object]], list[dict[str, object]],
             raise ValueError(f"{name}: every keyword must contain an ASCII alphanumeric token")
         if any(len(tokens) > MAX_DOCUMENT_TOKENS for tokens in corpus):
             raise ValueError(f"{name}: keyword documents support at most {MAX_DOCUMENT_TOKENS} tokens")
+        oversized_token = next(
+            (token for tokens in corpus for token in tokens if len(token) > MAX_TOKEN_LEN),
+            None,
+        )
+        if oversized_token is not None:
+            raise ValueError(
+                f"{name}: token {oversized_token!r} exceeds the {MAX_TOKEN_LEN}-byte runtime limit"
+            )
         avgdl = sum(map(len, corpus)) / len(corpus)
         document_frequency = Counter(token for tokens in corpus for token in set(tokens))
         corpus_size = len(corpus)

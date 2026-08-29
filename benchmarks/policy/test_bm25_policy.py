@@ -8,7 +8,7 @@ import unittest
 from pathlib import Path
 
 from bm25_reference import fixed_scores, keyword_scores, rule_matches
-from generate_bm25_policy_header import SCORE_SCALE, parse, threshold_micro
+from generate_bm25_policy_header import MAX_TOKEN_LEN, SCORE_SCALE, parse, threshold_micro
 from generate_policy_modules import methods, selection_header
 
 
@@ -52,6 +52,18 @@ class Bm25CompatibilityTests(unittest.TestCase):
 
     def test_threshold_rounding(self) -> None:
         self.assertEqual(threshold_micro("0.1000005"), 100001)
+
+    def test_policy_rejects_tokens_longer_than_runtime_limit(self) -> None:
+        source = (ROOT / "config" / "policy_bm25.yaml").read_text()
+        with tempfile.TemporaryDirectory() as directory:
+            accepted = Path(directory) / "accepted.yaml"
+            accepted.write_text(source.replace('"code"', f'"{"a" * MAX_TOKEN_LEN}"', 1))
+            parse(accepted)
+
+            rejected = Path(directory) / "rejected.yaml"
+            rejected.write_text(source.replace('"code"', f'"{"a" * (MAX_TOKEN_LEN + 1)}"', 1))
+            with self.assertRaisesRegex(ValueError, "exceeds the 32-byte runtime limit"):
+                parse(rejected)
 
 
 class ModuleSelectionTests(unittest.TestCase):
