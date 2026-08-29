@@ -9,6 +9,13 @@ The current work focuses on a minimal SOCKMAP router and reproducible comparison
 with a direct backend, Envoy, and vLLM Semantic Router (VSR). The older XDP path
 is still available for comparison but is no longer the default.
 
+This branch also contains a learned-routing experiment that distills the frozen
+VSR mmBERT intent classifier into a separate 14-class, 4096-bucket int8 FNV
+student for bounded kernel inference. It does not put mmBERT or LoRA in eBPF.
+See [`docs/lora_distill.md`](docs/lora_distill.md) for the pinned teacher,
+leak-free dataset protocol, training/baseline workflow, parity gate, and
+three-path benchmark methodology.
+
 ## Installation
 
 xsr requires Linux Kernel 6 or newer with BPF, BPF system calls, and the BPF stream

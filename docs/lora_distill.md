@@ -1,0 +1,133 @@
+# Distilling mmBERT routing into XSR
+
+This experiment does not run mmBERT or LoRA in the kernel. It freezes the
+published VSR mmBERT-32K intent classifier, uses its 14-logit distribution as
+an offline training signal, and exports a separate bounded linear student for
+integer inference in XSR.
+
+```text
+mmBERT-32K + intent LoRA (offline teacher)
+  -> soft-target distillation
+  -> 14 x 4096 FNV byte-trigram student
+  -> one global int8 scale
+  -> BPF array maps + int32 accumulation + integer argmax
+```
+
+## Reproducibility contract
+
+Exact model, tokenizer, adapter, dataset revisions, file hashes, and class order
+are checked in as `benchmarks/lora_distill/teacher_provenance.json` and verified
+again by `teacher_targets.py`. Both published mapping files must agree with the
+14 labels before inference begins. The teacher loader constructs the official
+base sequence classifier and then applies the official LoRA adapter; it does not
+retrain either component.
+
+MMLU-Pro has only official `validation` and `test` splits. Its validation rows
+are used for student fitting and its entire test split remains final evaluation.
+The supplement's official train split is deterministically divided 80/10/10;
+its middle partition is the validation-only model-selection set. Every prompt
+is deduplicated across all student splits by SHA-256 of the exact normalized
+byte stream. The manifest records prompt, source dataset/revision/split/index,
+ground truth, student split, and normalized digest. Final test rows never enter
+training or hyperparameter selection.
+
+Student normalization is intentionally small: encode UTF-8, convert only ASCII
+`A-Z` bytes to `a-z`, leave every other byte unchanged, and process at most
+16,384 prompt bytes. The JSON parsers reconstruct standard escaped controls and
+BMP `\\uXXXX` code points as UTF-8; the benchmark sends non-BMP text as raw
+UTF-8. Consecutive three-byte windows use 32-bit FNV-1a and `hash & 4095`.
+
+The stream parser's HTTP request cap remains 256 KiB, but learned inference is
+separately bounded at 16,384 decoded prompt bytes. At most 16,382 trigrams are
+scored. With int8 weights, the accumulation contribution is at most
+`16,382 * 127 = 2,080,514`. The exporter adds the largest absolute quantized
+bias, rejects any model whose proven bound exceeds signed int32, and stores the
+bound in the model header. The loader rejects incompatible dimensions/bounds.
+
+## Running the experiment
+
+Use a dedicated environment because the teacher stack is not a production XSR
+dependency:
+
+```bash
+python3 -m venv .venv-distill
+.venv-distill/bin/pip install -r benchmarks/lora_distill/requirements.txt
+mkdir -p benchmarks/lora_distill/artifacts
+
+.venv-distill/bin/python benchmarks/lora_distill/prepare_dataset.py \
+  --output benchmarks/lora_distill/artifacts/manifest.jsonl
+
+.venv-distill/bin/python benchmarks/lora_distill/teacher_targets.py \
+  --manifest benchmarks/lora_distill/artifacts/manifest.jsonl \
+  --output benchmarks/lora_distill/artifacts/teacher_targets.jsonl \
+  --provenance benchmarks/lora_distill/artifacts/teacher_provenance.json
+
+.venv-distill/bin/python benchmarks/lora_distill/train_students.py \
+  --manifest benchmarks/lora_distill/artifacts/manifest.jsonl \
+  --teacher-targets benchmarks/lora_distill/artifacts/teacher_targets.jsonl \
+  --output-dir benchmarks/lora_distill/artifacts/model
+
+.venv-distill/bin/python benchmarks/lora_distill/evaluate.py \
+  --manifest benchmarks/lora_distill/artifacts/manifest.jsonl \
+  --teacher-targets benchmarks/lora_distill/artifacts/teacher_targets.jsonl \
+  --model-dir benchmarks/lora_distill/artifacts/model \
+  --output benchmarks/lora_distill/artifacts/evaluation.json
+```
+
+Training first fits the required hard-label-only baseline with the identical
+14-by-4096 architecture. It then sweeps `T={1,2,4}` and `alpha={0.25,0.5}` using
+hard-label cross entropy plus temperature-scaled KL divergence. Selection is
+by validation teacher agreement, with validation ground-truth accuracy as the
+tie-breaker. Test metrics are calculated only after selection. Float weights,
+int8 export, scale, confusion matrices, macro/weighted F1, visibility fraction,
+and float-to-int8 prediction changes are retained in local artifacts.
+
+## Kernel and parity
+
+Build normally, then load the exported model in either SOCKMAP or legacy XDP:
+
+```bash
+make
+sudo env SK_ROUTER_MODE=distill \
+  XSR_DISTILL_MODEL=$PWD/benchmarks/lora_distill/artifacts/model/distilled_int8.xsrf \
+  ./sk_router
+```
+
+The model is 57,344 int8 weights (56 KiB) plus 56 bytes of bias and small map
+metadata. Each trigram performs one array lookup and 14 fixed, verifier-safe
+adds. The strict-greater argmax selects the first class on ties, exactly like
+NumPy. The 14-way result maps `computer science` to the existing coding route,
+`math` to math, and the other 12 intents to fallback.
+
+`kernel_parity.py` sends a fixed prompt manifest sequentially, reads the BPF
+diagnostic map, and compares all 14 scores, byte counts, and predictions against
+the Python integer reference. It must report 100% before performance results are
+accepted:
+
+```bash
+sudo .venv-distill/bin/python benchmarks/lora_distill/kernel_parity.py \
+  --model benchmarks/lora_distill/artifacts/model/distilled_int8.xsrf \
+  --prompts benchmarks/lora_distill/artifacts/manifest.jsonl
+```
+
+## Performance methodology
+
+Reuse `benchmarks/routing_wrk` and its existing prompt file, mock backends,
+duration, trials, fixed-rate/saturation validation, and metadata capture. Run:
+
+1. warmed VSR with the fixed mmBERT teacher;
+2. `userspace_student.py` with the same `.xsrf` file and prompt bound;
+3. XSR with that `.xsrf` loaded into BPF maps before timing.
+
+Use the highest common valid concurrency for the main comparison and retain all
+failed/saturated trials. Record requests/second and average latency for each
+path. `summarize.py` renders the requested correctness table and, when given a
+three-path JSON summary, separately computes compression, kernel-placement, and
+overall speedups. `prepare_speed_bench.py`, `teacher_targets.py`, and
+`evaluate_agreement.py` provide the optional pinned SPEED-Bench test. It reports
+agreement only; those pseudo-labeled prompts are never presented as
+ground-truth intent accuracy.
+
+Generated manifests, model arrays, raw logits, caches, environments, and scratch
+results are ignored. Only source, compact provenance, and intentional result
+summaries should be committed.

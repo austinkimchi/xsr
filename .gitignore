@@ -9,6 +9,9 @@ tests/
 **/.vllm-sr/
 **/models/
 *.jsonl
+*.npz
+*.xsrf
+benchmarks/lora_distill/artifacts/
 
 # Build output
 xdp_router
