@@ -163,6 +163,20 @@ static __always_inline int content_hex_value(unsigned char c) {
   return -1;
 }
 
+static __always_inline void
+score_content_codepoint(struct xdp_classifier_state *classifier, __u16 value) {
+  if (value <= 0x7f) {
+    xdp_classifier_score_char(classifier, value);
+  } else if (value <= 0x7ff) {
+    xdp_classifier_score_char(classifier, 0xc0 | (value >> 6));
+    xdp_classifier_score_char(classifier, 0x80 | (value & 0x3f));
+  } else {
+    xdp_classifier_score_char(classifier, 0xe0 | (value >> 12));
+    xdp_classifier_score_char(classifier, 0x80 | ((value >> 6) & 0x3f));
+    xdp_classifier_score_char(classifier, 0x80 | (value & 0x3f));
+  }
+}
+
 static long scan_headers_callback(__u32 i, void *data) {
   struct sk_classify_ctx *ctx = data;
   struct sk_http_flow_state *flow = ctx->flow;
@@ -232,9 +246,7 @@ static long scan_content_callback(__u32 i, void *data) {
       flow->unicode_value = (flow->unicode_value << 4) | hex;
       flow->unicode_remaining--;
       if (!flow->unicode_remaining) {
-        xdp_classifier_score_char(&flow->classifier, flow->unicode_value <= 0x7f
-                                                         ? flow->unicode_value
-                                                         : ' ');
+        score_content_codepoint(&flow->classifier, flow->unicode_value);
         flow->unicode_value = 0;
       }
       return 0;
@@ -246,6 +258,16 @@ static long scan_content_callback(__u32 i, void *data) {
         flow->unicode_value = 0;
       } else if (c == '"' || c == '\\' || c == '/') {
         xdp_classifier_score_char(&flow->classifier, c);
+      } else if (c == 'b') {
+        xdp_classifier_score_char(&flow->classifier, '\b');
+      } else if (c == 'f') {
+        xdp_classifier_score_char(&flow->classifier, '\f');
+      } else if (c == 'n') {
+        xdp_classifier_score_char(&flow->classifier, '\n');
+      } else if (c == 'r') {
+        xdp_classifier_score_char(&flow->classifier, '\r');
+      } else if (c == 't') {
+        xdp_classifier_score_char(&flow->classifier, '\t');
       } else {
         xdp_classifier_score_char(&flow->classifier, ' ');
       }

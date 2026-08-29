@@ -4,10 +4,11 @@
 from __future__ import annotations
 
 import argparse
+import http.client
 import json
 import struct
 import subprocess
-import urllib.request
+import urllib.parse
 from pathlib import Path
 
 from core import integer_scores, predict, read_jsonl, read_kernel_model
@@ -43,21 +44,30 @@ def main() -> None:
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
     model, map_id = read_kernel_model(args.model), resolve_map_id(args.map_id)
+    parsed = urllib.parse.urlsplit(args.url)
+    connection = http.client.HTTPConnection(parsed.hostname, parsed.port or 80, timeout=30)
     checked = 0
-    for row in read_jsonl(args.prompts):
-        prompt = row["prompt"]
-        expected_scores = integer_scores(prompt, model.weights, model.bias).astype(int).tolist()
-        body = json.dumps({"model": "MoM", "messages": [{"role": "user", "content": prompt}]}, ensure_ascii=False).encode()
-        request = urllib.request.Request(args.url, body, {"Content-Type": "application/json"})
-        with urllib.request.urlopen(request, timeout=30) as response:
+    try:
+        for row in read_jsonl(args.prompts):
+            prompt = row["prompt"]
+            expected_scores = integer_scores(prompt, model.weights, model.bias).astype(int).tolist()
+            body = json.dumps({"model": "MoM", "messages": [{"role": "user", "content": prompt}]}, ensure_ascii=False).encode()
+            connection.request("POST", parsed.path or "/", body, {
+                "Content-Type": "application/json", "Connection": "keep-alive"
+            })
+            response = connection.getresponse()
             response.read()
-        scores, intent, bytes_seen = debug_value(map_id)
-        if scores != expected_scores or intent != predict(expected_scores):
-            raise SystemExit(f"parity failure at prompt {checked}: intent={intent}, expected={predict(expected_scores)}")
-        expected_bytes = min(len(prompt.encode("utf-8")), 16_384)
-        if bytes_seen != expected_bytes:
-            raise SystemExit(f"byte-count parity failure at prompt {checked}: {bytes_seen} != {expected_bytes}")
-        checked += 1
+            if response.status >= 400:
+                raise SystemExit(f"router returned HTTP {response.status} at prompt {checked}")
+            scores, intent, bytes_seen = debug_value(map_id)
+            if scores != expected_scores or intent != predict(expected_scores):
+                raise SystemExit(f"parity failure at prompt {checked}: intent={intent}, expected={predict(expected_scores)}")
+            expected_bytes = min(len(prompt.encode("utf-8")), 16_384)
+            if bytes_seen != expected_bytes:
+                raise SystemExit(f"byte-count parity failure at prompt {checked}: {bytes_seen} != {expected_bytes}")
+            checked += 1
+    finally:
+        connection.close()
     result = {"checked": checked, "agreement": 1.0, "score_parity": True, "byte_count_parity": True}
     if args.output:
         args.output.parent.mkdir(parents=True, exist_ok=True)

@@ -28,6 +28,7 @@
 #include "bpf/xdp_bm25_policy.generated.h"
 #endif
 #include "bpf/xdp_signals.bpf.h"
+#include "distill_model_loader.h"
 
 #define XDP_MODEL_CODING 1
 #define XDP_MODEL_MATH 2
@@ -232,6 +233,10 @@ int main(void) {
 
   if (populate_keyword_policy(obj) != 0) {
     perror("populate_keyword_policy");
+    return 1;
+  }
+  if (populate_distill_model(obj, getenv("XSR_DISTILL_MODEL")) != 0) {
+    perror("populate_distill_model");
     return 1;
   }
   if (populate_decision_rules(obj) != 0) {

@@ -35,6 +35,7 @@
 #include "bpf/xdp_bm25_policy.generated.h"
 #endif
 #include "bpf/xdp_signals.bpf.h"
+#include "distill_model_loader.h"
 #include "xdp_router.h"
 
 #define BPF_OBJECT_FILE "sk_router.bpf.o"
@@ -76,6 +77,17 @@ struct sk_route_entry {
 };
 
 static volatile sig_atomic_t running = 1;
+
+static int frontend_port(void) {
+  const char *value = getenv("XSR_FRONTEND_PORT");
+  char *end = NULL;
+  long port;
+
+  if (!value || !*value)
+    return FRONTEND_PORT;
+  port = strtol(value, &end, 10);
+  return end && !*end && port > 0 && port <= 65535 ? (int)port : -1;
+}
 
 struct xdp_classifier_runtime {
   struct bpf_object *obj;
@@ -146,15 +158,20 @@ static int connect_backend(int port) {
 static int create_listener(void) {
   int fd = socket(AF_INET, SOCK_STREAM, 0);
   struct sockaddr_in addr;
+  int port = frontend_port();
 
-  if (fd < 0)
+  if (fd < 0 || port < 0) {
+    if (fd >= 0)
+      close(fd);
+    errno = EINVAL;
     return -1;
+  }
 
   set_reuse_and_nodelay(fd);
   memset(&addr, 0, sizeof(addr));
   addr.sin_family = AF_INET;
   addr.sin_addr.s_addr = htonl(INADDR_ANY);
-  addr.sin_port = htons(FRONTEND_PORT);
+  addr.sin_port = htons(port);
 
   if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) != 0 ||
       listen(fd, 1024) != 0) {
@@ -329,6 +346,10 @@ static int start_xdp_classifier(struct xdp_classifier_runtime *runtime) {
 
   if (populate_keyword_policy(runtime->obj) != 0) {
     perror("populate_keyword_policy");
+    return -1;
+  }
+  if (populate_distill_model(runtime->obj, getenv("XSR_DISTILL_MODEL")) != 0) {
+    perror("populate_distill_model");
     return -1;
   }
 
@@ -642,7 +663,7 @@ static int run_proxy_router(void) {
   }
 
   printf("XDP-classified routing proxy listening on 0.0.0.0:%d\n",
-         FRONTEND_PORT);
+         frontend_port());
   printf("routes: coding=%d math=%d others=%d qa=%d writing=%d\n",
          BACKEND_CODING_PORT, BACKEND_MATH_PORT, BACKEND_OTHERS_PORT,
          BACKEND_QA_PORT, BACKEND_WRITING_PORT);
@@ -873,6 +894,10 @@ static int run_sockmap_router(void) {
     perror("populate_keyword_policy");
     return 1;
   }
+  if (populate_distill_model(obj, getenv("XSR_DISTILL_MODEL")) != 0) {
+    perror("populate_distill_model");
+    return 1;
+  }
 
   if (bpf_prog_attach(bpf_program__fd(parser), sock_map_fd,
                       BPF_SK_SKB_STREAM_PARSER, 0) != 0) {
@@ -892,7 +917,7 @@ static int run_sockmap_router(void) {
     return 1;
   }
 
-  printf("SK_SKB router listening on 0.0.0.0:%d\n", FRONTEND_PORT);
+  printf("SK_SKB router listening on 0.0.0.0:%d\n", frontend_port());
   printf("routes: coding=%d math=%d others=%d qa=%d writing=%d\n",
          BACKEND_CODING_PORT, BACKEND_MATH_PORT, BACKEND_OTHERS_PORT,
          BACKEND_QA_PORT, BACKEND_WRITING_PORT);
@@ -946,8 +971,13 @@ int main(void) {
   mode = getenv("SK_ROUTER_MODE");
   if (mode && strcmp(mode, "proxy") == 0)
     return run_proxy_router();
-  if (mode && strcmp(mode, "sockmap") != 0) {
-    fprintf(stderr, "unknown SK_ROUTER_MODE '%s'; use sockmap or proxy\n",
+  if (mode && strcmp(mode, "distill") == 0 &&
+      (!getenv("XSR_DISTILL_MODEL") || !*getenv("XSR_DISTILL_MODEL"))) {
+    fprintf(stderr, "distill mode requires XSR_DISTILL_MODEL\n");
+    return 1;
+  }
+  if (mode && strcmp(mode, "sockmap") != 0 && strcmp(mode, "distill") != 0) {
+    fprintf(stderr, "unknown SK_ROUTER_MODE '%s'; use sockmap, distill, or proxy\n",
             mode);
     return 1;
   }

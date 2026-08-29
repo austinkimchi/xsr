@@ -206,6 +206,20 @@ content_emit_decoded(struct content_scan_ctx *ctx, unsigned char c) {
   ctx->length = ctx->state->content_length;
 }
 
+static __always_inline void
+content_emit_codepoint(struct content_scan_ctx *ctx, __u16 value) {
+  if (value <= 0x7f) {
+    content_emit_decoded(ctx, value);
+  } else if (value <= 0x7ff) {
+    content_emit_decoded(ctx, 0xc0 | (value >> 6));
+    content_emit_decoded(ctx, 0x80 | (value & 0x3f));
+  } else {
+    content_emit_decoded(ctx, 0xe0 | (value >> 12));
+    content_emit_decoded(ctx, 0x80 | ((value >> 6) & 0x3f));
+    content_emit_decoded(ctx, 0x80 | (value & 0x3f));
+  }
+}
+
 /* This callback is used only by the tail-called escape decoder. */
 static long decode_content_callback(__u32 i, void *data) {
   struct content_scan_ctx *ctx = data;
@@ -230,10 +244,7 @@ static long decode_content_callback(__u32 i, void *data) {
     state->unicode_value = (state->unicode_value << 4) | hex;
     state->unicode_remaining--;
     if (!state->unicode_remaining) {
-      if (state->unicode_value <= 0x7f)
-        content_emit_decoded(ctx, state->unicode_value);
-      else
-        content_emit_decoded(ctx, ' ');
+      content_emit_codepoint(ctx, state->unicode_value);
       state->unicode_value = 0;
     }
     return 0;
@@ -246,8 +257,17 @@ static long decode_content_callback(__u32 i, void *data) {
       state->unicode_value = 0;
     } else if (c == '"' || c == '\\' || c == '/') {
       content_emit_decoded(ctx, c);
+    } else if (c == 'b') {
+      content_emit_decoded(ctx, '\b');
+    } else if (c == 'f') {
+      content_emit_decoded(ctx, '\f');
+    } else if (c == 'n') {
+      content_emit_decoded(ctx, '\n');
+    } else if (c == 'r') {
+      content_emit_decoded(ctx, '\r');
+    } else if (c == 't') {
+      content_emit_decoded(ctx, '\t');
     } else {
-      /* JSON's escaped controls delimit words for this classifier. */
       content_emit_decoded(ctx, ' ');
     }
     return 0;

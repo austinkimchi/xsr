@@ -166,19 +166,19 @@ install-wrk:
 install-wrk2:
 	./benchmarks/routing_wrk/install_wrk2.sh
 
-xdp_router: xdp_router.c xdp_router.h bpf/xdp_classifier.bpf.h bpf/xdp_ngram_classifier.bpf.h bpf/xdp_bm25_classifier.bpf.h bpf/xdp_keyword_policy_loader.h bpf/xdp_keyword_modules.generated.h
-	$(CC) $(USER_CFLAGS) $< -o $@ $(LIBBPF_FLAGS)
+xdp_router: xdp_router.c distill_model_loader.c distill_model_loader.h xdp_router.h bpf/xdp_classifier.bpf.h bpf/xdp_distill_classifier.bpf.h bpf/xdp_ngram_classifier.bpf.h bpf/xdp_bm25_classifier.bpf.h bpf/xdp_keyword_policy_loader.h bpf/xdp_keyword_modules.generated.h
+	$(CC) $(USER_CFLAGS) xdp_router.c distill_model_loader.c -o $@ $(LIBBPF_FLAGS)
 
-sk_router: sk_router.c xdp_router.h bpf/xdp_decision.bpf.h bpf/xdp_signals.bpf.h bpf/xdp_classifier.bpf.h bpf/xdp_ngram_classifier.bpf.h bpf/xdp_bm25_classifier.bpf.h bpf/xdp_keyword_policy_loader.h bpf/xdp_keyword_modules.generated.h
-	$(CC) $(USER_CFLAGS) $< -o $@ $(LIBBPF_FLAGS) -lpthread
+sk_router: sk_router.c distill_model_loader.c distill_model_loader.h xdp_router.h bpf/xdp_decision.bpf.h bpf/xdp_signals.bpf.h bpf/xdp_classifier.bpf.h bpf/xdp_distill_classifier.bpf.h bpf/xdp_ngram_classifier.bpf.h bpf/xdp_bm25_classifier.bpf.h bpf/xdp_keyword_policy_loader.h bpf/xdp_keyword_modules.generated.h
+	$(CC) $(USER_CFLAGS) sk_router.c distill_model_loader.c -o $@ $(LIBBPF_FLAGS) -lpthread
 
 benchmarks/mock_backend: benchmarks/mock_backend.c
 	$(CC) -O3 $< -o $@ -lpthread
 
-xdp_router.bpf.o: bpf/xdp_router.bpf.c xdp_router.h bpf/xdp_http_parser.bpf.h bpf/xdp_classifier.bpf.h bpf/xdp_ngram_classifier.bpf.h bpf/xdp_bm25_classifier.bpf.h bpf/xdp_keyword_modules.generated.h
+xdp_router.bpf.o: bpf/xdp_router.bpf.c xdp_router.h bpf/xdp_http_parser.bpf.h bpf/xdp_classifier.bpf.h bpf/xdp_distill_classifier.bpf.h bpf/xdp_ngram_classifier.bpf.h bpf/xdp_bm25_classifier.bpf.h bpf/xdp_keyword_modules.generated.h
 	$(BPF_CLANG) $(BPF_CFLAGS) -c $< -o $@
 
-sk_router.bpf.o: bpf/sk_router.bpf.c xdp_router.h bpf/xdp_decision.bpf.h bpf/xdp_signals.bpf.h bpf/xdp_classifier.bpf.h bpf/xdp_ngram_classifier.bpf.h bpf/xdp_bm25_classifier.bpf.h bpf/xdp_keyword_modules.generated.h
+sk_router.bpf.o: bpf/sk_router.bpf.c xdp_router.h bpf/xdp_decision.bpf.h bpf/xdp_signals.bpf.h bpf/xdp_classifier.bpf.h bpf/xdp_distill_classifier.bpf.h bpf/xdp_ngram_classifier.bpf.h bpf/xdp_bm25_classifier.bpf.h bpf/xdp_keyword_modules.generated.h
 	$(BPF_CLANG) $(BPF_CFLAGS) -c $< -o $@
 
 clean:

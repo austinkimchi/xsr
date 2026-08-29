@@ -74,6 +74,11 @@ mkdir -p benchmarks/lora_distill/artifacts
   --output benchmarks/lora_distill/artifacts/evaluation.json
 ```
 
+The default retains the full official test split. Resource-constrained pilot
+runs may add `--test-per-class N`; this performs a seeded stratified sample of
+the untouched official test split and records every selected source index in
+the manifest. Such a pilot must be labeled as sampled, not as a full-test run.
+
 Training first fits the required hard-label-only baseline with the identical
 14-by-4096 architecture. It then sweeps `T={1,2,4}` and `alpha={0.25,0.5}` using
 hard-label cross entropy plus temperature-scaled KL divergence. Selection is
@@ -92,6 +97,10 @@ sudo env SK_ROUTER_MODE=distill \
   XSR_DISTILL_MODEL=$PWD/benchmarks/lora_distill/artifacts/model/distilled_int8.xsrf \
   ./sk_router
 ```
+
+`XSR_FRONTEND_PORT` can select a separate SOCKMAP test port when another XSR
+instance already owns the default `18081` (the legacy XDP path remains fixed to
+its benchmark port).
 
 The model is 57,344 int8 weights (56 KiB) plus 56 bytes of bias and small map
 metadata. Each trigram performs one array lookup and 14 fixed, verifier-safe
@@ -127,6 +136,12 @@ overall speedups. `prepare_speed_bench.py`, `teacher_targets.py`, and
 `evaluate_agreement.py` provide the optional pinned SPEED-Bench test. It reports
 agreement only; those pseudo-labeled prompts are never presented as
 ground-truth intent accuracy.
+
+Use `export_benchmark_prompts.py` to place the selected manifest split at
+`benchmarks/dataset_prompts.jsonl`. Start `userspace_student.py --proxy` for the
+middle path; it forwards to the same mock backends as XSR after running the
+exported integer model. This keeps request bodies, weights, bounds, hashing,
+integer scores, and backend behavior identical across the two student paths.
 
 Generated manifests, model arrays, raw logits, caches, environments, and scratch
 results are ignored. Only source, compact provenance, and intentional result

@@ -8,8 +8,10 @@
 #if XDP_KEYWORD_ENABLE_BM25
 #include "xdp_bm25_classifier.bpf.h"
 #endif
+#include "xdp_distill_classifier.bpf.h"
 
 struct xdp_classifier_state {
+  struct xdp_distill_state distill;
 #if XDP_KEYWORD_ENABLE_NGRAM
   struct xdp_jaccard_state jaccard;
 #endif
@@ -19,6 +21,7 @@ struct xdp_classifier_state {
 };
 
 static __always_inline void xdp_classifier_init(struct xdp_classifier_state *state) {
+  xdp_distill_init(&state->distill);
 #if XDP_KEYWORD_ENABLE_NGRAM
   xdp_jaccard_init(&state->jaccard);
 #endif
@@ -29,6 +32,7 @@ static __always_inline void xdp_classifier_init(struct xdp_classifier_state *sta
 
 static __always_inline void xdp_classifier_score_char(struct xdp_classifier_state *state,
                                                        unsigned char c) {
+  xdp_distill_score_char(&state->distill, c);
 #if XDP_KEYWORD_ENABLE_NGRAM
   xdp_jaccard_score_char(&state->jaccard, c);
 #endif
@@ -48,6 +52,10 @@ static __always_inline void xdp_classifier_finish(struct xdp_classifier_state *s
 
 static __always_inline __u32 xdp_classifier_route(struct xdp_classifier_state *state) {
   __u32 route = XDP_ROUTE_GENERAL, priority = 0;
+  __u8 distill_enabled = 0;
+  __u32 distill_route = xdp_distill_route(&state->distill, &distill_enabled);
+  if (distill_enabled)
+    return distill_route;
 #if XDP_KEYWORD_ENABLE_NGRAM
   route = xdp_jaccard_route_priority(&state->jaccard, &priority);
 #endif

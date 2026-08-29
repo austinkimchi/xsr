@@ -62,6 +62,10 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--seed", type=int, default=20260829)
+    parser.add_argument(
+        "--test-per-class", type=int,
+        help="deterministically sample this many MMLU-Pro official-test rows per class",
+    )
     args = parser.parse_args()
     rng = random.Random(args.seed)
     manifest, seen = [], set()
@@ -86,6 +90,22 @@ def main() -> None:
                     "student_split": source_to_student_split(source, source_split, rng),
                     "normalized_sha256": key,
                 })
+    if args.test_per_class is not None:
+        if args.test_per_class <= 0:
+            raise ValueError("--test-per-class must be positive")
+        sample_rng = random.Random(args.seed ^ 0x585352)
+        keep_ids = set()
+        for label in LABEL_TO_ID:
+            candidates = [
+                index for index, row in enumerate(manifest)
+                if row["source_dataset"] == MMLU_ID and row["student_split"] == "test"
+                and row["ground_truth_class"] == label
+            ]
+            keep_ids.update(sample_rng.sample(candidates, min(args.test_per_class, len(candidates))))
+        manifest = [
+            row for index, row in enumerate(manifest)
+            if row["source_dataset"] != MMLU_ID or row["student_split"] != "test" or index in keep_ids
+        ]
     write_jsonl(args.output, manifest)
     counts = Counter(row["student_split"] for row in manifest)
     print(f"wrote {len(manifest)} unique prompts to {args.output}: {dict(counts)}")

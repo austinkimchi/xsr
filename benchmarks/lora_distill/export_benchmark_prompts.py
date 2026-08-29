@@ -1,0 +1,28 @@
+#!/usr/bin/env python3
+"""Export one manifest split in the existing routing_wrk body format."""
+
+from __future__ import annotations
+import argparse
+from pathlib import Path
+from core import read_jsonl, write_jsonl
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--manifest", type=Path, required=True)
+    parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--split", default="test")
+    parser.add_argument("--limit", type=int)
+    args = parser.parse_args()
+    rows = [row for row in read_jsonl(args.manifest) if row["student_split"] == args.split]
+    if args.limit is not None:
+        rows = rows[: args.limit]
+    write_jsonl(args.output, (
+        {"model": "MoM", "messages": [{"role": "user", "content": row["prompt"]}]}
+        for row in rows
+    ))
+    print(f"wrote {len(rows)} benchmark request bodies to {args.output}")
+
+
+if __name__ == "__main__":
+    main()

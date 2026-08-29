@@ -8,7 +8,7 @@ import hashlib
 import json
 from pathlib import Path
 
-from core import LABELS, read_jsonl, stable_softmax, write_jsonl
+from core import LABELS, read_jsonl, stable_softmax
 
 BASE_ID = "llm-semantic-router/mmbert-32k-yarn"
 BASE_REVISION = "72a23a6640489471eb4ff7ad3ec5bc80af8a27de"
@@ -49,6 +49,9 @@ def main() -> None:
     parser.add_argument("--provenance", type=Path, required=True)
     parser.add_argument("--batch-size", type=int, default=8)
     parser.add_argument("--device", default="cuda")
+    parser.add_argument("--limit", type=int, help="smoke-test only; omit for the complete manifest")
+    parser.add_argument("--resume", action="store_true", help="append targets missing from an existing output")
+    parser.add_argument("--no-length-sort", action="store_true", help="disable padding-efficient length bucketing")
     args = parser.parse_args()
     provenance = verify_metadata()
     args.provenance.parent.mkdir(parents=True, exist_ok=True)
@@ -66,8 +69,23 @@ def main() -> None:
     device = args.device if args.device != "cuda" or torch.cuda.is_available() else "cpu"
     model.to(device).eval()
     rows = list(read_jsonl(args.manifest))
-    output = []
-    with torch.inference_mode():
+    manifest_keys = {row["normalized_sha256"] for row in rows}
+    if args.limit is not None:
+        rows = rows[: args.limit]
+    completed = set()
+    if args.resume and args.output.exists():
+        completed = {row["normalized_sha256"] for row in read_jsonl(args.output)}
+        if not completed <= manifest_keys:
+            raise RuntimeError("resume output contains targets outside this manifest")
+    rows = [row for row in rows if row["normalized_sha256"] not in completed]
+    if not args.no_length_sort:
+        rows.sort(key=lambda row: len(tokenizer(
+            row["prompt"], add_special_tokens=True, truncation=True, max_length=32_768
+        )["input_ids"]))
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    mode = "a" if args.resume else "w"
+    processed = len(completed)
+    with args.output.open(mode, encoding="utf-8") as stream, torch.inference_mode():
         for start in range(0, len(rows), args.batch_size):
             batch = rows[start : start + args.batch_size]
             encoded = tokenizer(
@@ -79,14 +97,16 @@ def main() -> None:
                 raise RuntimeError(f"teacher emitted {logits.shape[1]} logits, expected 14")
             for row, values in zip(batch, logits):
                 probabilities = stable_softmax(values)
-                output.append({
+                item = {
                     "normalized_sha256": row["normalized_sha256"],
                     "teacher_logits": values.tolist(),
                     "teacher_probability": probabilities.tolist(),
                     "teacher_top1_intent": LABELS[int(values.argmax())],
-                })
-            print(f"teacher targets: {min(start + args.batch_size, len(rows))}/{len(rows)}")
-    write_jsonl(args.output, output)
+                }
+                stream.write(json.dumps(item, separators=(",", ":")) + "\n")
+            stream.flush()
+            done = processed + min(start + args.batch_size, len(rows))
+            print(f"teacher targets: {done}/{processed + len(rows)}")
 
 
 if __name__ == "__main__":
