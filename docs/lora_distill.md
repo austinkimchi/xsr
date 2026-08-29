@@ -187,3 +187,33 @@ classes uniformly, recycling rows within a class when necessary, without adding
 prompts to the dataset. For distilled training, class weights apply only to the
 hard-label cross-entropy term; balanced sampling naturally rebalances both the
 hard-label and teacher-target observations.
+
+Experiment C keeps the fixed 343-row pilot holdout and 72-row validation set
+unchanged, then deterministically samples unused MMLU-Pro rows to construct 350
+training examples per class. The resulting 4,900-row training set is 8.5 times
+the original size. Because some official MMLU-Pro test rows are explicitly
+remapped to student training, the fixed 343-row result is a seeded holdout
+experiment and must not be described as evaluation on the full official test
+split.
+
+```bash
+.venv-distill/bin/python benchmarks/lora_distill/prepare_expanded_training.py \
+  --full-manifest benchmarks/lora_distill/artifacts/manifest.jsonl \
+  --pilot-manifest benchmarks/lora_distill/artifacts/manifest_pilot.jsonl \
+  --output benchmarks/lora_distill/artifacts/manifest_expanded.jsonl \
+  --summary results/lora-distill-expanded/manifest_summary.json \
+  --train-per-class 350
+
+.venv-distill/bin/python benchmarks/lora_distill/teacher_targets.py \
+  --manifest benchmarks/lora_distill/artifacts/manifest_expanded.jsonl \
+  --output benchmarks/lora_distill/artifacts/teacher_targets_expanded.jsonl \
+  --provenance benchmarks/lora_distill/artifacts/teacher_provenance_expanded.json \
+  --reuse-targets benchmarks/lora_distill/artifacts/teacher_targets_pilot.jsonl \
+  --reuse-provenance benchmarks/lora_distill/artifacts/teacher_provenance_pilot.json
+
+.venv-distill/bin/python benchmarks/lora_distill/expanded_data_experiment.py \
+  --manifest benchmarks/lora_distill/artifacts/manifest_expanded.jsonl \
+  --teacher-targets benchmarks/lora_distill/artifacts/teacher_targets_expanded.jsonl \
+  --output-dir benchmarks/lora_distill/artifacts/model_expanded \
+  --report results/lora-distill-expanded/summary.json
+```
