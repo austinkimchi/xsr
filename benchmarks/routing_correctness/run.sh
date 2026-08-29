@@ -46,7 +46,7 @@ for METHOD in "${METHODS[@]}"; do
   make KEYWORD_POLICY="$CONFIG" PYTHON="$PYTHON_BIN" policy
   make KEYWORD_POLICY="$CONFIG" dev
   if [[ ",${BENCHMARK_MODES}," == *,xdp,* ]]; then
-    make legacy
+    make KEYWORD_POLICY="$CONFIG" PYTHON="$PYTHON_BIN" legacy
   fi
 
   echo ""

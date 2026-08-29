@@ -8,16 +8,18 @@ from pathlib import Path
 
 from generate_bm25_policy_header import emit as emit_bm25, parse as parse_bm25
 from generate_jaccard_policy_header import emit as emit_ngram, parse as parse_ngram
-from generate_keyword_header import keyword_signals, load_policy
+from generate_keyword_header import decision_keyword_routes, keyword_signals, load_policy
 
 
 SUPPORTED = {"ngram", "bm25"}
 
 
 def methods(path: Path) -> set[str]:
+    policy = load_policy(path)
+    signals = keyword_signals(policy)
     selected = {
         str(signal.get("method", "")).lower()
-        for signal in keyword_signals(load_policy(path))
+        for signal in signals
         if isinstance(signal, dict)
     }
     unknown = selected - SUPPORTED
@@ -25,6 +27,21 @@ def methods(path: Path) -> set[str]:
         raise ValueError(f"eBPF keyword modules do not support: {', '.join(sorted(unknown))}")
     if not selected:
         raise ValueError("policy must select at least one keyword method")
+
+    _, decision_priorities = decision_keyword_routes(policy)
+    priority_methods: dict[int, str] = {}
+    for signal in signals:
+        if not isinstance(signal, dict):
+            continue
+        method = str(signal.get("method", "")).lower()
+        name = str(signal.get("name", ""))
+        priority = decision_priorities.get(name, int(signal.get("priority", 0)))
+        previous_method = priority_methods.setdefault(priority, method)
+        if previous_method != method:
+            raise ValueError(
+                f"priority {priority} is shared by {previous_method} and {method} rules; "
+                "mixed keyword methods require distinct priorities"
+            )
     return selected
 
 
