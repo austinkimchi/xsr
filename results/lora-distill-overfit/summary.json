@@ -1,0 +1,51 @@
+{
+  "experiment": "A: balanced-subset overfit",
+  "seed": 20260829,
+  "manifest_sha256": "7e9689744892c7f9145da902fc90da2b39c92e610e92e25b544d7be8bc9c2617",
+  "representation": "14-class linear student over 4096 FNV-1a hashed normalized byte-trigram buckets",
+  "examples_per_class": 16,
+  "subset_size": 224,
+  "train_and_evaluation_subset_identical": true,
+  "class_weighting": false,
+  "balanced_minibatch_sampling": false,
+  "optimizer": {
+    "name": "AdamW",
+    "learning_rate": 0.02,
+    "weight_decay": 0.0001,
+    "batch_size": 128,
+    "epochs": 300
+  },
+  "first_99_percent_epoch": 6,
+  "first_100_percent_epoch": 10,
+  "final_training_accuracy": 1.0,
+  "all_classes_memorized": true,
+  "prediction_distribution": {
+    "biology": 16,
+    "business": 16,
+    "chemistry": 16,
+    "computer science": 16,
+    "economics": 16,
+    "engineering": 16,
+    "health": 16,
+    "history": 16,
+    "law": 16,
+    "math": 16,
+    "other": 16,
+    "philosophy": 16,
+    "physics": 16,
+    "psychology": 16
+  },
+  "confusion_matrix": "16 on every diagonal cell; 0 on every off-diagonal cell",
+  "loss": {
+    "epoch_1": 2.9085976396,
+    "epoch_2": 1.6711783409,
+    "epoch_5": 0.5870166762,
+    "epoch_10": 0.1322598745,
+    "epoch_20": 0.0256295875,
+    "epoch_50": 0.0072448107,
+    "epoch_100": 0.0032809025,
+    "epoch_200": 0.0013128887,
+    "epoch_300": 0.0007313875
+  },
+  "conclusion": "PASS: the unchanged representation and training implementation can memorize every class; proceed to Experiment B."
+}

@@ -146,3 +146,24 @@ integer scores, and backend behavior identical across the two student paths.
 Generated manifests, model arrays, raw logits, caches, environments, and scratch
 results are ignored. Only source, compact provenance, and intentional result
 summaries should be committed.
+
+## Representation-capacity diagnostic ladder
+
+Before changing the student representation, run Experiment A against a small
+balanced subset of the existing training split. This retains the 14-by-4096
+linear model, byte normalization, trigrams, FNV hashing, optimizer, and ordinary
+shuffled minibatches. It applies neither class weights nor balanced minibatch
+sampling. Training and evaluation deliberately use the exact same rows:
+
+```bash
+.venv-distill/bin/python benchmarks/lora_distill/overfit_balanced.py \
+  --manifest benchmarks/lora_distill/artifacts/manifest_pilot.jsonl \
+  --examples-per-class 16 \
+  --output benchmarks/lora_distill/artifacts/overfit_balanced.json
+```
+
+The diagnostic must reach at least 99% training accuracy and memorize every
+class before proceeding to rebalancing, more distillation data, wider hashes,
+richer n-grams, or a nonlinear student. A failure stops that experiment ladder
+and triggers investigation of feature generation, collisions, label mapping,
+gradients, and optimizer behavior.

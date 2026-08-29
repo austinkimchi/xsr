@@ -5,6 +5,7 @@ import numpy as np
 from core import (CLASS_COUNT, FEATURE_COUNT, PROMPT_BYTE_LIMIT, QuantizedModel,
                   feature_indices, fnv1a_trigram, integer_scores, normalize_bytes,
                   overflow_bound, read_kernel_model, write_kernel_model)
+from overfit_balanced import balanced_subset
 
 
 def test_normalization_is_ascii_only_and_bounded():
@@ -29,3 +30,31 @@ def test_kernel_model_round_trip_and_integer_scores(tmp_path: Path):
     assert np.array_equal(loaded.weights, weights)
     assert integer_scores("ABC", loaded.weights, loaded.bias)[3] == bias[3] + 7
     assert overflow_bound(bias) < np.iinfo(np.int32).max
+
+
+def test_balanced_overfit_subset_is_deterministic_and_train_only():
+    rows = []
+    for label_index, label in enumerate(("biology", "business")):
+        for row_index in range(4):
+            rows.append({
+                "student_split": "validation" if row_index == 3 else "train",
+                "ground_truth_class": label,
+                "prompt": f"{label_index}-{row_index}",
+            })
+    for label in (
+        "chemistry", "computer science", "economics", "engineering", "health",
+        "history", "law", "math", "other", "philosophy", "physics", "psychology",
+    ):
+        rows.extend({
+            "student_split": "train",
+            "ground_truth_class": label,
+            "prompt": f"{label}-{row_index}",
+        } for row_index in range(3))
+
+    first = balanced_subset(rows, per_class=2, seed=7)
+    second = balanced_subset(rows, per_class=2, seed=7)
+    assert first == second
+    assert len(first) == 28
+    assert all(row["student_split"] == "train" for row in first)
+    assert {label: sum(row["ground_truth_class"] == label for row in first)
+            for label in ("biology", "business")} == {"biology": 2, "business": 2}
