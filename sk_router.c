@@ -224,9 +224,12 @@ static int populate_jaccard_policy(struct bpf_object *obj) {
   int keywords_fd =
       bpf_object__find_map_fd_by_name(obj, "xdp_jaccard_keywords");
   int grams_fd = bpf_object__find_map_fd_by_name(obj, "xdp_jaccard_gram_masks");
+  int casefolds_fd =
+      bpf_object__find_map_fd_by_name(obj, "xdp_jaccard_casefolds");
   __u32 key = 0;
 
-  if (config_fd < 0 || rules_fd < 0 || keywords_fd < 0 || grams_fd < 0)
+  if (config_fd < 0 || rules_fd < 0 || keywords_fd < 0 || grams_fd < 0 ||
+      casefolds_fd < 0)
     return -1;
   if (bpf_map_update_elem(config_fd, &key, &xdp_jaccard_generated_config,
                           BPF_ANY) != 0)
@@ -253,12 +256,18 @@ static int populate_jaccard_policy(struct bpf_object *obj) {
         struct xdp_jaccard_gram_vector vector = {};
         bpf_map_lookup_elem(grams_fd, &gram_key, &vector);
         if (key < 8)
-          vector.low |= 1ULL << (key * 5);
+          vector.low |= 1ULL << (key * XDP_JACCARD_INTERSECTION_BITS);
         else
-          vector.high |= 1ULL << ((key - 8) * 5);
+          vector.high |= 1ULL << ((key - 8) * XDP_JACCARD_INTERSECTION_BITS);
         if (bpf_map_update_elem(grams_fd, &gram_key, &vector, BPF_ANY) != 0)
           return -1;
       }
+  for (key = 0; key < XDP_JACCARD_GENERATED_CASEFOLD_COUNT; key++)
+    if (bpf_map_update_elem(casefolds_fd,
+                            &xdp_jaccard_generated_casefolds[key].from,
+                            &xdp_jaccard_generated_casefolds[key].to,
+                            BPF_ANY) != 0)
+      return -1;
   return 0;
 }
 #endif

@@ -56,9 +56,22 @@ client
 
 The checked-in examples are `config/policy_ngram.yaml`,
 `config/policy_bm25.yaml`, and `config/policy_mixed.yaml`. `method: ngram` uses
-the existing ngrammatic-compatible multiset Jaccard matcher; `method: bm25`
-uses BM25. Rules from either module feed the same priority and backend path.
+the ngrammatic-compatible multiset Jaccard matcher, while `method: bm25` uses
+BM25. N-Gram matching operates on Unicode code points, accepts raw UTF-8 and JSON `\uXXXX`
+escapes, and performs both per-word matching and a full-text pass for multi-word
+phrases. Rules from either module feed the same priority and backend path.
 Prompts without a match use the fallback backend.
+
+The kernel implementation is deliberately bounded for verifier safety: at most
+16 keywords across 8 rules, 32 trigrams per keyword or word, and 128 trigrams
+in the full-text phrase pass. A generated Unicode alphanumeric bitmap
+delimits words consistently around Unicode punctuation and symbols.
+Case-insensitive policies support every reverse one-to-one Unicode lowercase
+mapping relevant to their keywords; expanding folds are rejected when the policy is generated.
+Context-sensitive lowercase policies, such as Greek final sigma, are also
+rejected because the bounded kernel matcher folds one code point at a time.
+Inputs outside those bounds still pass through, but only matches completed
+within the bounded domain affect routing.
 
 To change the policy, regenerate the checked-in header from the benchmark
 environment and rebuild:
@@ -116,6 +129,18 @@ external VSR deployment before running the command; the benchmark does not
 restart or rewrite a user-managed VSR container.
 Use `KEYWORD_METHODS=bm25` (or `ngram`) to run one correctness configuration
 after the matching VSR policy is active.
+
+The correctness command runs the combined 9,280-entry routing-equivalence
+corpus by default: SPEED-Bench `qualitative/test` (880) plus the pinned
+RouterArena `default/full` split (8,400). It uses the SOCKMAP path and repeats
+the corpus at concurrencies 1, 4, 8, and 16.
+Examples:
+
+```bash
+sudo make correctness args="--dataset speed-bench"
+sudo make correctness args="--dataset routerarena --routerarena-split sub_10"
+sudo make correctness args="--dataset routerarena --routerarena-split full"
+```
 
 Use `BENCHMARK_PROFILE=paper` for the longer five-trial runs. Docker and a VSR
 deployment are required for the VSR and Envoy comparisons. Add

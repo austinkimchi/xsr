@@ -39,7 +39,7 @@ static __always_inline void xdp_classifier_score_char(struct xdp_classifier_stat
 
 static __always_inline void xdp_classifier_finish(struct xdp_classifier_state *state) {
 #if XDP_KEYWORD_ENABLE_NGRAM
-  xdp_jaccard_finish_word(&state->jaccard);
+  xdp_jaccard_finish(&state->jaccard);
 #endif
 #if XDP_KEYWORD_ENABLE_BM25
   xdp_bm25_finish_word(&state->bm25);

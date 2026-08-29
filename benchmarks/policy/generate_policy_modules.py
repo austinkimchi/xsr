@@ -9,6 +9,7 @@ from pathlib import Path
 from generate_bm25_policy_header import emit as emit_bm25, parse as parse_bm25
 from generate_jaccard_policy_header import emit as emit_ngram, parse as parse_ngram
 from generate_keyword_header import decision_keyword_routes, keyword_signals, load_policy
+from generate_unicode_word_header import emit as emit_unicode_words, word_ranges
 
 
 SUPPORTED = {"ngram", "bm25"}
@@ -71,9 +72,12 @@ def main() -> int:
         selection_header(args.policy, selected)
     )
     if "ngram" in selected:
-        rules, keywords = parse_ngram(args.policy, allow_other_methods=True)
+        rules, keywords, casefolds = parse_ngram(args.policy, allow_other_methods=True)
         (args.output_dir / "xdp_jaccard_policy.generated.h").write_text(
-            emit_ngram(args.policy, rules, keywords)
+            emit_ngram(args.policy, rules, keywords, casefolds)
+        )
+        (args.output_dir / "xdp_unicode_word.generated.h").write_text(
+            emit_unicode_words(word_ranges())
         )
     if "bm25" in selected:
         rules, documents, terms = parse_bm25(args.policy)

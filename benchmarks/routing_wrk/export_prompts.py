@@ -21,6 +21,7 @@ sys.path.insert(0, str(ROOT / "benchmarks"))
 from routing_correctness.benchmark import (
     DATASETS,
     DEFAULT_CACHE_DIR,
+    ROUTERARENA_ROWS,
     ROUTES,
     chat_body,
     load_cases,
@@ -248,6 +249,12 @@ def main() -> None:
     parser.add_argument("--output", type=Path, default=ROOT / "benchmarks" / "dataset_prompts.jsonl")
     parser.add_argument("--config", type=Path, default=ROOT / "config" / "policy_ngram.yaml")
     parser.add_argument("--dataset", choices=sorted(DATASETS), default="speed-bench")
+    parser.add_argument(
+        "--routerarena-split",
+        choices=sorted(ROUTERARENA_ROWS),
+        default="full",
+        help="RouterArena split; ignored for other datasets (default: full).",
+    )
     parser.add_argument("--scan-limit", type=int, default=2000)
     parser.add_argument("--per-route", type=int, default=50)
     parser.add_argument("--cache-dir", type=Path, default=DEFAULT_CACHE_DIR)
@@ -275,6 +282,7 @@ def main() -> None:
         config=args.config,
         dataset=args.dataset,
         per_route=args.per_route,
+        routerarena_split=args.routerarena_split,
         scan_limit=args.scan_limit,
     )
 
