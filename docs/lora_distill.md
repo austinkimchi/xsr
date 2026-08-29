@@ -167,3 +167,23 @@ class before proceeding to rebalancing, more distillation data, wider hashes,
 richer n-grams, or a nonlinear student. A failure stops that experiment ladder
 and triggers investigation of feature generation, collisions, label mapping,
 gradients, and optimizer behavior.
+
+Experiment B holds the pilot manifest, test split, representation, optimizer,
+epoch count, and selected distillation settings fixed. It independently compares
+inverse-frequency class-weighted cross-entropy and uniform-class minibatch draws
+against the existing baseline; the two treatments are never combined:
+
+```bash
+.venv-distill/bin/python benchmarks/lora_distill/rebalance_experiment.py \
+  --manifest benchmarks/lora_distill/artifacts/manifest_pilot.jsonl \
+  --teacher-targets benchmarks/lora_distill/artifacts/teacher_targets_pilot.jsonl \
+  --baseline-model-dir benchmarks/lora_distill/artifacts/model_pilot \
+  --output benchmarks/lora_distill/artifacts/rebalance_experiment.json \
+  --summary-output results/lora-distill-rebalance/summary.json
+```
+
+Balanced sampling makes exactly the original 577 draws per epoch. It samples
+classes uniformly, recycling rows within a class when necessary, without adding
+prompts to the dataset. For distilled training, class weights apply only to the
+hard-label cross-entropy term; balanced sampling naturally rebalances both the
+hard-label and teacher-target observations.
