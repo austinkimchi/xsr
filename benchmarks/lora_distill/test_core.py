@@ -19,6 +19,10 @@ def test_normalization_is_ascii_only_and_bounded():
 def test_fnv_known_value_and_consecutive_trigrams():
     assert fnv1a_trigram(b"abc") == 2315
     assert feature_indices("ABCD").tolist() == [fnv1a_trigram(b"abc"), fnv1a_trigram(b"bcd")]
+    assert fnv1a_trigram(b"abc", 8192) == 2315
+    assert fnv1a_trigram(b"aaa") == 866
+    assert fnv1a_trigram(b"aaa", 8192) == 4962
+    assert feature_indices("AAA", feature_count=8192).tolist() == [4962]
 
 
 def test_kernel_model_round_trip_and_integer_scores(tmp_path: Path):

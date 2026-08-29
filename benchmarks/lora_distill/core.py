@@ -38,18 +38,23 @@ def normalized_prompt_key(prompt: str) -> str:
     return hashlib.sha256(normalize_bytes(prompt, limit=2**31 - 1)).hexdigest()
 
 
-def fnv1a_trigram(trigram: Sequence[int]) -> int:
+def fnv1a_trigram(trigram: Sequence[int], feature_count: int = FEATURE_COUNT) -> int:
+    if feature_count <= 0 or feature_count & (feature_count - 1):
+        raise ValueError("feature count must be a positive power of two")
     value = FNV_OFFSET
     for byte in trigram:
         value ^= int(byte)
         value = (value * FNV_PRIME) & 0xFFFFFFFF
-    return value & (FEATURE_COUNT - 1)
+    return value & (feature_count - 1)
 
 
-def feature_indices(prompt: str, limit: int = PROMPT_BYTE_LIMIT) -> np.ndarray:
+def feature_indices(
+    prompt: str, limit: int = PROMPT_BYTE_LIMIT, feature_count: int = FEATURE_COUNT,
+) -> np.ndarray:
     data = normalize_bytes(prompt, limit)
     return np.fromiter(
-        (fnv1a_trigram(data[i : i + 3]) for i in range(max(0, len(data) - 2))),
+        (fnv1a_trigram(data[i : i + 3], feature_count)
+         for i in range(max(0, len(data) - 2))),
         dtype=np.int64,
     )
 

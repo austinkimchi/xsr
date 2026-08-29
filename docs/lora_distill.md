@@ -217,3 +217,25 @@ split.
   --output-dir benchmarks/lora_distill/artifacts/model_expanded \
   --report results/lora-distill-expanded/summary.json
 ```
+
+Experiment D reuses the Experiment C 4K result and trains only 8K and 16K
+variants. Before training, it verifies the expanded-manifest hash, frozen-target
+hash, ordered 343-row holdout digest list, validation count, and exact 350-row
+per-class training balance. Only the power-of-two mask applied after the same
+32-bit FNV-1a hash changes:
+
+```bash
+.venv-distill/bin/python benchmarks/lora_distill/hash_width_experiment.py \
+  --manifest benchmarks/lora_distill/artifacts/manifest_expanded.jsonl \
+  --teacher-targets benchmarks/lora_distill/artifacts/teacher_targets_expanded.jsonl \
+  --manifest-summary results/lora-distill-expanded/manifest_summary.json \
+  --baseline-report results/lora-distill-expanded/summary.json \
+  --output-dir benchmarks/lora_distill/artifacts/model_hash_width \
+  --report results/lora-distill-hash-width/summary.json
+```
+
+Collision statistics count distinct normalized three-byte values in the 4,900
+training prompts. The reported collision fraction is `(unique trigrams -
+occupied buckets) / unique trigrams`: the fraction of unique trigrams that
+cannot receive their own bucket. Float metrics remain the primary capacity
+comparison; size estimates retain the existing one-global-scale int8 assumption.
