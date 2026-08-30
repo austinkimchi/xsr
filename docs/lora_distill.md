@@ -239,3 +239,25 @@ training prompts. The reported collision fraction is `(unique trigrams -
 occupied buckets) / unique trigrams`: the fraction of unique trigrams that
 cannot receive their own bucket. Float metrics remain the primary capacity
 comparison; size estimates retain the existing one-global-scale int8 assumption.
+
+Experiment E freezes the selected 8K representation and tests exactly one
+nonlinear alternative: an 8K-by-16 embedding bag, ReLU, and 16-by-14 output
+layer. It reuses the Experiment D linear metrics and trains only supervised and
+distilled MLP variants. Dataset hashes, teacher-target hashes, ordered holdout
+digests, class balance, sampling, optimizer, epoch budget, and distillation
+settings are verified before training:
+
+```bash
+.venv-distill/bin/python benchmarks/lora_distill/model_capacity_experiment.py \
+  --manifest benchmarks/lora_distill/artifacts/manifest_expanded.jsonl \
+  --teacher-targets benchmarks/lora_distill/artifacts/teacher_targets_expanded.jsonl \
+  --manifest-summary results/lora-distill-expanded/manifest_summary.json \
+  --hash-width-report results/lora-distill-hash-width/summary.json \
+  --output-dir benchmarks/lora_distill/artifacts/model_capacity \
+  --report results/lora-distill-model-capacity/summary.json
+```
+
+This is a float capacity diagnostic, not a selected kernel export. A nonlinear
+integer export would require the previously described calibrated requantization
+between embedding accumulation and the output MAC, but that additional path is
+not implemented unless the float model first demonstrates a quality benefit.
