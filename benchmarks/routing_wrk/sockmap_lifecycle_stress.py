@@ -52,9 +52,12 @@ def request_once(
     *,
     request_backend_close: bool = False,
     half_close: bool = False,
+    no_response: bool = False,
 ) -> str:
     expected, prompt = ROUTES[sequence % len(ROUTES)]
-    route_sequence = f"lifecycle-{sequence}"
+    route_sequence = (
+        f"no-response-{sequence}" if no_response else f"lifecycle-{sequence}"
+    )
     body = json.dumps(
         {
             "model": "MoM",
@@ -79,6 +82,10 @@ def request_once(
             # the delayed backend response still spans multiple lifecycle ticks.
             time.sleep(0.05)
             client.shutdown(socket.SHUT_WR)
+        if no_response:
+            if client.recv(1):
+                raise AssertionError(f"request {sequence}: expected an empty response")
+            return expected
         parsed = json.loads(receive_http_response(client))
     if parsed.get("backend") != expected:
         raise AssertionError(
@@ -130,6 +137,15 @@ def main() -> None:
         args.status_socket, args.pid, args.cleanup_timeout, expected_reaped
     )
 
+    request_once(
+        args.host, args.port, sequence, half_close=True, no_response=True
+    )
+    sequence += 1
+    expected_reaped += 1
+    after_empty_response = wait_for_quiescence(
+        args.status_socket, args.pid, args.cleanup_timeout, expected_reaped
+    )
+
     request_once(args.host, args.port, sequence, request_backend_close=True)
     sequence += 1
     expected_reaped += 1
@@ -147,7 +163,7 @@ def main() -> None:
     )
     sequential_fds = fd_count(args.pid)
 
-    next_sequence = args.sequential + len(ROUTES) + 1
+    next_sequence = args.sequential + len(ROUTES) + 2
     wave_results: list[dict[str, object]] = []
     for size in args.wave_sizes:
         for repeat in range(args.wave_repeats):
@@ -181,6 +197,7 @@ def main() -> None:
                 "router_pid": args.pid,
                 "baseline": baseline,
                 "after_half_close": after_half_close,
+                "after_empty_response": after_empty_response,
                 "after_full_close": after_full_close,
                 "after_sequential": after_sequential,
                 "final": final,

@@ -82,7 +82,6 @@ struct connection_set {
   int fds[SOCKS_PER_CONNECTION];
   __u32 slots[SOCKS_PER_CONNECTION];
   __u64 cookies[SOCKS_PER_CONNECTION];
-  __u64 initial_bytes_acked;
   unsigned char allocated;
   unsigned char active;
   unsigned char peer_write_closed;
@@ -109,6 +108,7 @@ struct connection_manager {
   int routes_fd;
   int http_flows_fd;
   int route_decisions_fd;
+  void *http_flow_value;
   int status_fd;
   int timer_fd;
   char status_path[sizeof(((struct sockaddr_un *)0)->sun_path)];
@@ -796,7 +796,6 @@ static void reset_connection_set(struct connection_set *set) {
   for (int member = 0; member < SOCKS_PER_CONNECTION; member++)
     set->fds[member] = -1;
   memset(set->cookies, 0, sizeof(set->cookies));
-  set->initial_bytes_acked = 0;
   memset(set->sockmap_installed, 0, sizeof(set->sockmap_installed));
   memset(set->route_installed, 0, sizeof(set->route_installed));
   set->allocated = 0;
@@ -963,9 +962,6 @@ static int add_connection_set(struct connection_manager *manager,
   reset_connection_set(set);
   set->allocated = 1;
   set->fds[CONNECTION_CLIENT] = client_fd;
-  /* No response bytes can be sent before XSR installs this frontend in the
-   * SOCKMAP, so zero is the accepted socket's application-byte baseline. */
-  set->initial_bytes_acked = 0;
   set->peer_write_closed = 0;
   set->backend_writes_shutdown = 0;
 
@@ -1080,21 +1076,9 @@ static int count_map_entries(int map_fd, size_t key_size) {
   return errno == ENOENT ? count : -1;
 }
 
-static int map_contains_key(int map_fd, const void *target, size_t key_size) {
-  unsigned char current[sizeof(__u64)] = {};
-  unsigned char next[sizeof(__u64)] = {};
-  const void *key = NULL;
-
-  if (key_size > sizeof(current)) {
-    errno = EINVAL;
-    return -1;
-  }
-  while (bpf_map_get_next_key(map_fd, key, next) == 0) {
-    if (memcmp(next, target, key_size) == 0)
-      return 1;
-    memcpy(current, next, key_size);
-    key = current;
-  }
+static int map_contains_key(int map_fd, const void *key, void *value) {
+  if (bpf_map_lookup_elem(map_fd, key, value) == 0)
+    return 1;
   return errno == ENOENT ? 0 : -1;
 }
 
@@ -1182,7 +1166,8 @@ static void poll_connection_lifecycle(struct connection_manager *manager) {
       }
       flow_present =
           map_contains_key(manager->http_flows_fd,
-                           &set->cookies[CONNECTION_CLIENT], sizeof(__u64));
+                           &set->cookies[CONNECTION_CLIENT],
+                           manager->http_flow_value);
       if (info.tcpi_bytes_received == 0 || flow_present) {
         reap_connection_set(manager, manager->poll_set_indices[i],
                             "frontend half-close without complete request");
@@ -1191,7 +1176,6 @@ static void poll_connection_lifecycle(struct connection_manager *manager) {
       if (!set->backend_writes_shutdown)
         shutdown_backend_writes(set);
       if (backend_responses_complete(set) &&
-          info.tcpi_bytes_acked > set->initial_bytes_acked &&
           info.tcpi_unacked == 0 && info.tcpi_notsent_bytes == 0)
         reap_connection_set(manager, manager->poll_set_indices[i],
                             "frontend half-close drained");
@@ -1203,6 +1187,9 @@ static int initialize_connection_manager(struct connection_manager *manager,
                                          int sock_map_fd, int routes_fd,
                                          int http_flows_fd,
                                          int route_decisions_fd) {
+  struct bpf_map_info http_flow_info = {};
+  __u32 http_flow_info_len = sizeof(http_flow_info);
+
   memset(manager, 0, sizeof(*manager));
   manager->epoll_fd = -1;
   manager->status_fd = -1;
@@ -1211,13 +1198,18 @@ static int initialize_connection_manager(struct connection_manager *manager,
   manager->routes_fd = routes_fd;
   manager->http_flows_fd = http_flows_fd;
   manager->route_decisions_fd = route_decisions_fd;
+  if (bpf_obj_get_info_by_fd(http_flows_fd, &http_flow_info,
+                             &http_flow_info_len) != 0 ||
+      !http_flow_info.value_size)
+    return -1;
+  manager->http_flow_value = malloc(http_flow_info.value_size);
   manager->sets = calloc(MAX_CONNECTION_SETS, sizeof(*manager->sets));
   manager->free_sets = calloc(MAX_CONNECTION_SETS, sizeof(*manager->free_sets));
   manager->poll_set_indices =
       calloc(MAX_CONNECTION_SETS, sizeof(*manager->poll_set_indices));
   manager->poll_fds = calloc(MAX_CONNECTION_SETS, sizeof(*manager->poll_fds));
-  if (!manager->sets || !manager->free_sets || !manager->poll_set_indices ||
-      !manager->poll_fds)
+  if (!manager->http_flow_value || !manager->sets || !manager->free_sets ||
+      !manager->poll_set_indices || !manager->poll_fds)
     return -1;
 
   for (__u32 i = 0; i < MAX_CONNECTION_SETS; i++) {
@@ -1276,6 +1268,7 @@ static void destroy_connection_manager(struct connection_manager *manager) {
   free(manager->free_sets);
   free(manager->poll_set_indices);
   free(manager->poll_fds);
+  free(manager->http_flow_value);
 }
 
 static int run_sockmap_router(void) {

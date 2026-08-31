@@ -230,6 +230,10 @@ static void *worker_thread(void *arg) {
       if (route_seq[0] == '\0')
         extract_route_seq(buf + header_len, content_length, route_seq,
                           sizeof(route_seq));
+#ifdef XSR_MOCK_DELAY
+      if (strncmp(route_seq, "no-response-", sizeof("no-response-") - 1) == 0)
+        goto close_client;
+#endif
       int body_len =
           route_seq[0] != '\0'
               ? snprintf(body, sizeof(body),

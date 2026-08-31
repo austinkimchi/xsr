@@ -21,8 +21,9 @@ shutdown to all five backend connections. The selected backend can finish a
 multi-write or streaming response before observing EOF and closing; unused
 backends close without a request. Cleanup waits until every backend response
 side has closed and TCP reports response bytes acknowledged with no
-unacknowledged or unsent frontend data. A peer that sent no request, or
-half-closed an incomplete parser flow, can be reclaimed immediately.
+unacknowledged or unsent frontend data. Backend closure with no response bytes
+is also terminal rather than a permanent drain. A peer that sent no request,
+or half-closed an incomplete parser flow, can be reclaimed immediately.
 
 The backend FIN is the response-completion signal, so a temporary empty send
 queue between streamed chunks cannot trigger cleanup. This drain proof
