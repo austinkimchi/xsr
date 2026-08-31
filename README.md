@@ -113,6 +113,9 @@ corpora whose identity cannot otherwise be determined; the runner refuses to
 guess. See
 [`docs/azure_benchmark.md`](docs/azure_benchmark.md) for the host preflight,
 short canary, exact paper commands, and XSR warm-up lifecycle disclosure.
+The ownership, kernel semantics, cleanup ordering, slot reuse, and deterministic
+quiescence design are documented in
+[`docs/sockmap_connection_lifecycle.md`](docs/sockmap_connection_lifecycle.md).
 
 Benchmark commands write local run data below `results/`; raw runs, logs,
 generated prompts, models, and notebook outputs are ignored. Review and add

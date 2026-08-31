@@ -7,7 +7,7 @@ Envoy deployment separately. The local readiness sequence is:
 ```bash
 git clone https://github.com/austinkimchi/xsr.git
 cd xsr
-git switch fix/azure-benchmark-readiness
+git switch master
 make benchmark-install
 sudo systemctl enable --now docker
 sudo make setup iproutes
@@ -80,10 +80,11 @@ sudo make performance-fixed-rate \
 Add `INCLUDE_STRESS=1` only to an optional saturation run to append `256,512`.
 Do not add it to the paper-default command.
 
-XSR is deliberately restarted after each load warm-up. The current userspace
-SOCKMAP router retains a six-socket set after the separate wrk process closes;
-safe reclamation needs connection ownership and close monitoring, not a small
-benchmark-only patch. Consequently, metadata records
-`xsr_measured_instance_warmed=false`; VSR and LLMRouter remain alive after their
-warm-up. Reports must describe this per-system lifecycle rather than saying all
-systems used warmed measured instances.
+XSR, VSR, and LLMRouter remain alive across load warm-up and timed measurement.
+The XSR userspace lifecycle manager detects frontend peer closure, removes the
+complete six-socket connection set, and returns its slot block for reuse.
+After the warm-up client exits, the runner queries XSR's status socket and waits
+for zero active connection sets before starting measurement. Metadata records
+`xsr_warmup_lifecycle=same-process-load-warmup` and
+`xsr_measured_instance_warmed=true`; a PID mismatch or cleanup quarantine makes
+the trial fail rather than silently measuring a fresh or contaminated process.

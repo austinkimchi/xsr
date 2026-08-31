@@ -1,3 +1,5 @@
+#define _GNU_SOURCE
+
 /*
  * Userspace control process for SK_SKB/SOCKMAP prompt routing.
  *
@@ -16,13 +18,18 @@
 #include <net/if.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
+#include <poll.h>
 #include <pthread.h>
 #include <signal.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/epoll.h>
 #include <sys/resource.h>
 #include <sys/socket.h>
+#include <sys/timerfd.h>
+#include <sys/un.h>
 #include <unistd.h>
 
 #include "stages/signals/generated/xdp_keyword_modules.generated.h"
@@ -56,7 +63,55 @@
 #define SK_MODEL_QA 4
 #define SK_MODEL_WRITING 5
 #define MAX_SOCK_SLOTS 16384
+#define SOCKS_PER_CONNECTION 6
+#define MAX_CONNECTION_SETS (MAX_SOCK_SLOTS / SOCKS_PER_CONNECTION)
+#define MAX_LIFECYCLE_EVENTS 256
+#define LIFECYCLE_POLL_INTERVAL_NS (100ULL * 1000 * 1000)
 #define MAX_HTTP_MESSAGE (256 * 1024)
+
+enum connection_member {
+  CONNECTION_CLIENT,
+  CONNECTION_CODING,
+  CONNECTION_MATH,
+  CONNECTION_OTHERS,
+  CONNECTION_QA,
+  CONNECTION_WRITING,
+};
+
+struct connection_set {
+  int fds[SOCKS_PER_CONNECTION];
+  __u32 slots[SOCKS_PER_CONNECTION];
+  __u64 cookies[SOCKS_PER_CONNECTION];
+  unsigned char allocated;
+  unsigned char active;
+  unsigned char sockmap_installed[SOCKS_PER_CONNECTION];
+  unsigned char route_installed[SOCKS_PER_CONNECTION];
+};
+
+struct connection_manager {
+  struct connection_set *sets;
+  __u32 *free_sets;
+  __u32 *poll_set_indices;
+  struct pollfd *poll_fds;
+  __u32 free_count;
+  __u32 active_count;
+  __u32 quarantined_count;
+  __u32 sockmap_entry_count;
+  __u64 accepted_total;
+  __u64 reaped_total;
+  int epoll_fd;
+  int sock_map_fd;
+  int routes_fd;
+  int http_flows_fd;
+  int route_decisions_fd;
+  int status_fd;
+  int timer_fd;
+  char status_path[sizeof(((struct sockaddr_un *)0)->sun_path)];
+};
+
+#define LIFECYCLE_LISTENER_EVENT UINT64_MAX
+#define LIFECYCLE_STATUS_EVENT (UINT64_MAX - 1)
+#define LIFECYCLE_TIMER_EVENT (UINT64_MAX - 2)
 
 struct xdp_decision_rule {
   __u64 require_any;
@@ -186,13 +241,8 @@ static int update_sock_map(int sock_map_fd, __u32 slot, int sock_fd) {
   return bpf_map_update_elem(sock_map_fd, &slot, &sock_fd, BPF_ANY);
 }
 
-static int update_route(int routes_fd, int sock_fd,
+static int update_route(int routes_fd, __u64 cookie,
                         const struct sk_route_entry *entry) {
-  __u64 cookie = 0;
-
-  if (get_socket_cookie(sock_fd, &cookie) != 0)
-    return -1;
-
   return bpf_map_update_elem(routes_fd, &cookie, entry, BPF_ANY);
 }
 
@@ -723,101 +773,196 @@ static void bump_memlock_rlimit(void) {
             strerror(errno));
 }
 
-static int add_connection_set(int sock_map_fd, int routes_fd, int client_fd,
-                              __u32 *next_slot) {
-  int coding_fd = -1;
-  int math_fd = -1;
-  int others_fd = -1;
-  int qa_fd = -1;
-  int writing_fd = -1;
-  __u32 client_slot = (*next_slot)++;
-  __u32 coding_slot = (*next_slot)++;
-  __u32 math_slot = (*next_slot)++;
-  __u32 others_slot = (*next_slot)++;
-  __u32 qa_slot = (*next_slot)++;
-  __u32 writing_slot = (*next_slot)++;
-  struct sk_route_entry client_entry = {
-      .client_slot = client_slot,
-      .coding_slot = coding_slot,
-      .math_slot = math_slot,
-      .others_slot = others_slot,
-      .qa_slot = qa_slot,
-      .writing_slot = writing_slot,
-      .flags = 0,
-  };
-  struct sk_route_entry backend_entry = {
-      .client_slot = client_slot,
-      .coding_slot = coding_slot,
-      .math_slot = math_slot,
-      .others_slot = others_slot,
-      .qa_slot = qa_slot,
-      .writing_slot = writing_slot,
-      .flags = SK_ROUTER_FLAG_BACKEND,
-  };
+static int delete_map_key(int map_fd, const void *key) {
+  if (bpf_map_delete_elem(map_fd, key) == 0 || errno == ENOENT)
+    return 0;
+  return -1;
+}
 
-  if (*next_slot >= MAX_SOCK_SLOTS) {
-    errno = ENOSPC;
+static int delete_sockmap_slot(int map_fd, const __u32 *slot) {
+  /* Linux SOCKMAP reports EINVAL, rather than ENOENT, for an empty valid
+   * array slot. All allocator-produced slots are range-checked by design. */
+  if (bpf_map_delete_elem(map_fd, slot) == 0 || errno == EINVAL)
+    return 0;
+  return -1;
+}
+
+static void reset_connection_set(struct connection_set *set) {
+  for (int member = 0; member < SOCKS_PER_CONNECTION; member++)
+    set->fds[member] = -1;
+  memset(set->cookies, 0, sizeof(set->cookies));
+  memset(set->sockmap_installed, 0, sizeof(set->sockmap_installed));
+  memset(set->route_installed, 0, sizeof(set->route_installed));
+  set->allocated = 0;
+  set->active = 0;
+}
+
+static int reap_connection_set(struct connection_manager *manager,
+                               __u32 set_index, const char *reason) {
+  struct connection_set *set = &manager->sets[set_index];
+  int cleanup_failed = 0;
+  int was_active;
+
+  if (!set->allocated)
+    return 0;
+
+  was_active = set->active;
+  if (was_active) {
+    set->active = 0;
+    manager->active_count--;
+  }
+
+  /* Explicit deletion makes slot availability deterministic. Kernel close
+   * also unlinks SOCKMAP entries, but it does not remove XSR's cookie-keyed
+   * hash maps, and a peer FIN alone does neither while userspace owns the FD. */
+  for (int member = 0; member < SOCKS_PER_CONNECTION; member++) {
+    if (set->sockmap_installed[member] &&
+        delete_sockmap_slot(manager->sock_map_fd, &set->slots[member]) != 0)
+      cleanup_failed = 1;
+    else if (set->sockmap_installed[member]) {
+      set->sockmap_installed[member] = 0;
+      manager->sockmap_entry_count--;
+    }
+  }
+  for (int member = 0; member < SOCKS_PER_CONNECTION; member++) {
+    if (set->route_installed[member] &&
+        delete_map_key(manager->routes_fd, &set->cookies[member]) != 0)
+      cleanup_failed = 1;
+    else
+      set->route_installed[member] = 0;
+  }
+  if (set->cookies[CONNECTION_CLIENT]) {
+    if (delete_map_key(manager->http_flows_fd,
+                       &set->cookies[CONNECTION_CLIENT]) != 0)
+      cleanup_failed = 1;
+    if (delete_map_key(manager->route_decisions_fd,
+                       &set->cookies[CONNECTION_CLIENT]) != 0)
+      cleanup_failed = 1;
+  }
+
+  for (int member = 0; member < SOCKS_PER_CONNECTION; member++) {
+    if (set->fds[member] >= 0) {
+      close(set->fds[member]);
+      set->fds[member] = -1;
+    }
+  }
+
+  /* If an explicit SOCKMAP delete raced with kernel close, retry after close.
+   * Never recycle the six-slot block unless every old key is confirmed gone. */
+  if (cleanup_failed) {
+    cleanup_failed = 0;
+    for (int member = 0; member < SOCKS_PER_CONNECTION; member++) {
+      if (set->sockmap_installed[member] &&
+          delete_sockmap_slot(manager->sock_map_fd, &set->slots[member]) != 0)
+        cleanup_failed = 1;
+      else if (set->sockmap_installed[member]) {
+        set->sockmap_installed[member] = 0;
+        manager->sockmap_entry_count--;
+      }
+      if (set->route_installed[member] &&
+          delete_map_key(manager->routes_fd, &set->cookies[member]) != 0)
+        cleanup_failed = 1;
+      else
+        set->route_installed[member] = 0;
+    }
+    if (set->cookies[CONNECTION_CLIENT] &&
+        (delete_map_key(manager->http_flows_fd,
+                        &set->cookies[CONNECTION_CLIENT]) != 0 ||
+         delete_map_key(manager->route_decisions_fd,
+                        &set->cookies[CONNECTION_CLIENT]) != 0))
+      cleanup_failed = 1;
+  }
+
+  if (cleanup_failed) {
+    manager->quarantined_count++;
+    set->allocated = 0;
+    fprintf(stderr, "quarantined connection slots starting at %u after cleanup failure (%s)\n",
+            set->slots[0], reason);
     return -1;
   }
 
-  coding_fd = connect_backend(BACKEND_CODING_PORT);
-  math_fd = connect_backend(BACKEND_MATH_PORT);
-  others_fd = connect_backend(BACKEND_OTHERS_PORT);
-  qa_fd = connect_backend(BACKEND_QA_PORT);
-  writing_fd = connect_backend(BACKEND_WRITING_PORT);
-  if (coding_fd < 0 || math_fd < 0 || others_fd < 0 || qa_fd < 0 ||
-      writing_fd < 0)
-    goto fail;
+  reset_connection_set(set);
+  manager->free_sets[manager->free_count++] = set_index;
+  if (was_active)
+    manager->reaped_total++;
+#ifdef XDP_DEBUG
+  fprintf(stderr, "reaped connection slots starting at %u (%s)\n",
+          set_index * SOCKS_PER_CONNECTION, reason);
+#else
+  (void)reason;
+#endif
+  return 0;
+}
 
-  if (update_route(routes_fd, client_fd, &client_entry) != 0) {
-    perror("update client route");
-    goto fail;
-  }
-  if (update_route(routes_fd, coding_fd, &backend_entry) != 0) {
-    perror("update coding route");
-    goto fail;
-  }
-  if (update_route(routes_fd, math_fd, &backend_entry) != 0) {
-    perror("update math route");
-    goto fail;
-  }
-  if (update_route(routes_fd, others_fd, &backend_entry) != 0) {
-    perror("update others route");
-    goto fail;
-  }
-  if (update_route(routes_fd, qa_fd, &backend_entry) != 0) {
-    perror("update qa route");
-    goto fail;
-  }
-  if (update_route(routes_fd, writing_fd, &backend_entry) != 0) {
-    perror("update writing route");
-    goto fail;
+static int add_connection_set(struct connection_manager *manager,
+                              int client_fd) {
+  static const int backend_ports[SOCKS_PER_CONNECTION] = {
+      0, BACKEND_CODING_PORT, BACKEND_MATH_PORT, BACKEND_OTHERS_PORT,
+      BACKEND_QA_PORT, BACKEND_WRITING_PORT,
+  };
+  __u32 set_index;
+  struct connection_set *set;
+  struct sk_route_entry client_entry = {
+      .flags = 0,
+  };
+  struct sk_route_entry backend_entry = {
+      .flags = SK_ROUTER_FLAG_BACKEND,
+  };
+
+  if (!manager->free_count) {
+    errno = ENOSPC;
+    close(client_fd);
+    return -1;
   }
 
-  if (update_sock_map(sock_map_fd, client_slot, client_fd) != 0) {
-    perror("update client sockmap");
-    goto fail;
+  set_index = manager->free_sets[--manager->free_count];
+  set = &manager->sets[set_index];
+  reset_connection_set(set);
+  set->allocated = 1;
+  set->fds[CONNECTION_CLIENT] = client_fd;
+
+  for (int member = 1; member < SOCKS_PER_CONNECTION; member++) {
+    set->fds[member] = connect_backend(backend_ports[member]);
+    if (set->fds[member] < 0)
+      goto fail;
   }
-  if (update_sock_map(sock_map_fd, coding_slot, coding_fd) != 0) {
-    perror("update coding sockmap");
-    goto fail;
+
+  for (int member = 0; member < SOCKS_PER_CONNECTION; member++) {
+    if (get_socket_cookie(set->fds[member], &set->cookies[member]) != 0)
+      goto fail;
   }
-  if (update_sock_map(sock_map_fd, math_slot, math_fd) != 0) {
-    perror("update math sockmap");
-    goto fail;
+
+  client_entry.client_slot = backend_entry.client_slot = set->slots[0];
+  client_entry.coding_slot = backend_entry.coding_slot = set->slots[1];
+  client_entry.math_slot = backend_entry.math_slot = set->slots[2];
+  client_entry.others_slot = backend_entry.others_slot = set->slots[3];
+  client_entry.qa_slot = backend_entry.qa_slot = set->slots[4];
+  client_entry.writing_slot = backend_entry.writing_slot = set->slots[5];
+
+  for (int member = 0; member < SOCKS_PER_CONNECTION; member++) {
+    const struct sk_route_entry *entry =
+        member == CONNECTION_CLIENT ? &client_entry : &backend_entry;
+
+    if (update_route(manager->routes_fd, set->cookies[member], entry) != 0) {
+      perror("update socket route");
+      goto fail;
+    }
+    set->route_installed[member] = 1;
   }
-  if (update_sock_map(sock_map_fd, others_slot, others_fd) != 0) {
-    perror("update others sockmap");
-    goto fail;
+
+  for (int member = 0; member < SOCKS_PER_CONNECTION; member++) {
+    if (update_sock_map(manager->sock_map_fd, set->slots[member],
+                        set->fds[member]) != 0) {
+      fprintf(stderr, "update sockmap member=%d slot=%u fd=%d: %s\n", member,
+              set->slots[member], set->fds[member], strerror(errno));
+      goto fail;
+    }
+    set->sockmap_installed[member] = 1;
+    manager->sockmap_entry_count++;
   }
-  if (update_sock_map(sock_map_fd, qa_slot, qa_fd) != 0) {
-    perror("update qa sockmap");
-    goto fail;
-  }
-  if (update_sock_map(sock_map_fd, writing_slot, writing_fd) != 0) {
-    perror("update writing sockmap");
-    goto fail;
-  }
+
+  set->active = 1;
+  manager->active_count++;
 
   /* A client can send its first request while the backend connections
    * are being established.  Ask the socket layer to re-evaluate queued data
@@ -829,34 +974,214 @@ static int add_connection_set(int sock_map_fd, int routes_fd, int client_fd,
 
   printf("accepted client slot=%u "
          "backends={coding:%u,math:%u,others:%u,qa:%u,writing:%u}\n",
-         client_slot, coding_slot, math_slot, others_slot, qa_slot,
-         writing_slot);
+         set->slots[0], set->slots[1], set->slots[2], set->slots[3],
+         set->slots[4], set->slots[5]);
   fflush(stdout);
+  manager->accepted_total++;
   return 0;
 
 fail:
-  if (coding_fd >= 0)
-    close(coding_fd);
-  if (math_fd >= 0)
-    close(math_fd);
-  if (others_fd >= 0)
-    close(others_fd);
-  if (qa_fd >= 0)
-    close(qa_fd);
-  if (writing_fd >= 0)
-    close(writing_fd);
+  reap_connection_set(manager, set_index, "connection setup failure");
   return -1;
 }
 
+static int create_status_listener(struct connection_manager *manager) {
+  const char *path = getenv("XSR_STATUS_SOCKET");
+  struct sockaddr_un addr = {.sun_family = AF_UNIX};
+  struct epoll_event event = {
+      .events = EPOLLIN,
+      .data.u64 = LIFECYCLE_STATUS_EVENT,
+  };
+
+  if (!path || !*path)
+    return 0;
+  if (strlen(path) >= sizeof(addr.sun_path)) {
+    errno = ENAMETOOLONG;
+    return -1;
+  }
+  manager->status_fd = socket(AF_UNIX, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC,
+                              0);
+  if (manager->status_fd < 0)
+    return -1;
+  strcpy(addr.sun_path, path);
+  strcpy(manager->status_path, path);
+  unlink(path);
+  if (bind(manager->status_fd, (struct sockaddr *)&addr, sizeof(addr)) != 0 ||
+      listen(manager->status_fd, 16) != 0 ||
+      epoll_ctl(manager->epoll_fd, EPOLL_CTL_ADD, manager->status_fd, &event) !=
+          0)
+    return -1;
+  return 0;
+}
+
+static int count_map_entries(int map_fd, size_t key_size) {
+  unsigned char current[sizeof(__u64)] = {};
+  unsigned char next[sizeof(__u64)] = {};
+  const void *key = NULL;
+  int count = 0;
+
+  if (key_size > sizeof(current)) {
+    errno = EINVAL;
+    return -1;
+  }
+  while (bpf_map_get_next_key(map_fd, key, next) == 0) {
+    count++;
+    memcpy(current, next, key_size);
+    key = current;
+  }
+  return errno == ENOENT ? count : -1;
+}
+
+static void serve_status(struct connection_manager *manager) {
+  int fd;
+
+  while ((fd = accept4(manager->status_fd, NULL, NULL,
+                       SOCK_NONBLOCK | SOCK_CLOEXEC)) >= 0) {
+    int sockmap_entries = manager->sockmap_entry_count;
+    int routes_entries = count_map_entries(manager->routes_fd, sizeof(__u64));
+    int http_flows_entries =
+        count_map_entries(manager->http_flows_fd, sizeof(__u64));
+    int route_decisions_entries =
+        count_map_entries(manager->route_decisions_fd, sizeof(__u64));
+
+    dprintf(fd,
+            "pid=%ld active_connection_sets=%u free_slot_sets=%u "
+            "quarantined_slot_sets=%u accepted_total=%llu reaped_total=%llu "
+            "sockmap_entries=%d routes_entries=%d http_flows_entries=%d "
+            "route_decisions_entries=%d\n",
+            (long)getpid(), manager->active_count, manager->free_count,
+            manager->quarantined_count,
+            (unsigned long long)manager->accepted_total,
+            (unsigned long long)manager->reaped_total,
+            sockmap_entries, routes_entries, http_flows_entries,
+            route_decisions_entries);
+    close(fd);
+  }
+}
+
+static void poll_connection_lifecycle(struct connection_manager *manager) {
+  __u64 expirations;
+  __u32 count = 0;
+  int ready;
+
+  if (read(manager->timer_fd, &expirations, sizeof(expirations)) !=
+      sizeof(expirations))
+    return;
+  for (__u32 i = 0; i < MAX_CONNECTION_SETS; i++) {
+    if (!manager->sets[i].active)
+      continue;
+    manager->poll_fds[count].fd =
+        manager->sets[i].fds[CONNECTION_CLIENT];
+    manager->poll_fds[count].events = POLLRDHUP | POLLHUP | POLLERR;
+    manager->poll_fds[count].revents = 0;
+    manager->poll_set_indices[count] = i;
+    count++;
+  }
+  ready = poll(manager->poll_fds, count, 0);
+  if (ready < 0) {
+    if (errno != EINTR)
+      perror("poll connection lifecycle");
+    return;
+  }
+  for (__u32 i = 0; i < count && ready > 0; i++) {
+    if (!(manager->poll_fds[i].revents & (POLLRDHUP | POLLHUP | POLLERR)))
+      continue;
+    ready--;
+    reap_connection_set(manager, manager->poll_set_indices[i],
+                        "frontend closed");
+  }
+}
+
+static int initialize_connection_manager(struct connection_manager *manager,
+                                         int sock_map_fd, int routes_fd,
+                                         int http_flows_fd,
+                                         int route_decisions_fd) {
+  memset(manager, 0, sizeof(*manager));
+  manager->epoll_fd = -1;
+  manager->status_fd = -1;
+  manager->timer_fd = -1;
+  manager->sock_map_fd = sock_map_fd;
+  manager->routes_fd = routes_fd;
+  manager->http_flows_fd = http_flows_fd;
+  manager->route_decisions_fd = route_decisions_fd;
+  manager->sets = calloc(MAX_CONNECTION_SETS, sizeof(*manager->sets));
+  manager->free_sets = calloc(MAX_CONNECTION_SETS, sizeof(*manager->free_sets));
+  manager->poll_set_indices =
+      calloc(MAX_CONNECTION_SETS, sizeof(*manager->poll_set_indices));
+  manager->poll_fds = calloc(MAX_CONNECTION_SETS, sizeof(*manager->poll_fds));
+  if (!manager->sets || !manager->free_sets || !manager->poll_set_indices ||
+      !manager->poll_fds)
+    return -1;
+
+  for (__u32 i = 0; i < MAX_CONNECTION_SETS; i++) {
+    reset_connection_set(&manager->sets[i]);
+    for (__u32 member = 0; member < SOCKS_PER_CONNECTION; member++)
+      manager->sets[i].slots[member] = i * SOCKS_PER_CONNECTION + member;
+    manager->free_sets[i] = MAX_CONNECTION_SETS - i - 1;
+  }
+  manager->free_count = MAX_CONNECTION_SETS;
+  manager->epoll_fd = epoll_create1(EPOLL_CLOEXEC);
+  if (manager->epoll_fd < 0)
+    return -1;
+  manager->timer_fd =
+      timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK | TFD_CLOEXEC);
+  if (manager->timer_fd < 0)
+    return -1;
+  {
+    struct itimerspec timer = {
+        .it_interval = {
+            .tv_sec = LIFECYCLE_POLL_INTERVAL_NS / 1000000000ULL,
+            .tv_nsec = LIFECYCLE_POLL_INTERVAL_NS % 1000000000ULL,
+        },
+        .it_value = {
+            .tv_sec = LIFECYCLE_POLL_INTERVAL_NS / 1000000000ULL,
+            .tv_nsec = LIFECYCLE_POLL_INTERVAL_NS % 1000000000ULL,
+        },
+    };
+    struct epoll_event event = {
+        .events = EPOLLIN,
+        .data.u64 = LIFECYCLE_TIMER_EVENT,
+    };
+
+    if (timerfd_settime(manager->timer_fd, 0, &timer, NULL) != 0 ||
+        epoll_ctl(manager->epoll_fd, EPOLL_CTL_ADD, manager->timer_fd,
+                  &event) != 0)
+      return -1;
+  }
+  if (create_status_listener(manager) != 0)
+    return -1;
+  return 0;
+}
+
+static void destroy_connection_manager(struct connection_manager *manager) {
+  for (__u32 i = 0; i < MAX_CONNECTION_SETS; i++)
+    if (manager->sets && manager->sets[i].allocated)
+      reap_connection_set(manager, i, "router shutdown");
+  if (manager->status_fd >= 0)
+    close(manager->status_fd);
+  if (manager->timer_fd >= 0)
+    close(manager->timer_fd);
+  if (manager->status_path[0])
+    unlink(manager->status_path);
+  if (manager->epoll_fd >= 0)
+    close(manager->epoll_fd);
+  free(manager->sets);
+  free(manager->free_sets);
+  free(manager->poll_set_indices);
+  free(manager->poll_fds);
+}
+
 static int run_sockmap_router(void) {
+  struct connection_manager manager;
   struct bpf_object *obj = NULL;
   struct bpf_program *parser = NULL;
   struct bpf_program *verdict = NULL;
   int sock_map_fd;
   int routes_fd;
+  int http_flows_fd;
+  int route_decisions_fd;
   int rules_fd;
   int listener_fd = -1;
-  __u32 next_slot = 0;
 
   bump_memlock_rlimit();
 
@@ -888,9 +1213,13 @@ static int run_sockmap_router(void) {
   verdict = bpf_object__find_program_by_name(obj, "sk_router_verdict");
   sock_map_fd = bpf_object__find_map_fd_by_name(obj, "sk_sock_map");
   routes_fd = bpf_object__find_map_fd_by_name(obj, "sk_routes");
+  http_flows_fd = bpf_object__find_map_fd_by_name(obj, "sk_http_flows");
+  route_decisions_fd =
+      bpf_object__find_map_fd_by_name(obj, "sk_route_decisions");
   rules_fd = bpf_object__find_map_fd_by_name(obj, "xdp_decision_rules");
 
-  if (!parser || !verdict || sock_map_fd < 0 || routes_fd < 0 || rules_fd < 0) {
+  if (!parser || !verdict || sock_map_fd < 0 || routes_fd < 0 ||
+      http_flows_fd < 0 || route_decisions_fd < 0 || rules_fd < 0) {
     fprintf(stderr, "failed to find required BPF programs or maps\n");
     return 1;
   }
@@ -926,6 +1255,26 @@ static int run_sockmap_router(void) {
     return 1;
   }
 
+  if (initialize_connection_manager(&manager, sock_map_fd, routes_fd,
+                                    http_flows_fd, route_decisions_fd) != 0) {
+    perror("initialize connection manager");
+    destroy_connection_manager(&manager);
+    close(listener_fd);
+    return 1;
+  }
+  {
+    struct epoll_event event = {
+        .events = EPOLLIN,
+        .data.u64 = LIFECYCLE_LISTENER_EVENT,
+    };
+    if (epoll_ctl(manager.epoll_fd, EPOLL_CTL_ADD, listener_fd, &event) != 0) {
+      perror("monitor listener");
+      destroy_connection_manager(&manager);
+      close(listener_fd);
+      return 1;
+    }
+  }
+
   printf("SK_SKB router listening on 0.0.0.0:%d\n", frontend_port());
   printf("routes: coding=%d math=%d others=%d qa=%d writing=%d\n",
          BACKEND_CODING_PORT, BACKEND_MATH_PORT, BACKEND_OTHERS_PORT,
@@ -933,25 +1282,41 @@ static int run_sockmap_router(void) {
   fflush(stdout);
 
   while (running) {
-    int client_fd = accept(listener_fd, NULL, NULL);
+    struct epoll_event events[MAX_LIFECYCLE_EVENTS];
+    int event_count =
+        epoll_wait(manager.epoll_fd, events, MAX_LIFECYCLE_EVENTS, -1);
 
-    if (client_fd < 0) {
+    if (event_count < 0) {
       if (errno == EINTR)
         continue;
-      perror("accept");
+      perror("epoll_wait");
       break;
     }
+    for (int i = 0; i < event_count; i++) {
+      __u64 tag = events[i].data.u64;
 
-    set_reuse_and_nodelay(client_fd);
-    if (add_connection_set(sock_map_fd, routes_fd, client_fd, &next_slot) !=
-        0) {
-      perror("add_connection_set");
-      close(client_fd);
+      if (tag == LIFECYCLE_LISTENER_EVENT) {
+        int client_fd = accept(listener_fd, NULL, NULL);
+
+        if (client_fd < 0) {
+          if (errno != EINTR && errno != EAGAIN)
+            perror("accept");
+          continue;
+        }
+        set_reuse_and_nodelay(client_fd);
+        if (add_connection_set(&manager, client_fd) != 0)
+          perror("add_connection_set");
+      } else if (tag == LIFECYCLE_STATUS_EVENT) {
+        serve_status(&manager);
+      } else if (tag == LIFECYCLE_TIMER_EVENT) {
+        poll_connection_lifecycle(&manager);
+      }
     }
   }
 
   if (listener_fd >= 0)
     close(listener_fd);
+  destroy_connection_manager(&manager);
   bpf_object__close(obj);
   return 0;
 }

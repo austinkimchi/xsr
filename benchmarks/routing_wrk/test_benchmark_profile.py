@@ -38,6 +38,13 @@ def dry_run(**overrides: str) -> str:
 
 
 class BenchmarkProfileTest(unittest.TestCase):
+    def test_xsr_warmup_uses_quiescence_without_a_router_restart(self) -> None:
+        source = SCRIPT.read_text(encoding="utf-8")
+        self.assertIn("same-process-load-warmup", source)
+        self.assertIn("wait_for_xsr_quiescence.py", source)
+        self.assertNotIn("router-restart-after-load-warmup", source)
+        self.assertNotIn("router-measurement.log", source)
+
     def test_paper_profile_uses_shortened_main_sweep(self) -> None:
         output = dry_run(BENCHMARK_PROFILE="paper")
         self.assertIn("trials=5 duration=40s warmup_duration=3s", output)
@@ -68,7 +75,8 @@ class BenchmarkProfileTest(unittest.TestCase):
         self.assertIn("prompts_file=/data/intent.jsonl", output)
         self.assertIn("prompts_selection=explicit", output)
         self.assertIn("workload_id=intent:heldout", output)
-        self.assertIn("xsr_measured_instance_warmed=false", output)
+        self.assertIn("xsr_warmup_lifecycle=same-process-load-warmup", output)
+        self.assertIn("xsr_measured_instance_warmed=true", output)
 
     def test_paper_fixed_rate_dry_run_uses_reviewed_slice(self) -> None:
         output = dry_run(
