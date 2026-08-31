@@ -1,7 +1,8 @@
 # Pinned English vocabulary
 
-`scowl-american-english-2020.12.07.txt.gz` is a deterministic gzip (`gzip -n
--9`) of Debian `wamerican` 2020.12.07-2's `/usr/share/dict/american-english`.
+`scowl-american-english-2020.12.07.txt.gz` is an unmodified, deterministic
+recompression (`gzip -n -9`) of Debian `wamerican` 2020.12.07-2's
+`/usr/share/dict/american-english` output.
 The uncompressed snapshot has SHA-256
 `9f513f1ceadb6a01c5485b7dbdfd5118dc66cd70b59cae2851292112d4066a32`.
 
