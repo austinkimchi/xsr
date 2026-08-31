@@ -88,9 +88,15 @@ def main() -> None:
     parser.add_argument("--wrk2-bin", required=True)
     parser.add_argument("--vllm-container")
     parser.add_argument("--vsr-container")
+    parser.add_argument("--llmrouter-bin")
+    parser.add_argument("--llmrouter-config")
     parser.add_argument("--policy", type=Path, required=True)
     parser.add_argument("--prompts", type=Path, required=True)
     args = parser.parse_args()
+    systems = set(args.systems.split(","))
+    uses_docker = bool(systems & {"envoy-only", "vsr"})
+    uses_llmrouter = "llmrouter" in systems
+    llmrouter_config = Path(args.llmrouter_config) if uses_llmrouter and args.llmrouter_config else None
     status = command("git", "status", "--porcelain") or ""
     os_release = Path("/etc/os-release").read_text(encoding="utf-8", errors="replace") if Path("/etc/os-release").exists() else None
     metadata: dict[str, Any] = {
@@ -120,16 +126,31 @@ def main() -> None:
                         "network_namespaces": command("ip", "netns", "list"),
                         "interfaces": command("ip", "-details", "link", "show", "veth0"),
                         "offloads": command("ethtool", "-k", "veth0")},
-        "docker": {"version": command("docker", "version", "--format", "{{.Server.Version}}"), "vsr": docker_image(args.vsr_container),
-                   "envoy": docker_image(args.vllm_container),
-                   "envoy_version": command("docker", "exec", args.vllm_container, "envoy", "--version") if args.vllm_container else None,
-                   "vsr_version": command("docker", "exec", args.vsr_container, "vllm-sr", "--version") if args.vsr_container else unavailable(),
+        "docker": {"version": command("docker", "version", "--format", "{{.Server.Version}}") if uses_docker else unavailable(),
+                   "vsr": docker_image(args.vsr_container) if "vsr" in systems else unavailable(),
+                   "envoy": docker_image(args.vllm_container) if uses_docker else unavailable(),
+                   "envoy_version": command("docker", "exec", args.vllm_container, "envoy", "--version") if uses_docker and args.vllm_container else unavailable(),
+                   "vsr_version": command("docker", "exec", args.vsr_container, "vllm-sr", "--version") if "vsr" in systems and args.vsr_container else unavailable(),
                    "installation_note": "Installation method: official vLLM Semantic Router production documentation; the deployment was the latest production build at installation time."},
+        "llmrouter": {
+            "version": command(args.llmrouter_bin, "version") if uses_llmrouter and args.llmrouter_bin else unavailable(),
+            "binary": args.llmrouter_bin if uses_llmrouter and args.llmrouter_bin else unavailable(),
+            "config_path": str(llmrouter_config) if llmrouter_config else unavailable(),
+            "config_sha256": sha256(llmrouter_config) if llmrouter_config else unavailable(),
+            "pinned_revision": "da3430baaea672743c3957457b0c76faba19876e",
+        },
     }
     configs = args.output.parent / "configs"
     configs.mkdir(parents=True, exist_ok=True)
     shutil.copy2(args.policy, configs / args.policy.name)
-    if args.vllm_container:
+    if llmrouter_config:
+        snapshot = configs / f"llmrouter-{llmrouter_config.name}"
+        shutil.copy2(llmrouter_config, snapshot)
+        metadata["llmrouter"]["config_snapshot"] = {
+            "path": str(snapshot),
+            "sha256": sha256(snapshot),
+        }
+    if uses_docker and args.vllm_container:
         effective = command("docker", "exec", args.vllm_container, "sh", "-c", "cat /etc/envoy/envoy.yaml")
         if effective:
             envoy_config = configs / "vsr-envoy.yaml"

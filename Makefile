@@ -43,6 +43,7 @@ XDP_HOST_ADDR ?= 10.10.0.1/24
 XDP_PEER_ADDR ?= 10.10.0.2/24
 KEYWORD_POLICY ?= config/policy_ngram.yaml
 VSR_BACKEND_PORTS ?= 18391 18392 18393 18394 18395
+BENCHMARK_SYSTEMS ?= direct,envoy-only,xsr,vsr,llmrouter
 args ?=
 
 .DEFAULT_GOAL := build
@@ -51,7 +52,8 @@ help:
 	@echo "XSR commands:"
 	@echo "  make                 Build the production SOCKMAP router"
 	@echo "  make install         Install Linux dependencies and build production"
-	@echo "  make benchmark       Set up Python/tools and build benchmark helpers"
+	@echo "  make benchmark       Check selected benchmark environments"
+	@echo "  make benchmark-install  Install benchmark tools and selected adapters"
 	@echo "  make check           Check build tools and SOCKMAP support"
 	@echo "  make test            Run dependency-free unit tests"
 	@echo "  make profile-check   Validate benchmark profiles without running them"
@@ -89,7 +91,7 @@ install:
 	$(MAKE) check
 	$(MAKE) prod
 
-benchmark:
+benchmark-install:
 	./scripts/install_dependencies.sh benchmark
 	$(PYTHON) -m venv .venv
 	$(BENCHMARK_PYTHON) -m pip install --upgrade pip
@@ -98,7 +100,12 @@ benchmark:
 	$(MAKE) benchmark-build
 	$(MAKE) install-wrk
 	$(MAKE) install-wrk2
-	$(MAKE) check-benchmark
+	@if [[ ",$(BENCHMARK_SYSTEMS)," == *,llmrouter,* ]]; then $(MAKE) llmrouter-install; fi
+
+benchmark:
+	@BENCHMARK_SYSTEMS="$(BENCHMARK_SYSTEMS)" BENCHMARK_PYTHON="$(BENCHMARK_PYTHON)" \
+		LLMROUTER_PYTHON="$(LLMROUTER_PYTHON)" \
+		./benchmarks/routing_wrk/check_environments.sh
 
 test:
 	$(PYTHON) -m unittest discover -s benchmarks/policy -p 'test_*.py'
@@ -109,7 +116,7 @@ profile-check:
 	$(PYTHON) -m unittest discover -s benchmarks/routing_wrk -p 'test_benchmark_profile.py'
 
 test-distill:
-	@test -x "$(BENCHMARK_PYTHON)" || { echo "Error: run 'make benchmark' first." >&2; exit 1; }
+	@test -x "$(BENCHMARK_PYTHON)" || { echo "Error: run 'make benchmark-install' first." >&2; exit 1; }
 	$(BENCHMARK_PYTHON) -m pytest benchmarks/lora_distill/test_core.py
 
 llmrouter-install:
@@ -139,7 +146,8 @@ endef
 
 correctness:
 	$(require_sudo)
-	$(MAKE) check-benchmark
+	@BENCHMARK_SYSTEMS="direct,xsr,vsr" BENCHMARK_PYTHON="$(BENCHMARK_PYTHON)" \
+		./benchmarks/routing_wrk/check_environments.sh
 	$(MAKE) setup
 	$(MAKE) iproutes
 	PYTHON="$(BENCHMARK_PYTHON)" ./benchmarks/run_routing_correctness.sh $(args)
@@ -176,18 +184,19 @@ check: check-build
 	@command -v ip >/dev/null || { echo "Error: iproute2 is required." >&2; exit 1; }
 	@command -v ethtool >/dev/null || { echo "Error: ethtool is required." >&2; exit 1; }
 
-check-benchmark: check
-	@test -x "$(BENCHMARK_PYTHON)" || { echo "Error: run 'make benchmark' first." >&2; exit 1; }
-	@$(BENCHMARK_PYTHON) -c 'import datasets, matplotlib, nbconvert, nbformat, numpy, pandas' >/dev/null 2>&1 || { echo "Error: benchmark Python packages are incomplete; run 'make benchmark'." >&2; exit 1; }
+check-benchmark:
+	@test -x "$(BENCHMARK_PYTHON)" || { echo "Error: run 'make benchmark-install' first." >&2; exit 1; }
+	@$(BENCHMARK_PYTHON) -c 'import datasets, matplotlib, nbconvert, nbformat, numpy, pandas' >/dev/null 2>&1 || { echo "Error: benchmark Python packages are incomplete; run 'make benchmark-install'." >&2; exit 1; }
 	@command -v curl >/dev/null || { echo "Error: curl is required." >&2; exit 1; }
-	@command -v docker >/dev/null || { echo "Error: Docker is required for the VSR and Envoy comparisons." >&2; exit 1; }
+	@command -v ip >/dev/null || { echo "Error: iproute2 is required." >&2; exit 1; }
+	@command -v ethtool >/dev/null || { echo "Error: ethtool is required." >&2; exit 1; }
 	@command -v iptables >/dev/null || { echo "Error: iptables is required for benchmark setup." >&2; exit 1; }
 
 check-performance: check-benchmark
-	@test -x "$(CURDIR)/.tools/wrk/wrk" || command -v wrk >/dev/null || { echo "Error: saturation mode requires standard wrk; run 'make benchmark' or 'make install-wrk'." >&2; exit 1; }
+	@test -x "$(CURDIR)/.tools/wrk/wrk" || command -v wrk >/dev/null || { echo "Error: saturation mode requires standard wrk; run 'make benchmark-install' or 'make install-wrk'." >&2; exit 1; }
 
 check-performance-fixed-rate: check-benchmark
-	@test -x "$(CURDIR)/.tools/wrk2/wrk" || command -v "$${WRK2_BIN:-wrk2}" >/dev/null || { echo "Error: fixed-rate mode requires wrk2; run 'make benchmark' or 'make install-wrk2'." >&2; exit 1; }
+	@test -x "$(CURDIR)/.tools/wrk2/wrk" || command -v "$${WRK2_BIN:-wrk2}" >/dev/null || { echo "Error: fixed-rate mode requires wrk2; run 'make benchmark-install' or 'make install-wrk2'." >&2; exit 1; }
 
 install-wrk:
 	./benchmarks/routing_wrk/install_wrk.sh
@@ -253,4 +262,4 @@ iproutes:
 	done
 	@echo "benchmark backend ports allowed: $(VSR_BACKEND_PORTS)"
 
-.PHONY: help all build legacy benchmark-build prod dev install benchmark policy FORCE correctness performance performance-fixed-rate wrk check-build check check-benchmark check-performance check-performance-fixed-rate install-wrk install-wrk2 llmrouter-install test-llmrouter clean clean-setup setup iproutes
+.PHONY: help all build legacy benchmark-build prod dev install benchmark benchmark-install policy FORCE correctness performance performance-fixed-rate wrk check-build check check-benchmark check-performance check-performance-fixed-rate install-wrk install-wrk2 llmrouter-install test-llmrouter clean clean-setup setup iproutes

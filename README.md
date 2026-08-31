@@ -79,11 +79,20 @@ make profile-check
 Prepare a benchmark server only when collecting results:
 
 ```bash
+make benchmark-install
 make benchmark
 sudo make correctness
 sudo make performance args="BENCHMARK_PROFILE=paper"
-sudo make performance-fixed-rate args="BENCHMARK_PROFILE=paper RATES='100 250 500'"
+sudo make performance-fixed-rate args="BENCHMARK_PROFILE=paper"
 ```
+
+`make benchmark` is a read-only preflight for only the systems named by
+`BENCHMARK_SYSTEMS` (for example, `xsr,vsr`); it does not install tools or run
+measurements. The paper profile defaults to all five paths (`direct`,
+`envoy-only`, `xsr`, `vsr`, and
+`llmrouter`). Saturation uses the full concurrency sweep. Fixed-rate collection
+uses the same sweep unless `CONCURRENCY` is set; the analysis notebook selects
+the reviewed `64`-connection slice.
 
 Benchmark commands write local run data below `results/`; raw runs, logs,
 generated prompts, models, and notebook outputs are ignored. Review and add

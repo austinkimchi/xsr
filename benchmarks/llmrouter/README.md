@@ -45,6 +45,18 @@ local baseline topology. Relative `XSR_DISTILL_MODEL` paths resolve from the
 process working directory; model paths written in a config resolve beside that
 config file.
 
+The paper runner recognizes this baseline as `llmrouter` and infers the N-Gram
+or BM25 adapter config from `KEYWORD_POLICY`:
+
+```sh
+make benchmark BENCHMARK_SYSTEMS=llmrouter
+sudo make performance args="BENCHMARK_PROFILE=paper BENCHMARK_SYSTEMS=llmrouter"
+```
+
+The runner uses `serve_benchmark.py`, which constructs the pinned upstream
+OpenClaw application but disables Uvicorn access logs and its per-request route
+print. This prevents diagnostic console I/O from contaminating throughput.
+
 The adapter accepts LLMRouter's `{"query": "..."}` input and also extracts
 text from `prompt` or the latest user message in an OpenAI-style `messages`
 array. It returns the selected XSR route (`coding`, `math`, `qa`, `writing`, or

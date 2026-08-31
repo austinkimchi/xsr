@@ -29,6 +29,7 @@ REQUIRED_SYSTEMS = (
     "Envoy only",
     "XSR (SK_SKB/SOCKMAP)",
     "VSR (Envoy ExtProc)",
+    "LLMRouter (XSR reference)",
 )
 
 
@@ -107,7 +108,7 @@ def exclusion_reasons(
     paper_max_concurrency: int = 256,
     required_metrics: Iterable[str] = ("throughput_rps",),
 ) -> dict[str, list[str]]:
-    """Explain all configurations excluded from four-path paper figures."""
+    """Explain all configurations excluded from complete paper figures."""
     required = tuple(required_systems)
     required_metrics = tuple(required_metrics)
     grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)

@@ -26,6 +26,8 @@ for benchmark_arg in "$@"; do
         KEYWORD_POLICY=*) KEYWORD_POLICY="${benchmark_arg#KEYWORD_POLICY=}" ;;
         INCLUDE_STRESS=*) INCLUDE_STRESS="${benchmark_arg#INCLUDE_STRESS=}" ;;
         BENCHMARK_SYSTEMS=*) BENCHMARK_SYSTEMS="${benchmark_arg#BENCHMARK_SYSTEMS=}" ;;
+        LLMROUTER_CONFIG=*) LLMROUTER_CONFIG="${benchmark_arg#LLMROUTER_CONFIG=}" ;;
+        LLMROUTER_PORT=*) LLMROUTER_PORT="${benchmark_arg#LLMROUTER_PORT=}" ;;
     esac
 done
 
@@ -33,7 +35,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 PYTHON_BIN="${PYTHON:-${ROOT_DIR}/.venv/bin/python}"
 if [ ! -x "$PYTHON_BIN" ] && ! command -v "$PYTHON_BIN" >/dev/null 2>&1; then
-    echo "Error: benchmark Python is unavailable; run 'make benchmark' first." >&2
+    echo "Error: benchmark Python is unavailable; run 'make benchmark-install' first." >&2
     exit 1
 fi
 
@@ -73,6 +75,15 @@ VLLM_BACKEND_PORT="${VLLM_BACKEND_PORT:-18396}"
 START_VLLM_MOCK="${START_VLLM_MOCK:-0}"
 VLLM_HOST="${VLLM_HOST:-vllm-sr-envoy-container}"
 VLLM_PORT="${VLLM_PORT:-8899}"
+LLMROUTER_PYTHON="${LLMROUTER_PYTHON:-${ROOT_DIR}/.venv-llmrouter/bin/python}"
+LLMROUTER_BIN="${LLMROUTER_BIN:-${ROOT_DIR}/.venv-llmrouter/bin/llmrouter}"
+LLMROUTER_PORT="${LLMROUTER_PORT:-18083}"
+LLMROUTER_URL="${LLMROUTER_URL:-http://10.10.0.1:${LLMROUTER_PORT}/v1/chat/completions}"
+LLMROUTER_START_TIMEOUT="${LLMROUTER_START_TIMEOUT:-60}"
+LLMROUTER_PLUGIN_DIR="${LLMROUTER_PLUGIN_DIR:-${ROOT_DIR}/benchmarks/llmrouter/custom_routers}"
+LLMROUTER_SERVE_CONFIG="${LLMROUTER_SERVE_CONFIG:-${ROOT_DIR}/benchmarks/llmrouter/configs/serve-local.yaml}"
+LLMROUTER_SERVE_SCRIPT="${LLMROUTER_SERVE_SCRIPT:-${ROOT_DIR}/benchmarks/llmrouter/serve_benchmark.py}"
+LLMROUTER_CONFIG="${LLMROUTER_CONFIG:-}"
 # Set this explicitly when Docker DNS and the Docker CLI are both unavailable.
 VLLM_IP="${VLLM_IP:-}"
 IFNAME="${IFNAME:-veth0}"
@@ -112,6 +123,17 @@ if [ "$EUID" -ne 0 ] && [ "$BENCHMARK_DRY_RUN" != "1" ]; then
         KEYWORD_POLICY="$KEYWORD_POLICY"
         INCLUDE_STRESS="$INCLUDE_STRESS"
         BENCHMARK_SYSTEMS="$BENCHMARK_SYSTEMS"
+        BENCHMARK_PYTHON="$PYTHON_BIN"
+        LLMROUTER_PYTHON="$LLMROUTER_PYTHON"
+        LLMROUTER_BIN="$LLMROUTER_BIN"
+        LLMROUTER_PORT="$LLMROUTER_PORT"
+        LLMROUTER_URL="$LLMROUTER_URL"
+        LLMROUTER_START_TIMEOUT="$LLMROUTER_START_TIMEOUT"
+        LLMROUTER_PLUGIN_DIR="$LLMROUTER_PLUGIN_DIR"
+        LLMROUTER_SERVE_CONFIG="$LLMROUTER_SERVE_CONFIG"
+        LLMROUTER_SERVE_SCRIPT="$LLMROUTER_SERVE_SCRIPT"
+        LLMROUTER_CONFIG="$LLMROUTER_CONFIG"
+        XSR_DISTILL_MODEL="${XSR_DISTILL_MODEL:-}"
         XDP_PORT="$XDP_PORT"
         CODING_BACKEND_PORT="$CODING_BACKEND_PORT"
         MATH_BACKEND_PORT="$MATH_BACKEND_PORT"
@@ -168,7 +190,7 @@ if [ "$TOPOLOGY_MODE" != "host" ]; then
     exit 1
 fi
 
-DEFAULT_SYSTEMS=(direct envoy-only xsr vsr)
+DEFAULT_SYSTEMS=(direct envoy-only xsr vsr llmrouter)
 if [ -n "$BENCHMARK_SYSTEMS" ]; then
     IFS=',' read -r -a SELECTED_SYSTEMS <<< "$BENCHMARK_SYSTEMS"
 else
@@ -178,7 +200,7 @@ fi
 declare -A SEEN_SYSTEMS=()
 for system in "${SELECTED_SYSTEMS[@]}"; do
     case "$system" in
-        direct|envoy-only|xsr|vsr) ;;
+        direct|envoy-only|xsr|vsr|llmrouter) ;;
         xsr-legacy)
             if [ "$INCLUDE_XDP" != "1" ]; then
                 echo "Error: BENCHMARK_SYSTEMS=xsr-legacy requires INCLUDE_XDP=1." >&2
@@ -186,7 +208,7 @@ for system in "${SELECTED_SYSTEMS[@]}"; do
             fi
             ;;
         *)
-            echo "Error: unsupported BENCHMARK_SYSTEMS entry '${system}'; use direct,envoy-only,xsr,vsr or xsr-legacy." >&2
+            echo "Error: unsupported BENCHMARK_SYSTEMS entry '${system}'; use direct,envoy-only,xsr,vsr,llmrouter or xsr-legacy." >&2
             exit 1
             ;;
     esac
@@ -197,6 +219,10 @@ for system in "${SELECTED_SYSTEMS[@]}"; do
     SEEN_SYSTEMS[$system]=1
 done
 SELECTED_SYSTEMS_CSV="$(IFS=,; echo "${SELECTED_SYSTEMS[*]}")"
+
+system_selected() {
+    [ "${SEEN_SYSTEMS[$1]+x}" = "x" ]
+}
 
 if ! [ "${SEEN_SYSTEMS[xsr]+x}" = "x" ]; then
     XSR_WARMUP_LIFECYCLE="not-selected"
@@ -248,13 +274,29 @@ case "$BENCHMARK_MODE" in
         ;;
 esac
 
+if system_selected llmrouter && [ -z "$LLMROUTER_CONFIG" ]; then
+    if grep -Eq '^[[:space:]]*method:[[:space:]]*bm25([[:space:]]|$)' "$KEYWORD_POLICY"; then
+        LLMROUTER_CONFIG="${ROOT_DIR}/benchmarks/llmrouter/configs/bm25.yaml"
+    elif grep -Eq '^[[:space:]]*method:[[:space:]]*ngram([[:space:]]|$)' "$KEYWORD_POLICY"; then
+        LLMROUTER_CONFIG="${ROOT_DIR}/benchmarks/llmrouter/configs/ngram.yaml"
+    else
+        echo "Error: cannot infer an LLMRouter adapter config from ${KEYWORD_POLICY}; set LLMROUTER_CONFIG explicitly." >&2
+        exit 1
+    fi
+fi
+
 if [ "$BENCHMARK_DRY_RUN" = "1" ]; then
-    printf 'profile=%s trials=%s duration=%s warmup_duration=%s build_profile=%s mode=%s tool=%s concurrencies=%q include_stress=%s systems=%s\n' \
+    printf 'profile=%s trials=%s duration=%s warmup_duration=%s build_profile=%s mode=%s tool=%s concurrencies=%q include_stress=%s systems=%s llmrouter_config=%s\n' \
         "$BENCHMARK_PROFILE" "$TRIALS" "$DURATION" "$WARMUP_DURATION" \
         "$([ "$BENCHMARK_PROFILE" = paper ] && echo prod || echo dev)" "$BENCHMARK_MODE" "$WRK_BIN" \
-        "${CONCURRENCY:-${DEFAULT_CONCURRENCIES[*]}}" "$INCLUDE_STRESS" "$SELECTED_SYSTEMS_CSV"
+        "${CONCURRENCY:-${DEFAULT_CONCURRENCIES[*]}}" "$INCLUDE_STRESS" "$SELECTED_SYSTEMS_CSV" "${LLMROUTER_CONFIG:-not-selected}"
     exit 0
 fi
+
+BENCHMARK_SYSTEMS="$SELECTED_SYSTEMS_CSV" BENCHMARK_PYTHON="$PYTHON_BIN" \
+    CC="${CC:-cc}" \
+    LLMROUTER_PYTHON="$LLMROUTER_PYTHON" LLMROUTER_BIN="$LLMROUTER_BIN" \
+    VLLM_HOST="$VLLM_HOST" "${SCRIPT_DIR}/check_environments.sh"
 
 mkdir -p "$REPORT_DIR"
 RUN_ID="${RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)-$$}"
@@ -266,12 +308,20 @@ mkdir -p "$RAW_DIR"
     --systems "$SELECTED_SYSTEMS_CSV" --include-stress "$INCLUDE_STRESS" \
     --xsr-warmup-lifecycle "$XSR_WARMUP_LIFECYCLE"
 
+# Generate prompts before metadata capture so a fresh clone records the exact
+# workload hash, count, and route distribution used by the run.
+if [ ! -f "benchmarks/dataset_prompts.jsonl" ] || ! head -n 1 benchmarks/dataset_prompts.jsonl | grep -q '"x_expected_route"'; then
+    echo "Generating dataset_prompts.jsonl..."
+    "$PYTHON_BIN" "${SCRIPT_DIR}/export_prompts.py" --config "$KEYWORD_POLICY"
+fi
+
 "$PYTHON_BIN" "${SCRIPT_DIR}/collect_metadata.py" --output "${RUN_ROOT}/metadata.json" --mode "$BENCHMARK_MODE" \
     --profile "$BENCHMARK_PROFILE" --trials "$TRIALS" --duration "$DURATION" --warmup-duration "$WARMUP_DURATION" \
     --concurrency "${CONCURRENCY:-${DEFAULT_CONCURRENCIES[*]}}" --rates "$RATES" --wrk-bin "$WRK_BIN" --wrk2-bin "$WRK2_BIN" \
     --systems "$SELECTED_SYSTEMS_CSV" --include-stress "$INCLUDE_STRESS" \
     --xsr-warmup-lifecycle "$XSR_WARMUP_LIFECYCLE" --xsr-measured-instance-warmed "$XSR_MEASURED_INSTANCE_WARMED" \
     --vllm-container "$VLLM_HOST" --vsr-container "${VSR_CONTAINER:-${VLLM_HOST/envoy/router}}" \
+    --llmrouter-bin "$LLMROUTER_BIN" --llmrouter-config "${LLMROUTER_CONFIG:-}" \
     --policy "$KEYWORD_POLICY" --prompts "${ROOT_DIR}/benchmarks/dataset_prompts.jsonl"
 
 if ! ip netns exec "$NETNS" ip link show dev "$XDP_PEER_IF" >/dev/null 2>&1; then
@@ -289,18 +339,14 @@ pkill -9 mock_backend >/dev/null 2>&1 || true
 pkill -9 xdp_router >/dev/null 2>&1 || true
 pkill -9 sk_router >/dev/null 2>&1 || true
 
-# Generate prompt dataset if missing or from the older no-route-metadata format.
-if [ ! -f "benchmarks/dataset_prompts.jsonl" ] || ! head -n 1 benchmarks/dataset_prompts.jsonl | grep -q '"x_expected_route"'; then
-    echo "Generating dataset_prompts.jsonl..."
-    "$PYTHON_BIN" "${SCRIPT_DIR}/export_prompts.py" --config "$KEYWORD_POLICY"
-fi
-
 echo "Building routing proxy and mock backends..."
-if [ "$BENCHMARK_PROFILE" = "paper" ]; then
-    make KEYWORD_POLICY="$KEYWORD_POLICY" prod
-    make benchmarks/mock_backend
-else
-    make KEYWORD_POLICY="$KEYWORD_POLICY" dev
+make benchmarks/mock_backend
+if system_selected xsr; then
+    if [ "$BENCHMARK_PROFILE" = "paper" ]; then
+        make KEYWORD_POLICY="$KEYWORD_POLICY" prod
+    else
+        make KEYWORD_POLICY="$KEYWORD_POLICY" dev
+    fi
 fi
 if [ "$INCLUDE_XDP" = "1" ]; then
     make KEYWORD_POLICY="$KEYWORD_POLICY" legacy
@@ -314,6 +360,9 @@ iptables -D INPUT -p tcp --dport "${OTHERS_BACKEND_PORT}" -j ACCEPT >/dev/null 2
 iptables -D INPUT -p tcp --dport "${QA_BACKEND_PORT}" -j ACCEPT >/dev/null 2>&1 || true
 iptables -D INPUT -p tcp --dport "${WRITING_BACKEND_PORT}" -j ACCEPT >/dev/null 2>&1 || true
 iptables -D INPUT -p tcp --dport "${VLLM_BACKEND_PORT}" -j ACCEPT >/dev/null 2>&1 || true
+if system_selected llmrouter; then
+    iptables -D INPUT -p tcp --dport "${LLMROUTER_PORT}" -j ACCEPT >/dev/null 2>&1 || true
+fi
 
 # Add iptables rules
 iptables -I INPUT 1 -p tcp --dport "${XDP_PORT}" -j ACCEPT >/dev/null 2>&1 || true
@@ -323,6 +372,9 @@ iptables -I INPUT 1 -p tcp --dport "${OTHERS_BACKEND_PORT}" -j ACCEPT >/dev/null
 iptables -I INPUT 1 -p tcp --dport "${QA_BACKEND_PORT}" -j ACCEPT >/dev/null 2>&1 || true
 iptables -I INPUT 1 -p tcp --dport "${WRITING_BACKEND_PORT}" -j ACCEPT >/dev/null 2>&1 || true
 iptables -I INPUT 1 -p tcp --dport "${VLLM_BACKEND_PORT}" -j ACCEPT >/dev/null 2>&1 || true
+if system_selected llmrouter; then
+    iptables -I INPUT 1 -p tcp --dport "${LLMROUTER_PORT}" -j ACCEPT >/dev/null 2>&1 || true
+fi
 
 # Keep XDP exposed to ordinary MTU-sized TCP segments during benchmark runs.
 ip link set dev "$IFNAME" mtu 1500
@@ -360,6 +412,8 @@ fi
 
 ROUTER_PID=""
 ROUTER_LOG="/tmp/sk_router_wrk.log"
+LLMROUTER_PID=""
+LLMROUTER_LOG="${RUN_ROOT}/raw/llmrouter-server.log"
 VLLM_IF=""
 ENVOY_ONLY_IP=""
 ENVOY_ONLY_IF=""
@@ -380,7 +434,8 @@ wait_for_ns_port() {
     local host="$1"
     local port="$2"
     local name="$3"
-    local deadline=$((SECONDS + 10))
+    local timeout_seconds="${4:-10}"
+    local deadline=$((SECONDS + timeout_seconds))
 
     while [ "$SECONDS" -lt "$deadline" ]; do
         if timeout 1 ip netns exec "$NETNS" bash -c ":</dev/tcp/${host}/${port}" >/dev/null 2>&1; then
@@ -389,7 +444,7 @@ wait_for_ns_port() {
         sleep 0.1
     done
 
-    echo "Error: ${name} is not reachable from ${NETNS} at ${host}:${port} after 10 seconds." >&2
+    echo "Error: ${name} is not reachable from ${NETNS} at ${host}:${port} after ${timeout_seconds} seconds." >&2
     return 1
 }
 
@@ -415,6 +470,48 @@ wait_for_router_ready() {
     echo "Error: ${name} did not report ready; router log:"
     cat "$ROUTER_LOG"
     exit 1
+}
+
+start_llmrouter() {
+    echo "Starting LLMRouter baseline..."
+    mkdir -p "$(dirname "$LLMROUTER_LOG")"
+    LLMROUTER_PLUGINS="$LLMROUTER_PLUGIN_DIR" \
+        "$LLMROUTER_PYTHON" "$LLMROUTER_SERVE_SCRIPT" \
+        --config "$LLMROUTER_SERVE_CONFIG" \
+        --router xsr_reference \
+        --router-config "$LLMROUTER_CONFIG" \
+        --host 0.0.0.0 \
+        --port "$LLMROUTER_PORT" > "$LLMROUTER_LOG" 2>&1 &
+    LLMROUTER_PID=$!
+    if ! wait_for_ns_port "10.10.0.1" "$LLMROUTER_PORT" "LLMRouter baseline" "$LLMROUTER_START_TIMEOUT"; then
+        cat "$LLMROUTER_LOG" >&2 || true
+        return 1
+    fi
+}
+
+verify_llmrouter_backend_routing() {
+    local expected prompt response
+
+    echo "Verifying LLMRouter routes reach distinct marker backends..."
+    while IFS='|' read -r expected prompt; do
+        response=$(ip netns exec "$NETNS" curl --silent --show-error --fail \
+            --max-time 10 -H 'Content-Type: application/json' \
+            --data "{\"model\":\"auto\",\"messages\":[{\"role\":\"user\",\"content\":\"${prompt}\"}]}" \
+            "$LLMROUTER_URL") || {
+            echo "Error: LLMRouter preflight request for ${expected} failed." >&2
+            return 1
+        }
+        if ! grep -Fq "\"backend\":\"${expected}\"" <<<"$response"; then
+            echo "Error: LLMRouter preflight expected backend=${expected}, got: ${response}" >&2
+            return 1
+        fi
+    done <<'EOF'
+coding|write a python function
+math|calculate the derivative of x squared
+qa|answer this question: what is the capital of France?
+writing|write a short poem about rain
+others|tell me a short story
+EOF
 }
 
 setup_vllm_route() {
@@ -557,10 +654,6 @@ others|tell me a short story
 EOF
 }
 
-system_selected() {
-    [ "${SEEN_SYSTEMS[$1]+x}" = "x" ]
-}
-
 check_marker_backend_processes() {
     local pid
     for pid in "$CODING_MOCK_PID" "$MATH_MOCK_PID" "$OTHERS_MOCK_PID" "$QA_MOCK_PID" "$WRITING_MOCK_PID"; do
@@ -574,7 +667,7 @@ check_marker_backend_processes() {
 cleanup() {
     echo ""
     echo "Cleaning up processes and network rules..."
-    for pid in "$ROUTER_PID" "$CODING_MOCK_PID" "$MATH_MOCK_PID" "$OTHERS_MOCK_PID" "$QA_MOCK_PID" "$WRITING_MOCK_PID" "$VLLM_MOCK_PID"; do
+    for pid in "$ROUTER_PID" "$LLMROUTER_PID" "$CODING_MOCK_PID" "$MATH_MOCK_PID" "$OTHERS_MOCK_PID" "$QA_MOCK_PID" "$WRITING_MOCK_PID" "$VLLM_MOCK_PID"; do
         if [ -n "$pid" ]; then
             kill -9 "$pid" >/dev/null 2>&1 || true
             wait "$pid" 2>/dev/null || true
@@ -587,6 +680,9 @@ cleanup() {
     iptables -D INPUT -p tcp --dport "${QA_BACKEND_PORT}" -j ACCEPT >/dev/null 2>&1 || true
     iptables -D INPUT -p tcp --dport "${WRITING_BACKEND_PORT}" -j ACCEPT >/dev/null 2>&1 || true
     iptables -D INPUT -p tcp --dport "${VLLM_BACKEND_PORT}" -j ACCEPT >/dev/null 2>&1 || true
+    if system_selected llmrouter; then
+        iptables -D INPUT -p tcp --dport "${LLMROUTER_PORT}" -j ACCEPT >/dev/null 2>&1 || true
+    fi
     if [ "$VLLM_NAT_ADDED" = "1" ]; then
         iptables -t nat -D POSTROUTING -s 10.10.0.0/24 -d "$VLLM_IP" -o "$VLLM_IF" -j MASQUERADE >/dev/null 2>&1 || true
     fi
@@ -733,7 +829,7 @@ run_wrk() {
 
 system_topology() {
     case "$1" in
-        direct|xsr|xsr-legacy) echo host-veth ;;
+        direct|xsr|xsr-legacy|llmrouter) echo host-veth ;;
         envoy-only|vsr) echo docker-bridge ;;
         *) echo unavailable ;;
     esac
@@ -748,7 +844,7 @@ run_benchmark() {
     echo "- Timestamp: \`$(date)\`"
     echo "- Tool: \`${WRK_BIN}\`"
     echo "- Mode: \`${BENCHMARK_MODE}\`"
-    echo "- Topology: XSR (SK_SKB/SOCKMAP)=\`host-veth\`, direct=\`host-veth\`, Envoy-only=\`docker-bridge\`, VSR (Envoy ExtProc)=\`docker-bridge\`"
+    echo "- Topology: XSR (SK_SKB/SOCKMAP)=\`host-veth\`, direct=\`host-veth\`, LLMRouter=\`host-veth\`, Envoy-only=\`docker-bridge\`, VSR (Envoy ExtProc)=\`docker-bridge\`"
     echo "- Timed response-body validation: \`disabled\` (routing correctness is measured separately)"
     echo "- Threads: \`${THREADS}\`"
     echo "- Connections: \`${CONCURRENCY}\`"
@@ -790,6 +886,11 @@ run_benchmark() {
                 wait_for_ns_port "$VLLM_IP" "$VLLM_PORT" "vLLM-SR Envoy (${VLLM_HOST})" || return 1
                 validate_untimed_load "vsr" "$VLLM_URL" || return 1
                 ;;
+            llmrouter)
+                heading="LLMRouter (XSR reference)"
+                wait_for_ns_port "10.10.0.1" "$LLMROUTER_PORT" "LLMRouter baseline" || return 1
+                validate_untimed_load "llmrouter" "$LLMROUTER_URL" || return 1
+                ;;
             *) echo "Error: unsupported benchmark system ${system}." >&2; return 1 ;;
         esac
         echo "## [${step}/${route_count}] ${heading}"
@@ -799,6 +900,7 @@ run_benchmark() {
             envoy-only) run_wrk "$ENVOY_ONLY_URL" "$heading" "$system" || return 1 ;;
             xsr|xsr-legacy) run_wrk "$XDP_URL" "$heading" "$system" || return 1 ;;
             vsr) run_wrk "$VLLM_URL" "$heading" "$system" || return 1 ;;
+            llmrouter) run_wrk "$LLMROUTER_URL" "$heading" "$system" || return 1 ;;
         esac
         echo "\`\`\`"
         echo ""
@@ -836,6 +938,10 @@ if system_selected xsr-legacy; then
     start_routing_proxy proxy "${RUN_ROOT}/raw/xsr-legacy-invocation-preflight.log"
     verify_router_backend_routing "XSR (legacy)"
     stop_routing_proxy
+fi
+if system_selected llmrouter; then
+    start_llmrouter
+    verify_llmrouter_backend_routing
 fi
 detach_xdp
 
