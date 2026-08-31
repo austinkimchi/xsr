@@ -1,0 +1,4 @@
+xsr:
+  method: intent
+  # Set XSR_DISTILL_MODEL to the reviewed deployment .xsrf artifact.
+  model: ""

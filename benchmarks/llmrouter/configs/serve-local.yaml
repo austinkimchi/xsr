@@ -1,0 +1,36 @@
+serve:
+  host: 127.0.0.1
+  port: 8000
+  show_model_prefix: false
+
+router:
+  strategy: llmrouter
+  llmrouter:
+    name: xsr_reference
+
+llms:
+  coding:
+    provider: local
+    model: coding
+    base_url: http://127.0.0.1:18391
+    auth_mode: none
+  math:
+    provider: local
+    model: math
+    base_url: http://127.0.0.1:18392
+    auth_mode: none
+  others:
+    provider: local
+    model: others
+    base_url: http://127.0.0.1:18393
+    auth_mode: none
+  qa:
+    provider: local
+    model: qa
+    base_url: http://127.0.0.1:18394
+    auth_mode: none
+  writing:
+    provider: local
+    model: writing
+    base_url: http://127.0.0.1:18395
+    auth_mode: none

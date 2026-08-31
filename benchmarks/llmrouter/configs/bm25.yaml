@@ -1,0 +1,3 @@
+xsr:
+  method: bm25
+  policy: ../../../config/policy_bm25.yaml
