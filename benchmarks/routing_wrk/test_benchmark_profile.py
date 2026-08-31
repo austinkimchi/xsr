@@ -55,6 +55,19 @@ class BenchmarkProfileTest(unittest.TestCase):
         self.assertNotIn("writing|write a short poem", intent_block)
         self.assertEqual(source.count("done < <(preflight_routing_cases)"), 3)
 
+    def test_legacy_only_builds_generate_and_validate_the_requested_profile(self) -> None:
+        source = SCRIPT.read_text(encoding="utf-8")
+        self.assertGreaterEqual(
+            source.count('if system_selected xsr || [ "$INCLUDE_XDP" = "1" ]; then'),
+            2,
+        )
+        self.assertIn('KEYWORD_POLICY="$BUILD_KEYWORD_POLICY"', source)
+
+    def test_metadata_uses_pre_generation_source_state(self) -> None:
+        source = SCRIPT.read_text(encoding="utf-8")
+        self.assertIn('--source-working-tree "$XSR_SOURCE_WORKING_TREE"', source)
+        self.assertLess(source.index("XSR_SOURCE_WORKING_TREE="), source.index("make -s KEYWORD_POLICY="))
+
     def test_xsr_warmup_uses_quiescence_without_a_router_restart(self) -> None:
         source = SCRIPT.read_text(encoding="utf-8")
         self.assertIn("same-process-load-warmup", source)

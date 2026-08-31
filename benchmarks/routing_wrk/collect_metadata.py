@@ -120,6 +120,8 @@ def main() -> None:
     parser.add_argument("--effective-signal-profile", required=True)
     parser.add_argument("--effective-parity-debug", required=True)
     parser.add_argument("--vsr-verification", type=Path)
+    parser.add_argument("--source-commit", required=True)
+    parser.add_argument("--source-working-tree", required=True, choices=("clean", "dirty", "unavailable"))
     args = parser.parse_args()
     systems = set(args.systems.split(","))
     uses_docker = bool(systems & {"envoy-only", "vsr"})
@@ -134,12 +136,11 @@ def main() -> None:
             f"found {actual_prompts_sha}"
         )
     distill_model = Path(args.xsr_distill_model).expanduser().resolve() if args.xsr_distill_model else None
-    status = command("git", "status", "--porcelain") or ""
     os_release = Path("/etc/os-release").read_text(encoding="utf-8", errors="replace") if Path("/etc/os-release").exists() else None
     metadata: dict[str, Any] = {
         "xsr": {
             "repository_url": command("git", "config", "--get", "remote.origin.url"), "branch": command("git", "branch", "--show-current"),
-            "commit": command("git", "rev-parse", "HEAD"), "working_tree": "clean" if not status else "dirty",
+            "commit": args.source_commit or None, "working_tree": args.source_working_tree,
             "build_profile": "prod" if args.profile == "paper" else "dev", "compiler": command("cc", "--version"),
             "compile_flags": "Makefile OPT_CFLAGS / BPF_CFLAGS", "routing_mode": "SK_SKB/SOCKMAP",
             "distill_model": {

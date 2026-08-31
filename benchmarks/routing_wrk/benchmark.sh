@@ -110,6 +110,10 @@ ENVOY_ONLY_CONTAINER="${ENVOY_ONLY_CONTAINER:-xsr-benchmark-envoy-only-${RUN_ID:
 ENVOY_ONLY_URL="${ENVOY_ONLY_URL:-}"
 REPORT_DIR="${ROOT_DIR}/results/routing-performance"
 KEYWORD_POLICY="${KEYWORD_POLICY:-${ROOT_DIR}/config/policy_ngram.yaml}"
+BUILD_KEYWORD_POLICY="$KEYWORD_POLICY"
+case "$BUILD_KEYWORD_POLICY" in
+    "$ROOT_DIR"/*) BUILD_KEYWORD_POLICY="${BUILD_KEYWORD_POLICY#"$ROOT_DIR"/}" ;;
+esac
 DEFAULT_PROMPTS_FILE="${ROOT_DIR}/benchmarks/dataset_prompts.jsonl"
 if [ "${PROMPTS_EXPLICIT+x}" != "x" ]; then
     if [ "${PROMPTS_FILE+x}" = "x" ]; then
@@ -126,6 +130,19 @@ XSR_DISTILL_PARITY_DEBUG="${XSR_DISTILL_PARITY_DEBUG:-0}"
 VSR_SIGNAL_PROFILE="${VSR_SIGNAL_PROFILE:-}"
 VSR_CONFIG_PATH="${VSR_CONFIG_PATH:-}"
 VSR_CONFIG_SHA256="${VSR_CONFIG_SHA256:-}"
+XSR_SOURCE_COMMIT="${XSR_SOURCE_COMMIT:-}"
+if [ -z "$XSR_SOURCE_COMMIT" ]; then
+    XSR_SOURCE_COMMIT="$(git -C "$ROOT_DIR" rev-parse HEAD 2>/dev/null || echo unavailable)"
+fi
+if [ -z "${XSR_SOURCE_WORKING_TREE:-}" ]; then
+    if ! source_status="$(git -C "$ROOT_DIR" status --porcelain 2>/dev/null)"; then
+        XSR_SOURCE_WORKING_TREE=unavailable
+    elif [ -z "$source_status" ]; then
+        XSR_SOURCE_WORKING_TREE=clean
+    else
+        XSR_SOURCE_WORKING_TREE=dirty
+    fi
+fi
 export XSR_DISTILL_MODEL
 
 if [ "$EUID" -ne 0 ] && [ "$BENCHMARK_DRY_RUN" != "1" ]; then
@@ -169,6 +186,8 @@ if [ "$EUID" -ne 0 ] && [ "$BENCHMARK_DRY_RUN" != "1" ]; then
         VSR_SIGNAL_PROFILE="$VSR_SIGNAL_PROFILE"
         VSR_CONFIG_PATH="$VSR_CONFIG_PATH"
         VSR_CONFIG_SHA256="$VSR_CONFIG_SHA256"
+        XSR_SOURCE_COMMIT="$XSR_SOURCE_COMMIT"
+        XSR_SOURCE_WORKING_TREE="$XSR_SOURCE_WORKING_TREE"
         XDP_PORT="$XDP_PORT"
         CODING_BACKEND_PORT="$CODING_BACKEND_PORT"
         MATH_BACKEND_PORT="$MATH_BACKEND_PORT"
@@ -415,8 +434,8 @@ if system_selected vsr; then
     "$PYTHON_BIN" "${SCRIPT_DIR}/verify_vsr_config.py" "${vsr_verify_args[@]}"
 fi
 
-if system_selected xsr; then
-    make -s KEYWORD_POLICY="$KEYWORD_POLICY" SIGNAL_PROFILE="$SIGNAL_PROFILE" \
+if system_selected xsr || [ "$INCLUDE_XDP" = "1" ]; then
+    make -s KEYWORD_POLICY="$BUILD_KEYWORD_POLICY" SIGNAL_PROFILE="$SIGNAL_PROFILE" \
         XSR_DISTILL_PARITY_DEBUG="$XSR_DISTILL_PARITY_DEBUG" policy
     EFFECTIVE_COMPILED_PROFILE="$(sed -n 's/^#define XDP_SIGNAL_PROFILE_NAME "\([^"]*\)"/\1/p' "${ROOT_DIR}/bpf/stages/signals/generated/xdp_keyword_modules.generated.h")"
     EFFECTIVE_PARITY_DEBUG="$(sed -n 's/^#define XSR_DISTILL_PARITY_DEBUG \([01]\)$/\1/p' "${ROOT_DIR}/bpf/stages/signals/generated/xdp_keyword_modules.generated.h")"
@@ -462,6 +481,7 @@ metadata_vsr_args=()
     --policy "$KEYWORD_POLICY" --workload-descriptor "$WORKLOAD_DESCRIPTOR" --xsr-distill-model "$XSR_DISTILL_MODEL" \
     --signal-profile "$SIGNAL_PROFILE" --parity-debug "$XSR_DISTILL_PARITY_DEBUG" \
     --effective-signal-profile "$EFFECTIVE_COMPILED_PROFILE" --effective-parity-debug "$EFFECTIVE_PARITY_DEBUG" \
+    --source-commit "$XSR_SOURCE_COMMIT" --source-working-tree "$XSR_SOURCE_WORKING_TREE" \
     "${metadata_vsr_args[@]}"
 
 if ! ip netns exec "$NETNS" ip link show dev "$XDP_PEER_IF" >/dev/null 2>&1; then
@@ -482,12 +502,12 @@ echo "Building routing proxy and mock backends..."
 make benchmarks/mock_backend
 if system_selected xsr; then
     if [ "$BENCHMARK_PROFILE" = "paper" ]; then
-        make KEYWORD_POLICY="$KEYWORD_POLICY" SIGNAL_PROFILE="$SIGNAL_PROFILE" XSR_DISTILL_PARITY_DEBUG="$XSR_DISTILL_PARITY_DEBUG" prod
+        make KEYWORD_POLICY="$BUILD_KEYWORD_POLICY" SIGNAL_PROFILE="$SIGNAL_PROFILE" XSR_DISTILL_PARITY_DEBUG="$XSR_DISTILL_PARITY_DEBUG" prod
     else
-        make KEYWORD_POLICY="$KEYWORD_POLICY" SIGNAL_PROFILE="$SIGNAL_PROFILE" XSR_DISTILL_PARITY_DEBUG="$XSR_DISTILL_PARITY_DEBUG" dev
+        make KEYWORD_POLICY="$BUILD_KEYWORD_POLICY" SIGNAL_PROFILE="$SIGNAL_PROFILE" XSR_DISTILL_PARITY_DEBUG="$XSR_DISTILL_PARITY_DEBUG" dev
     fi
 fi
-if system_selected xsr; then
+if system_selected xsr || [ "$INCLUDE_XDP" = "1" ]; then
     compiled_profile="$(sed -n 's/^#define XDP_SIGNAL_PROFILE_NAME "\([^"]*\)"/\1/p' "${ROOT_DIR}/bpf/stages/signals/generated/xdp_keyword_modules.generated.h")"
     compiled_parity="$(sed -n 's/^#define XSR_DISTILL_PARITY_DEBUG \([01]\)$/\1/p' "${ROOT_DIR}/bpf/stages/signals/generated/xdp_keyword_modules.generated.h")"
     if [ "$compiled_profile" != "$SIGNAL_PROFILE" ] || [ "$compiled_parity" != "$XSR_DISTILL_PARITY_DEBUG" ]; then
@@ -496,7 +516,7 @@ if system_selected xsr; then
     fi
 fi
 if [ "$INCLUDE_XDP" = "1" ]; then
-    make KEYWORD_POLICY="$KEYWORD_POLICY" SIGNAL_PROFILE="$SIGNAL_PROFILE" XSR_DISTILL_PARITY_DEBUG="$XSR_DISTILL_PARITY_DEBUG" legacy
+    make KEYWORD_POLICY="$BUILD_KEYWORD_POLICY" SIGNAL_PROFILE="$SIGNAL_PROFILE" XSR_DISTILL_PARITY_DEBUG="$XSR_DISTILL_PARITY_DEBUG" legacy
 fi
 
 # Flush old iptables rules for these ports
