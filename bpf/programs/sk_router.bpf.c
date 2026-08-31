@@ -389,11 +389,17 @@ int sk_router_verdict(struct __sk_buff *skb) {
   }
 
   if (entry->flags & SK_ROUTER_FLAG_BACKEND) {
+    struct sk_lifecycle_state *lifecycle =
+        bpf_map_lookup_elem(&sk_lifecycle, &entry->client_cookie);
+
     increment_counter(COUNT_TCP);
     result = bpf_sk_redirect_map(skb, &sk_sock_map, entry->client_slot,
                                  SK_REDIRECT_FLAGS);
-    if (result != SK_PASS)
+    if (result != SK_PASS) {
       increment_counter(COUNT_NO_PAYLOAD);
+    } else if (lifecycle) {
+      __sync_fetch_and_add(&lifecycle->response_bytes_forwarded, skb->len);
+    }
     return result;
   }
 
@@ -424,8 +430,15 @@ int sk_router_verdict(struct __sk_buff *skb) {
   increment_counter(COUNT_CONTENT_FOUND);
   result =
       bpf_sk_redirect_map(skb, &sk_sock_map, target_slot, SK_REDIRECT_FLAGS);
-  if (result != SK_PASS)
+  if (result != SK_PASS) {
     increment_counter(COUNT_NO_PAYLOAD);
+  } else {
+    struct sk_lifecycle_state *lifecycle =
+        bpf_map_lookup_elem(&sk_lifecycle, &entry->client_cookie);
+
+    if (lifecycle)
+      lifecycle->flags |= SK_LIFECYCLE_REQUEST_FORWARDED;
+  }
   return result;
 }
 

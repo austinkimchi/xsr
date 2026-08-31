@@ -21,7 +21,8 @@ def status_line(pid: int, active: int, reaped: int) -> bytes:
         f"pid={pid} active_connection_sets={active} free_slot_sets={2730-active} "
         f"quarantined_slot_sets=0 accepted_total={reaped+active} reaped_total={reaped} "
         f"sockmap_entries={entries} routes_entries={entries} "
-        f"http_flows_entries={active} route_decisions_entries=0\n"
+        f"http_flows_entries={active} route_decisions_entries=0 "
+        f"lifecycle_entries={active}\n"
     ).encode("ascii")
 
 

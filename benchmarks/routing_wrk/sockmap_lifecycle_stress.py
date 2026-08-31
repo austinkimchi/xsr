@@ -9,8 +9,9 @@ import json
 import socket
 import time
 from pathlib import Path
+from typing import Callable
 
-from wait_for_xsr_quiescence import wait_for_quiescence
+from wait_for_xsr_quiescence import read_status, wait_for_quiescence
 
 
 ROUTES = (
@@ -53,6 +54,7 @@ def request_once(
     request_backend_close: bool = False,
     half_close: bool = False,
     no_response: bool = False,
+    before_half_close: Callable[[], None] | None = None,
 ) -> str:
     expected, prompt = ROUTES[sequence % len(ROUTES)]
     route_sequence = (
@@ -78,15 +80,17 @@ def request_once(
         client.settimeout(10)
         client.sendall(request)
         if half_close:
-            # Let XSR finish installing the accepted socket set before the FIN;
-            # the delayed backend response still spans multiple lifecycle ticks.
-            time.sleep(0.05)
+            if before_half_close:
+                before_half_close()
             client.shutdown(socket.SHUT_WR)
         if no_response:
             if client.recv(1):
                 raise AssertionError(f"request {sequence}: expected an empty response")
             return expected
-        parsed = json.loads(receive_http_response(client))
+        try:
+            parsed = json.loads(receive_http_response(client))
+        except Exception as error:
+            raise RuntimeError(f"request {sequence}: response failed") from error
     if parsed.get("backend") != expected:
         raise AssertionError(
             f"request {sequence}: expected backend={expected}, found {parsed!r}"
@@ -100,6 +104,20 @@ def request_once(
 
 def fd_count(pid: int) -> int:
     return len(list((Path("/proc") / str(pid) / "fd").iterdir()))
+
+
+def wait_for_accepted(
+    status_socket: Path, pid: int, minimum_accepted: int, timeout: float
+) -> None:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        status = read_status(status_socket)
+        if status["pid"] != pid:
+            raise RuntimeError(f"XSR PID changed: expected {pid}, found {status['pid']}")
+        if status["accepted_total"] >= minimum_accepted:
+            return
+        time.sleep(0.01)
+    raise TimeoutError(f"XSR did not accept connection {minimum_accepted}")
 
 
 def run_wave(host: str, port: int, start: int, count: int) -> None:
@@ -128,17 +146,38 @@ def main() -> None:
     baseline_fds = fd_count(args.pid)
     max_sampled_fds = baseline_fds
     sequence = 0
+    expected_accepted = baseline["accepted_total"]
 
     for _ in ROUTES:
-        request_once(args.host, args.port, sequence, half_close=True)
+        expected_accepted += 1
+        request_once(
+            args.host,
+            args.port,
+            sequence,
+            half_close=True,
+            before_half_close=lambda expected=expected_accepted: wait_for_accepted(
+                args.status_socket, args.pid, expected, args.cleanup_timeout
+            ),
+        )
         sequence += 1
     expected_reaped = baseline["reaped_total"] + len(ROUTES)
     after_half_close = wait_for_quiescence(
         args.status_socket, args.pid, args.cleanup_timeout, expected_reaped
     )
 
+    expected_accepted += 1
     request_once(
-        args.host, args.port, sequence, half_close=True, no_response=True
+        args.host,
+        args.port,
+        sequence,
+        half_close=True,
+        no_response=True,
+        before_half_close=lambda: wait_for_accepted(
+            args.status_socket,
+            args.pid,
+            expected_accepted,
+            args.cleanup_timeout,
+        ),
     )
     sequence += 1
     expected_reaped += 1

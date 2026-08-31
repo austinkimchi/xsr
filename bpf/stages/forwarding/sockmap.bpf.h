@@ -3,6 +3,7 @@
 
 #define SK_ROUTER_MAX_SOCKS 16384
 #define SK_ROUTER_FLAG_BACKEND 1
+#define SK_LIFECYCLE_REQUEST_FORWARDED 1
 #define SK_REDIRECT_FLAGS 0
 
 #define SK_MODEL_CODING 1
@@ -25,6 +26,7 @@ struct {
 } sk_sock_map SEC(".maps");
 
 struct sk_route_entry {
+  __u64 client_cookie;
   __u32 client_slot;
   __u32 coding_slot;
   __u32 math_slot;
@@ -34,11 +36,24 @@ struct sk_route_entry {
   __u32 flags;
 };
 
+struct sk_lifecycle_state {
+  __u64 response_bytes_forwarded;
+  __u32 flags;
+  __u32 reserved;
+};
+
 struct {
   __uint(type, BPF_MAP_TYPE_HASH);
   __uint(max_entries, SK_ROUTER_MAX_SOCKS);
   __type(key, __u64);
   __type(value, struct sk_route_entry);
 } sk_routes SEC(".maps");
+
+struct {
+  __uint(type, BPF_MAP_TYPE_HASH);
+  __uint(max_entries, SK_ROUTER_MAX_SOCKS);
+  __type(key, __u64);
+  __type(value, struct sk_lifecycle_state);
+} sk_lifecycle SEC(".maps");
 
 #endif

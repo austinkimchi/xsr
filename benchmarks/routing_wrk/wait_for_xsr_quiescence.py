@@ -32,6 +32,7 @@ def read_status(path: Path, timeout: float = 1.0) -> dict[str, int]:
         "routes_entries",
         "http_flows_entries",
         "route_decisions_entries",
+        "lifecycle_entries",
     }
     missing = required - values.keys()
     if missing:
@@ -63,6 +64,7 @@ def wait_for_quiescence(
                 and last_status["routes_entries"] == 0
                 and last_status["http_flows_entries"] == 0
                 and last_status["route_decisions_entries"] == 0
+                and last_status["lifecycle_entries"] == 0
                 and last_status["reaped_total"] >= minimum_reaped
             ):
                 return last_status
