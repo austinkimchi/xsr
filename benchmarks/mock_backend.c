@@ -30,15 +30,17 @@ static const char *backend_name = DEFAULT_BACKEND;
 static unsigned int response_delay_ms;
 static unsigned char delay_available = 1;
 
-static void delay_first_response(void) {
+static int claim_delayed_response(void) {
+  return response_delay_ms &&
+         __atomic_exchange_n(&delay_available, 0, __ATOMIC_RELAXED);
+}
+
+static void delay_response(void) {
   struct timespec delay = {
       .tv_sec = response_delay_ms / 1000,
       .tv_nsec = (long)(response_delay_ms % 1000) * 1000000L,
   };
 
-  if (!response_delay_ms ||
-      !__atomic_exchange_n(&delay_available, 0, __ATOMIC_RELAXED))
-    return;
   while (nanosleep(&delay, &delay) != 0)
     ;
 }
@@ -245,9 +247,23 @@ static void *worker_thread(void *arg) {
                    "%s",
                    body_len, keep_alive ? "keep-alive" : "close", body);
 #ifdef XSR_MOCK_DELAY
-      delay_first_response();
-#endif
+      ssize_t w;
+      if (claim_delayed_response()) {
+        size_t first_chunk = (size_t)response_len / 2;
+        w = write(client_fd, response, first_chunk);
+        if (w != (ssize_t)first_chunk)
+          goto close_client;
+        delay_response();
+        size_t second_chunk = (size_t)response_len - first_chunk;
+        w = write(client_fd, response + first_chunk, second_chunk);
+        if (w != (ssize_t)second_chunk)
+          goto close_client;
+      } else {
+        w = write(client_fd, response, (size_t)response_len);
+      }
+#else
       ssize_t w = write(client_fd, response, (size_t)response_len);
+#endif
       if (w <= 0)
         goto close_client;
 

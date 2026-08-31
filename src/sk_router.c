@@ -86,6 +86,7 @@ struct connection_set {
   unsigned char allocated;
   unsigned char active;
   unsigned char peer_write_closed;
+  unsigned char backend_writes_shutdown;
   unsigned char sockmap_installed[SOCKS_PER_CONNECTION];
   unsigned char route_installed[SOCKS_PER_CONNECTION];
 };
@@ -801,6 +802,7 @@ static void reset_connection_set(struct connection_set *set) {
   set->allocated = 0;
   set->active = 0;
   set->peer_write_closed = 0;
+  set->backend_writes_shutdown = 0;
 }
 
 static int get_tcp_info(int fd, struct tcp_info *info) {
@@ -808,6 +810,34 @@ static int get_tcp_info(int fd, struct tcp_info *info) {
 
   memset(info, 0, sizeof(*info));
   return getsockopt(fd, IPPROTO_TCP, TCP_INFO, info, &info_len);
+}
+
+static void shutdown_backend_writes(struct connection_set *set) {
+  for (int member = 1; member < SOCKS_PER_CONNECTION; member++)
+    if (set->fds[member] >= 0 && shutdown(set->fds[member], SHUT_WR) != 0 &&
+        errno != ENOTCONN)
+      fprintf(stderr, "warning: backend write shutdown failed: %s\n",
+              strerror(errno));
+  set->backend_writes_shutdown = 1;
+}
+
+static int backend_responses_complete(const struct connection_set *set) {
+  struct pollfd backends[SOCKS_PER_CONNECTION - 1];
+  int ready;
+
+  for (int member = 1; member < SOCKS_PER_CONNECTION; member++) {
+    backends[member - 1].fd = set->fds[member];
+    backends[member - 1].events = POLLRDHUP | POLLHUP | POLLERR;
+    backends[member - 1].revents = 0;
+  }
+  ready = poll(backends, SOCKS_PER_CONNECTION - 1, 0);
+  if (ready < 0)
+    return 0;
+  for (int member = 1; member < SOCKS_PER_CONNECTION; member++)
+    if (!(backends[member - 1].revents &
+          (POLLRDHUP | POLLHUP | POLLERR | POLLNVAL)))
+      return 0;
+  return 1;
 }
 
 static int reap_connection_set(struct connection_manager *manager,
@@ -937,6 +967,7 @@ static int add_connection_set(struct connection_manager *manager,
    * SOCKMAP, so zero is the accepted socket's application-byte baseline. */
   set->initial_bytes_acked = 0;
   set->peer_write_closed = 0;
+  set->backend_writes_shutdown = 0;
 
   for (int member = 1; member < SOCKS_PER_CONNECTION; member++) {
     set->fds[member] = connect_backend(backend_ports[member]);
@@ -1152,9 +1183,16 @@ static void poll_connection_lifecycle(struct connection_manager *manager) {
       flow_present =
           map_contains_key(manager->http_flows_fd,
                            &set->cookies[CONNECTION_CLIENT], sizeof(__u64));
-      if (info.tcpi_bytes_received == 0 || flow_present ||
-          (info.tcpi_bytes_acked > set->initial_bytes_acked &&
-           info.tcpi_unacked == 0 && info.tcpi_notsent_bytes == 0))
+      if (info.tcpi_bytes_received == 0 || flow_present) {
+        reap_connection_set(manager, manager->poll_set_indices[i],
+                            "frontend half-close without complete request");
+        continue;
+      }
+      if (!set->backend_writes_shutdown)
+        shutdown_backend_writes(set);
+      if (backend_responses_complete(set) &&
+          info.tcpi_bytes_acked > set->initial_bytes_acked &&
+          info.tcpi_unacked == 0 && info.tcpi_notsent_bytes == 0)
         reap_connection_set(manager, manager->poll_set_indices[i],
                             "frontend half-close drained");
     }
