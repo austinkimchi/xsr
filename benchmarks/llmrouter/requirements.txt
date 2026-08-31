@@ -1,0 +1,1 @@
+llmrouter-lib @ git+https://github.com/ulab-uiuc/LLMRouter.git@da3430baaea672743c3957457b0c76faba19876e

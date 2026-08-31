@@ -5,6 +5,7 @@ BPF_CLANG ?= clang
 PKG_CONFIG ?= pkg-config
 PYTHON ?= python3
 BENCHMARK_PYTHON ?= $(CURDIR)/.venv/bin/python
+LLMROUTER_PYTHON ?= $(CURDIR)/.venv-llmrouter/bin/python
 NOFILE_LIMIT ?= 16384
 
 ARCH := $(shell uname -m)
@@ -55,6 +56,8 @@ help:
 	@echo "  make test            Run dependency-free unit tests"
 	@echo "  make profile-check   Validate benchmark profiles without running them"
 	@echo "  make test-distill    Run NumPy distillation tests in the benchmark venv"
+	@echo "  make llmrouter-install  Install the optional pinned LLMRouter baseline"
+	@echo "  make test-llmrouter  Test the optional LLMRouter adapter"
 	@echo "  make dev             Build benchmark helpers with debug output"
 	@echo "  make legacy          Build the older XDP router when explicitly needed"
 	@echo "  make policy          Regenerate the checked-in policy header"
@@ -108,6 +111,15 @@ profile-check:
 test-distill:
 	@test -x "$(BENCHMARK_PYTHON)" || { echo "Error: run 'make benchmark' first." >&2; exit 1; }
 	$(BENCHMARK_PYTHON) -m pytest benchmarks/lora_distill/test_core.py
+
+llmrouter-install:
+	$(PYTHON) -m venv .venv-llmrouter
+	$(LLMROUTER_PYTHON) -m pip install --upgrade pip
+	$(LLMROUTER_PYTHON) -m pip install -r benchmarks/llmrouter/requirements.txt
+
+test-llmrouter:
+	@test -x "$(LLMROUTER_PYTHON)" || { echo "Error: run 'make llmrouter-install' first." >&2; exit 1; }
+	$(LLMROUTER_PYTHON) -m unittest discover -s benchmarks/llmrouter -p 'test_*.py'
 
 GENERATED_SIGNAL_DIR := bpf/stages/signals/generated
 
@@ -241,4 +253,4 @@ iproutes:
 	done
 	@echo "benchmark backend ports allowed: $(VSR_BACKEND_PORTS)"
 
-.PHONY: help all build legacy benchmark-build prod dev install benchmark policy FORCE correctness performance performance-fixed-rate wrk check-build check check-benchmark check-performance check-performance-fixed-rate install-wrk install-wrk2 clean clean-setup setup iproutes
+.PHONY: help all build legacy benchmark-build prod dev install benchmark policy FORCE correctness performance performance-fixed-rate wrk check-build check check-benchmark check-performance check-performance-fixed-rate install-wrk install-wrk2 llmrouter-install test-llmrouter clean clean-setup setup iproutes
