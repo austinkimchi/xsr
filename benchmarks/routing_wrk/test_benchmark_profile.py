@@ -19,6 +19,8 @@ def dry_run(**overrides: str) -> str:
         "CONCURRENCY",
         "DURATION",
         "INCLUDE_STRESS",
+        "KEYWORD_POLICY",
+        "LLMROUTER_CONFIG",
         "TRIALS",
         "WARMUP_DURATION",
     ):
@@ -34,7 +36,9 @@ class BenchmarkProfileTest(unittest.TestCase):
         self.assertIn("trials=5 duration=40s warmup_duration=3s", output)
         self.assertIn(r"concurrencies=1\ 2\ 4\ 8\ 16\ 32\ 64\ 96\ 128\ 192 ", output)
         self.assertNotIn(r"\ 256", output)
-        self.assertIn("systems=direct,envoy-only,xsr,vsr", output)
+        self.assertIn("systems=direct,envoy-only,xsr,vsr,llmrouter", output)
+        self.assertIn("llmrouter_config=", output)
+        self.assertIn("/benchmarks/llmrouter/configs/ngram.yaml", output)
 
     def test_stress_option_restores_high_concurrency_points(self) -> None:
         output = dry_run(BENCHMARK_PROFILE="paper", INCLUDE_STRESS="1")
@@ -44,6 +48,13 @@ class BenchmarkProfileTest(unittest.TestCase):
     def test_system_selector_is_reported(self) -> None:
         output = dry_run(BENCHMARK_SYSTEMS="xsr,vsr")
         self.assertIn("systems=xsr,vsr", output)
+        self.assertIn("llmrouter_config=not-selected", output)
+
+    def test_llmrouter_bm25_config_is_inferred_from_policy(self) -> None:
+        policy = SCRIPT.parents[2] / "config" / "policy_bm25.yaml"
+        output = dry_run(BENCHMARK_SYSTEMS="llmrouter", KEYWORD_POLICY=str(policy))
+        self.assertIn("systems=llmrouter", output)
+        self.assertIn("/benchmarks/llmrouter/configs/bm25.yaml", output)
 
 
 if __name__ == "__main__":

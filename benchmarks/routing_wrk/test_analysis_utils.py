@@ -6,7 +6,7 @@ from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from analysis_utils import (
-    diagnostic_rows, exclusion_reasons, flatten_summary, paired_ratios,
+    REQUIRED_SYSTEMS, diagnostic_rows, exclusion_reasons, flatten_summary, paired_ratios,
     parse_configuration, parse_wrk_output, paper_valid_configurations,
 )
 
@@ -38,7 +38,7 @@ class AnalysisUtilsTest(unittest.TestCase):
     def test_exclusions_keep_512_out_of_headline_domain(self):
         rows = []
         for concurrency in (256, 512):
-            for system in ("Direct backend", "Envoy only", "XSR (SK_SKB/SOCKMAP)", "VSR (Envoy ExtProc)"):
+            for system in REQUIRED_SYSTEMS:
                 rows.append({"configuration": f"concurrency-{concurrency}", "concurrency": concurrency, "metric": "throughput_rps", "system": system, "valid_trial_count": 5, "failed_trial_count": 0})
         exclusions = exclusion_reasons(rows, 5)
         self.assertIn("concurrency-512", exclusions)
@@ -46,7 +46,7 @@ class AnalysisUtilsTest(unittest.TestCase):
 
     def test_missing_requested_metric_excludes_a_configuration(self):
         rows = []
-        for system in ("Direct backend", "Envoy only", "XSR (SK_SKB/SOCKMAP)", "VSR (Envoy ExtProc)"):
+        for system in REQUIRED_SYSTEMS:
             rows.append({"configuration": "concurrency-1", "concurrency": 1, "metric": "throughput_rps", "system": system, "valid_trial_count": 5, "failed_trial_count": 0})
         exclusions = exclusion_reasons(rows, 5, required_metrics=("throughput_rps", "average_latency_us"))
         self.assertIn("concurrency-1", exclusions)

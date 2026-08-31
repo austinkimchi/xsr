@@ -33,7 +33,7 @@ cells = [
     FIXED_RATE_RESULT = "20260827T213312Z-28024"
 
     PAPER_MAX_CONCURRENCY = 256
-    FIXED_RATE_CONCURRENCY = None
+    FIXED_RATE_CONCURRENCY = 64
     CENTRAL_STATISTIC = "mean"
     ERROR_STATISTIC = "ci95"
 
@@ -129,6 +129,7 @@ cells = [
         "Envoy only": {"color": "#2a9d8f", "marker": "s", "linestyle": "--"},
         "XSR (SK_SKB/SOCKMAP)": {"color": "#2878b5", "marker": "^", "linestyle": "-"},
         "VSR (Envoy ExtProc)": {"color": "#e68613", "marker": "D", "linestyle": ":"},
+        "LLMRouter (XSR reference)": {"color": "#7b2cbf", "marker": "P", "linestyle": "-."},
     }
     plt.rcParams.update({
         "figure.facecolor": "white", "axes.facecolor": "white", "savefig.facecolor": "white",
@@ -175,7 +176,7 @@ cells = [
 
     facet_groups = [
         ("Infrastructure paths", ("Direct backend", "Envoy only")),
-        ("Routing paths", ("XSR (SK_SKB/SOCKMAP)", "VSR (Envoy ExtProc)")),
+        ("Routing paths", ("XSR (SK_SKB/SOCKMAP)", "VSR (Envoy ExtProc)", "LLMRouter (XSR reference)")),
     ]
     SATURATION_THROUGHPUT_FACETED_WIDTH = 7.0
     fig, axes = plt.subplots(2, 1, figsize=(SATURATION_THROUGHPUT_FACETED_WIDTH, 5.45), sharex=True)
@@ -207,7 +208,7 @@ cells = [
 
     saturation_latency = paper_valid_results[paper_valid_results.metric.isin(["average_latency_us", "p50_latency_us", "p95_latency_us", "p99_latency_us"])].copy()
     latency_panels = [("Average", "average_latency_us"), ("P50", "p50_latency_us"), ("P95", "p95_latency_us"), ("P99", "p99_latency_us")]
-    emphasized_systems = ("XSR (SK_SKB/SOCKMAP)", "VSR (Envoy ExtProc)")
+    emphasized_systems = ("XSR (SK_SKB/SOCKMAP)", "VSR (Envoy ExtProc)", "LLMRouter (XSR reference)")
     SATURATION_LATENCY_WIDTH = 7.0
     fig, axes = plt.subplots(2, 2, figsize=(SATURATION_LATENCY_WIDTH, 5.8), sharex=True, sharey=True)
     for axis, (panel_label, metric) in zip(axes.flat, latency_panels):
@@ -248,9 +249,12 @@ cells = [
         required_metrics=fixed_metrics,
     )
     available_concurrency = sorted(fixed_rate_results.concurrency.dropna().unique())
-    if FIXED_RATE_CONCURRENCY is None and len(available_concurrency) != 1:
-        raise ValueError("Set FIXED_RATE_CONCURRENCY when the result folder contains more than one connection concurrency.")
-    selected_fixed_concurrency = FIXED_RATE_CONCURRENCY if FIXED_RATE_CONCURRENCY is not None else available_concurrency[0]
+    if FIXED_RATE_CONCURRENCY not in available_concurrency:
+        raise ValueError(
+            f"Fixed-rate result does not contain the selected concurrency {FIXED_RATE_CONCURRENCY}; "
+            f"available values: {available_concurrency}"
+        )
+    selected_fixed_concurrency = FIXED_RATE_CONCURRENCY
     plotted_fixed_rate_data = fixed_rate_results[
         fixed_rate_results.configuration.isin(fixed_valid_configurations)
         & fixed_rate_results.concurrency.eq(selected_fixed_concurrency)
