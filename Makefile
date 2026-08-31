@@ -52,7 +52,7 @@ help:
 	@echo "XSR commands:"
 	@echo "  make                 Build the production SOCKMAP router"
 	@echo "  make install         Install Linux dependencies and build production"
-	@echo "  make benchmark       Check selected benchmark environments"
+	@echo "  sudo make benchmark  Check all default benchmark environments"
 	@echo "  make benchmark-install  Install benchmark tools and selected adapters"
 	@echo "  make check           Check build tools and SOCKMAP support"
 	@echo "  make test            Run dependency-free unit tests"
@@ -104,6 +104,7 @@ benchmark-install:
 
 benchmark:
 	@BENCHMARK_SYSTEMS="$(BENCHMARK_SYSTEMS)" BENCHMARK_PYTHON="$(BENCHMARK_PYTHON)" \
+		BENCHMARK_MODE=all REQUIRE_BENCHMARK_NETWORK=1 \
 		LLMROUTER_PYTHON="$(LLMROUTER_PYTHON)" \
 		./benchmarks/routing_wrk/check_environments.sh
 

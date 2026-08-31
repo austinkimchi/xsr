@@ -21,6 +21,8 @@ def main() -> None:
     parser.add_argument("--systems")
     parser.add_argument("--include-stress", choices=("0", "1"))
     parser.add_argument("--xsr-warmup-lifecycle")
+    parser.add_argument("--xsr-measured-instance-warmed", choices=("true", "false", "not-applicable"))
+    parser.add_argument("--workload-descriptor", type=Path)
     parser.add_argument("--configuration")
     parser.add_argument("--trial", type=int)
     parser.add_argument("--order", nargs="+")
@@ -30,12 +32,19 @@ def main() -> None:
     else:
         data = {"trials": []}
     if args.run_id:
+        workload = None
+        if args.workload_descriptor:
+            workload = json.loads(args.workload_descriptor.read_text(encoding="utf-8"))
         data.update({
             "run_id": args.run_id, "profile": args.profile, "mode": args.mode, "trial_count": args.trials,
             "duration": args.duration, "warmup_duration": args.warmup_duration, "random_seed": args.seed,
             "systems": args.systems.split(",") if args.systems else [],
             "include_stress": args.include_stress == "1",
             "xsr_warmup_lifecycle": args.xsr_warmup_lifecycle,
+            "xsr_measured_instance_warmed": {
+                "true": True, "false": False
+            }.get(args.xsr_measured_instance_warmed, "not-applicable"),
+            "workload": workload,
         })
     if args.configuration:
         data.setdefault("trials", []).append({"configuration": args.configuration, "trial": args.trial, "system_order": args.order})

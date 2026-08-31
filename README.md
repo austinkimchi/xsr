@@ -80,19 +80,39 @@ Prepare a benchmark server only when collecting results:
 
 ```bash
 make benchmark-install
-make benchmark
+sudo make setup iproutes
+sudo make benchmark
 sudo make correctness
 sudo make performance args="BENCHMARK_PROFILE=paper"
-sudo make performance-fixed-rate args="BENCHMARK_PROFILE=paper"
+sudo make performance-fixed-rate \
+  args="BENCHMARK_PROFILE=paper CONCURRENCY=64 RATES='100 250 500 750 900'"
 ```
 
-`make benchmark` is a read-only preflight for only the systems named by
+`sudo make benchmark` is a read-only preflight for only the systems named by
 `BENCHMARK_SYSTEMS` (for example, `xsr,vsr`); it does not install tools or run
 measurements. The paper profile defaults to all five paths (`direct`,
 `envoy-only`, `xsr`, `vsr`, and
 `llmrouter`). Saturation uses the full concurrency sweep. Fixed-rate collection
-uses the same sweep unless `CONCURRENCY` is set; the analysis notebook selects
-the reviewed `64`-connection slice.
+for the paper must set `CONCURRENCY=64`, matching the reviewed analysis slice;
+`256` and `512` are optional saturation stress points enabled with
+`INCLUDE_STRESS=1`.
+
+The default workload is the generated keyword/SPEED-Bench corpus. Select any
+other corpus explicitly; the runner never regenerates or overwrites an explicit
+file and records its absolute path and SHA-256:
+
+```bash
+sudo make performance args="BENCHMARK_PROFILE=paper \
+  PROMPTS_FILE=/absolute/path/intent-test.jsonl \
+  WORKLOAD_ID=intent-manifest:heldout:test"
+```
+
+The intent prompt exporter writes a hash-bound metadata sidecar, so
+`WORKLOAD_ID` is optional for its unmodified output. It is required for custom
+corpora whose identity cannot otherwise be determined; the runner refuses to
+guess. See
+[`docs/azure_benchmark.md`](docs/azure_benchmark.md) for the host preflight,
+short canary, exact paper commands, and XSR warm-up lifecycle disclosure.
 
 Benchmark commands write local run data below `results/`; raw runs, logs,
 generated prompts, models, and notebook outputs are ignored. Review and add

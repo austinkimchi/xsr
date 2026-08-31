@@ -137,8 +137,11 @@ overall speedups. `prepare_speed_bench.py`, `teacher_targets.py`, and
 agreement only; those pseudo-labeled prompts are never presented as
 ground-truth intent accuracy.
 
-Use `export_benchmark_prompts.py` to place the selected manifest split at
-`benchmarks/dataset_prompts.jsonl`. Start `userspace_student.py --proxy` for the
+Use `export_benchmark_prompts.py` to write the selected manifest split to a
+dedicated path, then pass that absolute path as `PROMPTS_FILE` to the benchmark
+runner. The exporter writes a hash-bound workload-identity sidecar; the runner
+will preserve the prompt file exactly and record both hashes. Start
+`userspace_student.py --proxy` for the
 middle path; it forwards to the same mock backends as XSR after running the
 exported integer model. This keeps request bodies, weights, bounds, hashing,
 integer scores, and backend behavior identical across the two student paths.

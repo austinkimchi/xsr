@@ -4,11 +4,14 @@ local prompts = {}
 local counter = 0
 local announced = false
 local script_dir = debug.getinfo(1, "S").source:sub(2):match("(.*[/\\])") or "./"
-local prompts_file = script_dir .. "../dataset_prompts.jsonl"
+local prompts_file = os.getenv("PROMPTS_FILE") or (script_dir .. "../dataset_prompts.jsonl")
 
 for line in io.lines(prompts_file) do
     if line ~= "" then
-        table.insert(prompts, line)
+        -- The correctness annotation is invariant per corpus row. Strip it
+        -- once during script initialization so request() does no JSON work.
+        local payload = line:gsub(',"x_expected_route"%s*:%s*"[^"]+"', "")
+        table.insert(prompts, payload)
     end
 end
 
@@ -30,9 +33,6 @@ end
 request = function()
     counter = counter + 1
     local payload = prompts[((counter - 1) % #prompts) + 1]
-    -- Support existing datasets produced by the former correctness-in-wrk flow
-    -- without sending its private annotation to the target.
-    payload = payload:gsub(',"x_expected_route"%s*:%s*"[^"]+"', "")
     return wrk.format("POST", "/v1/chat/completions", nil, payload)
 end
 

@@ -51,6 +51,7 @@ mock_backend
 **/models/
 benchmarks/lora_distill/artifacts/
 *.jsonl
+*.jsonl.metadata.json
 *.npz
 *.xsrf
 *.safetensors
