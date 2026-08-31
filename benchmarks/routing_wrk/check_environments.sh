@@ -6,6 +6,7 @@ BENCHMARK_SYSTEMS="${BENCHMARK_SYSTEMS:-direct,envoy-only,xsr,vsr,llmrouter}"
 BENCHMARK_PYTHON="${BENCHMARK_PYTHON:-${ROOT_DIR}/.venv/bin/python}"
 LLMROUTER_PYTHON="${LLMROUTER_PYTHON:-${ROOT_DIR}/.venv-llmrouter/bin/python}"
 LLMROUTER_BIN="${LLMROUTER_BIN:-${ROOT_DIR}/.venv-llmrouter/bin/llmrouter}"
+LLMROUTER_REVISION="${LLMROUTER_REVISION:-da3430baaea672743c3957457b0c76faba19876e}"
 VLLM_HOST="${VLLM_HOST:-vllm-sr-envoy-container}"
 
 fail() {
@@ -51,6 +52,11 @@ if [ -n "${selected[llmrouter]+x}" ]; then
         fail "LLMRouter is missing; run 'make llmrouter-install'."
     "$LLMROUTER_PYTHON" -c 'import llmrouter, openclaw_router, uvicorn; from llmrouter.models.meta_router import MetaRouter' \
         >/dev/null 2>&1 || fail "the LLMRouter environment is incomplete; run 'make llmrouter-install'."
+    installed_revision=$("$LLMROUTER_PYTHON" -c \
+        'import json; from importlib.metadata import distribution; print(json.loads(distribution("llmrouter-lib").read_text("direct_url.json"))["vcs_info"]["commit_id"])' \
+        2>/dev/null) || fail "could not verify the installed LLMRouter revision."
+    [ "$installed_revision" = "$LLMROUTER_REVISION" ] || \
+        fail "LLMRouter revision ${installed_revision} is installed; expected ${LLMROUTER_REVISION}. Run 'make llmrouter-install'."
 fi
 
 echo "Benchmark environment check passed for: ${BENCHMARK_SYSTEMS}"

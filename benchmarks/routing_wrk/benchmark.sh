@@ -321,7 +321,7 @@ fi
     --systems "$SELECTED_SYSTEMS_CSV" --include-stress "$INCLUDE_STRESS" \
     --xsr-warmup-lifecycle "$XSR_WARMUP_LIFECYCLE" --xsr-measured-instance-warmed "$XSR_MEASURED_INSTANCE_WARMED" \
     --vllm-container "$VLLM_HOST" --vsr-container "${VSR_CONTAINER:-${VLLM_HOST/envoy/router}}" \
-    --llmrouter-bin "$LLMROUTER_BIN" --llmrouter-config "${LLMROUTER_CONFIG:-}" \
+    --llmrouter-python "$LLMROUTER_PYTHON" --llmrouter-bin "$LLMROUTER_BIN" --llmrouter-config "${LLMROUTER_CONFIG:-}" \
     --policy "$KEYWORD_POLICY" --prompts "${ROOT_DIR}/benchmarks/dataset_prompts.jsonl"
 
 if ! ip netns exec "$NETNS" ip link show dev "$XDP_PEER_IF" >/dev/null 2>&1; then
@@ -501,8 +501,11 @@ verify_llmrouter_backend_routing() {
             echo "Error: LLMRouter preflight request for ${expected} failed." >&2
             return 1
         }
-        if ! grep -Fq "\"backend\":\"${expected}\"" <<<"$response"; then
-            echo "Error: LLMRouter preflight expected backend=${expected}, got: ${response}" >&2
+        # Upstream normalizes backend responses into its OpenAI response model,
+        # dropping the mock backend's custom `backend` property. It sets the
+        # selected backend name in the standard `model` field after forwarding.
+        if ! grep -Fq "\"model\":\"${expected}\"" <<<"$response"; then
+            echo "Error: LLMRouter preflight expected model=${expected}, got: ${response}" >&2
             return 1
         fi
     done <<'EOF'

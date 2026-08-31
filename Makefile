@@ -123,6 +123,9 @@ llmrouter-install:
 	$(PYTHON) -m venv .venv-llmrouter
 	$(LLMROUTER_PYTHON) -m pip install --upgrade pip
 	$(LLMROUTER_PYTHON) -m pip install -r benchmarks/llmrouter/requirements.txt
+	@test -x "$(CURDIR)/.venv-llmrouter/bin/llmrouter"
+	$(LLMROUTER_PYTHON) -c 'import llmrouter, openclaw_router, torch, uvicorn; from llmrouter.models.meta_router import MetaRouter'
+	$(LLMROUTER_PYTHON) -m pip check
 
 test-llmrouter:
 	@test -x "$(LLMROUTER_PYTHON)" || { echo "Error: run 'make llmrouter-install' first." >&2; exit 1; }

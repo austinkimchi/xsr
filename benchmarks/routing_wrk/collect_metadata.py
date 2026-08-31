@@ -88,6 +88,7 @@ def main() -> None:
     parser.add_argument("--wrk2-bin", required=True)
     parser.add_argument("--vllm-container")
     parser.add_argument("--vsr-container")
+    parser.add_argument("--llmrouter-python")
     parser.add_argument("--llmrouter-bin")
     parser.add_argument("--llmrouter-config")
     parser.add_argument("--policy", type=Path, required=True)
@@ -133,10 +134,19 @@ def main() -> None:
                    "vsr_version": command("docker", "exec", args.vsr_container, "vllm-sr", "--version") if "vsr" in systems and args.vsr_container else unavailable(),
                    "installation_note": "Installation method: official vLLM Semantic Router production documentation; the deployment was the latest production build at installation time."},
         "llmrouter": {
-            "version": command(args.llmrouter_bin, "version") if uses_llmrouter and args.llmrouter_bin else unavailable(),
+            "version": command(
+                args.llmrouter_python, "-c",
+                "from importlib.metadata import version; print(version('llmrouter-lib'))",
+            ) if uses_llmrouter and args.llmrouter_python else unavailable(),
+            "cli_reported_version": command(args.llmrouter_bin, "version") if uses_llmrouter and args.llmrouter_bin else unavailable(),
             "binary": args.llmrouter_bin if uses_llmrouter and args.llmrouter_bin else unavailable(),
             "config_path": str(llmrouter_config) if llmrouter_config else unavailable(),
             "config_sha256": sha256(llmrouter_config) if llmrouter_config else unavailable(),
+            "installed_revision": command(
+                args.llmrouter_python, "-c",
+                "import json; from importlib.metadata import distribution; "
+                "print(json.loads(distribution('llmrouter-lib').read_text('direct_url.json'))['vcs_info']['commit_id'])",
+            ) if uses_llmrouter and args.llmrouter_python else unavailable(),
             "pinned_revision": "da3430baaea672743c3957457b0c76faba19876e",
         },
     }

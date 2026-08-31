@@ -26,7 +26,10 @@ class EnvironmentCheckTest(unittest.TestCase):
                 return path
 
             benchmark_python = executable("benchmark-python", "exit 0")
-            llmrouter_python = executable("llmrouter-python", "exit 0")
+            llmrouter_python = executable(
+                "llmrouter-python",
+                "case \"$*\" in *direct_url*) echo da3430baaea672743c3957457b0c76faba19876e;; esac; exit 0",
+            )
             llmrouter_bin = executable("llmrouter", "exit 0")
             for name in ("cc", "curl", "ip", "iptables", "ethtool"):
                 executable(name, "exit 0")
