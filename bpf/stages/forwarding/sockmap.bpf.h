@@ -4,6 +4,8 @@
 #define SK_ROUTER_MAX_SOCKS 16384
 #define SK_ROUTER_FLAG_BACKEND 1
 #define SK_LIFECYCLE_REQUEST_FORWARDED 1
+#define SK_LIFECYCLE_REQUEST_INCOMPLETE 2
+#define SK_LIFECYCLE_REDIRECT_FAILED 4
 #define SK_REDIRECT_FLAGS 0
 
 #define SK_MODEL_CODING 1
@@ -38,6 +40,7 @@ struct sk_route_entry {
 
 struct sk_lifecycle_state {
   __u64 response_bytes_forwarded;
+  __u64 request_bytes_processed;
   __u32 flags;
   __u32 reserved;
 };

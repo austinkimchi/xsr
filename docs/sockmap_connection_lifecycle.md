@@ -17,7 +17,13 @@ request payloads and installs no persistent readiness hook on a data socket.
 `POLLERR`, `POLLHUP`, and invalid FDs are fatal and reap immediately.
 `POLLRDHUP` alone is only a peer write-side FIN, so it marks a drain state.
 The datapath records when a complete request has actually been redirected, so
-userspace does not infer completion from temporary parser-map absence. It then
+userspace does not infer completion from temporary parser-map absence. While a
+request is incomplete, it also records how many request bytes the parser has
+processed. Userspace only treats that state as terminal after the parser count
+covers every TCP-received payload byte, preventing a stale marker from reaping
+a final chunk that is still queued in SOCKMAP. A failed backend redirect is a
+separate terminal state, so an unavailable selected socket cannot strand the
+owned connection set. The manager then
 propagates the write-side shutdown to all five backend connections. The
 selected backend can finish a multi-write or streaming response before
 observing EOF and closing; unused backends close without a request. For each

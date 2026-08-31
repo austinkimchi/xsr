@@ -313,22 +313,36 @@ int sk_router_parser(struct __sk_buff *skb) {
   struct sk_classify_ctx ctx = {.skb = skb};
   __u32 zero = 0;
   __u32 route;
+  struct sk_lifecycle_state *lifecycle;
 
   increment_counter(COUNT_HTTP);
   if (route_entry && (route_entry->flags & SK_ROUTER_FLAG_BACKEND))
     return skb->len;
+  lifecycle = bpf_map_lookup_elem(&sk_lifecycle, &cookie);
+  if (lifecycle)
+    lifecycle->flags &= ~SK_LIFECYCLE_REQUEST_INCOMPLETE;
   flow = bpf_map_lookup_elem(&sk_http_flows, &cookie);
   if (!flow) {
     initial = bpf_map_lookup_elem(&sk_http_flow_scratch, &zero);
-    if (!initial)
+    if (!initial) {
+      if (lifecycle) {
+        lifecycle->request_bytes_processed = skb->len;
+        lifecycle->flags |= SK_LIFECYCLE_REQUEST_INCOMPLETE;
+      }
       return 0;
+    }
     __builtin_memset(initial, 0, sizeof(*initial));
     initial->line_start = 1;
     xdp_classifier_init(&initial->classifier);
     bpf_map_update_elem(&sk_http_flows, &cookie, initial, BPF_ANY);
     flow = bpf_map_lookup_elem(&sk_http_flows, &cookie);
-    if (!flow)
+    if (!flow) {
+      if (lifecycle) {
+        lifecycle->request_bytes_processed = skb->len;
+        lifecycle->flags |= SK_LIFECYCLE_REQUEST_INCOMPLETE;
+      }
       return 0;
+    }
   }
   ctx.flow = flow;
   if (!flow->header_len) {
@@ -339,8 +353,13 @@ int sk_router_parser(struct __sk_buff *skb) {
     bpf_loop(SK_ROUTER_MAX_HEADER, scan_headers_callback, &ctx, 0);
   }
   if (!flow->header_len || flow->invalid || !flow->request_len ||
-      flow->request_len > skb->len || flow->request_len > SK_ROUTER_MAX_REQUEST)
+      flow->request_len > skb->len || flow->request_len > SK_ROUTER_MAX_REQUEST) {
+    if (lifecycle) {
+      lifecycle->request_bytes_processed = skb->len;
+      lifecycle->flags |= SK_LIFECYCLE_REQUEST_INCOMPLETE;
+    }
     return 0;
+  }
   ctx.start = flow->header_len;
   ctx.scan_len = flow->request_len - flow->header_len;
   bpf_loop(ctx.scan_len, scan_content_callback, &ctx, 0);
@@ -432,6 +451,11 @@ int sk_router_verdict(struct __sk_buff *skb) {
       bpf_sk_redirect_map(skb, &sk_sock_map, target_slot, SK_REDIRECT_FLAGS);
   if (result != SK_PASS) {
     increment_counter(COUNT_NO_PAYLOAD);
+    struct sk_lifecycle_state *lifecycle =
+        bpf_map_lookup_elem(&sk_lifecycle, &entry->client_cookie);
+
+    if (lifecycle)
+      lifecycle->flags |= SK_LIFECYCLE_REDIRECT_FAILED;
   } else {
     struct sk_lifecycle_state *lifecycle =
         bpf_map_lookup_elem(&sk_lifecycle, &entry->client_cookie);

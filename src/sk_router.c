@@ -58,6 +58,8 @@
 
 #define SK_ROUTER_FLAG_BACKEND 1
 #define SK_LIFECYCLE_REQUEST_FORWARDED 1
+#define SK_LIFECYCLE_REQUEST_INCOMPLETE 2
+#define SK_LIFECYCLE_REDIRECT_FAILED 4
 #define SK_MODEL_CODING 1
 #define SK_MODEL_MATH 2
 #define SK_MODEL_OTHERS 3
@@ -113,7 +115,6 @@ struct connection_manager {
   int http_flows_fd;
   int route_decisions_fd;
   int lifecycle_fd;
-  void *http_flow_value;
   int status_fd;
   int timer_fd;
   char status_path[sizeof(((struct sockaddr_un *)0)->sun_path)];
@@ -144,6 +145,7 @@ struct sk_route_entry {
 
 struct sk_lifecycle_state {
   __u64 response_bytes_forwarded;
+  __u64 request_bytes_processed;
   __u32 flags;
   __u32 reserved;
 };
@@ -1154,12 +1156,6 @@ static int count_map_entries(int map_fd, size_t key_size) {
   return errno == ENOENT ? count : -1;
 }
 
-static int map_contains_key(int map_fd, const void *key, void *value) {
-  if (bpf_map_lookup_elem(map_fd, key, value) == 0)
-    return 1;
-  return errno == ENOENT ? 0 : -1;
-}
-
 static void serve_status(struct connection_manager *manager) {
   int fd;
 
@@ -1235,8 +1231,8 @@ static void poll_connection_lifecycle(struct connection_manager *manager) {
       struct tcp_info info;
       struct sk_lifecycle_state lifecycle;
       __u64 received = 0;
+      __u64 request_bytes;
       __u32 backend_fin_count = 0;
-      int flow_present;
 
       if (!set->peer_write_closed) {
         set->peer_write_closed = 1;
@@ -1247,13 +1243,12 @@ static void poll_connection_lifecycle(struct connection_manager *manager) {
                             "frontend TCP state unavailable");
         continue;
       }
-      flow_present =
-          map_contains_key(manager->http_flows_fd,
-                           &set->cookies[CONNECTION_CLIENT],
-                           manager->http_flow_value);
-      if (flow_present < 0)
-        continue;
-      if (info.tcpi_bytes_received == 0) {
+      /* tcpi_bytes_received includes the peer FIN's sequence byte once
+       * POLLRDHUP is visible. */
+      request_bytes = info.tcpi_bytes_received > 0
+                          ? info.tcpi_bytes_received - 1
+                          : 0;
+      if (request_bytes == 0) {
         reap_connection_set(manager, manager->poll_set_indices[i],
                             "frontend half-close without request");
         continue;
@@ -1266,9 +1261,14 @@ static void poll_connection_lifecycle(struct connection_manager *manager) {
         continue;
       }
       if (!(lifecycle.flags & SK_LIFECYCLE_REQUEST_FORWARDED)) {
-        if (flow_present)
+        if (lifecycle.flags & SK_LIFECYCLE_REDIRECT_FAILED) {
+          reap_connection_set(manager, manager->poll_set_indices[i],
+                              "frontend request redirect failed");
+        } else if ((lifecycle.flags & SK_LIFECYCLE_REQUEST_INCOMPLETE) &&
+                   lifecycle.request_bytes_processed >= request_bytes) {
           reap_connection_set(manager, manager->poll_set_indices[i],
                               "frontend half-close with incomplete request");
+        }
         continue;
       }
       if (!set->backend_writes_shutdown)
@@ -1302,9 +1302,6 @@ static int initialize_connection_manager(struct connection_manager *manager,
                                          int http_flows_fd,
                                          int route_decisions_fd,
                                          int lifecycle_fd) {
-  struct bpf_map_info http_flow_info = {};
-  __u32 http_flow_info_len = sizeof(http_flow_info);
-
   memset(manager, 0, sizeof(*manager));
   manager->epoll_fd = -1;
   manager->status_fd = -1;
@@ -1314,18 +1311,13 @@ static int initialize_connection_manager(struct connection_manager *manager,
   manager->http_flows_fd = http_flows_fd;
   manager->route_decisions_fd = route_decisions_fd;
   manager->lifecycle_fd = lifecycle_fd;
-  if (bpf_obj_get_info_by_fd(http_flows_fd, &http_flow_info,
-                             &http_flow_info_len) != 0 ||
-      !http_flow_info.value_size)
-    return -1;
-  manager->http_flow_value = malloc(http_flow_info.value_size);
   manager->sets = calloc(MAX_CONNECTION_SETS, sizeof(*manager->sets));
   manager->free_sets = calloc(MAX_CONNECTION_SETS, sizeof(*manager->free_sets));
   manager->poll_set_indices =
       calloc(MAX_CONNECTION_SETS, sizeof(*manager->poll_set_indices));
   manager->poll_fds = calloc(MAX_CONNECTION_SETS, sizeof(*manager->poll_fds));
-  if (!manager->http_flow_value || !manager->sets || !manager->free_sets ||
-      !manager->poll_set_indices || !manager->poll_fds)
+  if (!manager->sets || !manager->free_sets || !manager->poll_set_indices ||
+      !manager->poll_fds)
     return -1;
 
   for (__u32 i = 0; i < MAX_CONNECTION_SETS; i++) {
@@ -1384,7 +1376,6 @@ static void destroy_connection_manager(struct connection_manager *manager) {
   free(manager->free_sets);
   free(manager->poll_set_indices);
   free(manager->poll_fds);
-  free(manager->http_flow_value);
 }
 
 static int run_sockmap_router(void) {

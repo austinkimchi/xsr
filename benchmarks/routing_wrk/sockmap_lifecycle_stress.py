@@ -54,6 +54,7 @@ def request_once(
     request_backend_close: bool = False,
     half_close: bool = False,
     no_response: bool = False,
+    split_request: bool = False,
     before_half_close: Callable[[], None] | None = None,
 ) -> str:
     expected, prompt = ROUTES[sequence % len(ROUTES)]
@@ -78,7 +79,17 @@ def request_once(
     ).encode() + body
     with socket.create_connection((host, port), timeout=10) as client:
         client.settimeout(10)
-        client.sendall(request)
+        if split_request:
+            client.sendall(request[:-1])
+            if before_half_close:
+                before_half_close()
+                before_half_close = None
+            # Establish an incomplete-parser marker, then put the final body
+            # byte and FIN back-to-back to exercise stale-marker races.
+            time.sleep(0.02)
+            client.sendall(request[-1:])
+        else:
+            client.sendall(request)
         if half_close:
             if before_half_close:
                 before_half_close()
@@ -155,6 +166,7 @@ def main() -> None:
             args.port,
             sequence,
             half_close=True,
+            split_request=True,
             before_half_close=lambda expected=expected_accepted: wait_for_accepted(
                 args.status_socket, args.pid, expected, args.cleanup_timeout
             ),
