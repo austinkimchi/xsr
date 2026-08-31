@@ -15,14 +15,21 @@ def dry_run(**overrides: str) -> str:
     env = os.environ.copy()
     for name in (
         "BENCHMARK_PROFILE",
+        "BENCHMARK_MODE",
         "BENCHMARK_SYSTEMS",
         "CONCURRENCY",
         "DURATION",
         "INCLUDE_STRESS",
         "KEYWORD_POLICY",
         "LLMROUTER_CONFIG",
+        "PROMPTS_EXPLICIT",
+        "PROMPTS_FILE",
+        "RANDOM_SEED",
+        "RATES",
         "TRIALS",
         "WARMUP_DURATION",
+        "WORKLOAD_ID",
+        "WRK2_BIN",
     ):
         env.pop(name, None)
     env.update({"BENCHMARK_DRY_RUN": "1", "PYTHON": sys.executable, "WRK_BIN": "/bin/true"})
@@ -55,6 +62,23 @@ class BenchmarkProfileTest(unittest.TestCase):
         output = dry_run(BENCHMARK_SYSTEMS="llmrouter", KEYWORD_POLICY=str(policy))
         self.assertIn("systems=llmrouter", output)
         self.assertIn("/benchmarks/llmrouter/configs/bm25.yaml", output)
+
+    def test_explicit_workload_is_visible_in_dry_run(self) -> None:
+        output = dry_run(PROMPTS_FILE="/data/intent.jsonl", WORKLOAD_ID="intent:heldout")
+        self.assertIn("prompts_file=/data/intent.jsonl", output)
+        self.assertIn("prompts_selection=explicit", output)
+        self.assertIn("workload_id=intent:heldout", output)
+        self.assertIn("xsr_measured_instance_warmed=false", output)
+
+    def test_paper_fixed_rate_dry_run_uses_reviewed_slice(self) -> None:
+        output = dry_run(
+            BENCHMARK_PROFILE="paper", BENCHMARK_MODE="fixed-rate",
+            CONCURRENCY="64", WRK2_BIN="/bin/true",
+        )
+        self.assertIn("mode=fixed-rate", output)
+        self.assertIn(r"rates=100\ 250\ 500\ 750\ 900", output)
+        self.assertIn("random_seed=20260826", output)
+        self.assertIn("concurrencies=64", output)
 
 
 if __name__ == "__main__":

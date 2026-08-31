@@ -38,6 +38,17 @@ else
     echo "Warning: kernel configuration is unavailable; runtime BPF support will be checked when XSR starts." >&2
 fi
 
+if [ "${REQUIRE_RUNTIME_BPF:-0}" = "1" ]; then
+    [ "$(id -u)" -eq 0 ] || {
+        echo "Error: runtime SOCKMAP/SK_SKB probing requires root; rerun the benchmark preflight with sudo." >&2
+        exit 1
+    }
+    command -v bpftool >/dev/null 2>&1 || {
+        echo "Error: bpftool is required for runtime SOCKMAP/SK_SKB probing." >&2
+        exit 1
+    }
+fi
+
 if command -v bpftool >/dev/null 2>&1 && [ "$(id -u)" -eq 0 ]; then
     feature_output="$(bpftool feature probe kernel 2>/dev/null)"
     grep -q "map_type sockmap is available" <<<"$feature_output" || {

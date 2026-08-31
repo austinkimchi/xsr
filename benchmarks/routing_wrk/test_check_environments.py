@@ -33,6 +33,8 @@ class EnvironmentCheckTest(unittest.TestCase):
             llmrouter_bin = executable("llmrouter", "exit 0")
             for name in ("cc", "curl", "ip", "iptables", "ethtool"):
                 executable(name, "exit 0")
+            wrk = executable("wrk", "exit 0")
+            wrk2 = executable("wrk2", "exit 0")
             executable("make", f"echo make >> '{log}'; exit 0")
             executable(
                 "docker",
@@ -47,6 +49,9 @@ class EnvironmentCheckTest(unittest.TestCase):
                 "BENCHMARK_PYTHON": str(benchmark_python),
                 "LLMROUTER_PYTHON": str(llmrouter_python),
                 "LLMROUTER_BIN": str(llmrouter_bin),
+                "BENCHMARK_MODE": "all",
+                "WRK_BIN": str(wrk),
+                "WRK2_BIN": str(wrk2),
             })
             subprocess.run([SCRIPT], env=env, check=True, capture_output=True, text=True)
             return log.read_text(encoding="utf-8").splitlines() if log.exists() else []

@@ -16,6 +16,9 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[2]
 WRK2_CALIBRATION_PATCH = ROOT / "benchmarks/routing_wrk/wrk2-calibration-clock-reset.patch"
+AZURE_INSTANCE_METADATA_URL = (
+    "http://169.254.169.254/metadata/instance/compute?api-version=2021-02-01"
+)
 
 
 def command(*args: str) -> str | None:
@@ -33,6 +36,38 @@ def sha256(path: Path) -> str | None:
 
 def unavailable() -> dict[str, str]:
     return {"status": "unavailable"}
+
+
+def azure_instance_metadata() -> dict[str, Any]:
+    raw = command(
+        "curl", "--silent", "--show-error", "--fail", "--noproxy", "*",
+        "--connect-timeout", "0.2", "--max-time", "1", "-H", "Metadata:true",
+        AZURE_INSTANCE_METADATA_URL,
+    )
+    if not raw:
+        return unavailable()
+    try:
+        compute = json.loads(raw)
+    except json.JSONDecodeError:
+        return unavailable()
+    return {
+        key: compute.get(key)
+        for key in ("vmSize", "location", "zone", "platformFaultDomain", "platformUpdateDomain")
+        if compute.get(key) is not None
+    }
+
+
+def xsr_warmup_note(lifecycle: str) -> str:
+    if lifecycle == "router-restart-after-load-warmup":
+        return (
+            "XSR is restarted after load warm-up because closed clients leave unreaped "
+            "SOCKMAP connection sets; safe reclamation requires a router lifecycle change."
+        )
+    if lifecycle == "disabled":
+        return "Load warm-up was disabled; the measured XSR instance was not warmed."
+    if lifecycle == "not-selected":
+        return "XSR was not selected for this invocation."
+    return "See lifecycle field."
 
 
 def docker_image(container: str | None) -> dict[str, Any]:
@@ -54,20 +89,6 @@ def docker_image(container: str | None) -> dict[str, Any]:
     else:
         image_info["repo_digests"] = unavailable()
     return image_info
-
-
-def prompt_details(path: Path) -> dict[str, Any]:
-    routes: dict[str, int] = {}
-    count = 0
-    if path.is_file():
-        for line in path.read_text(encoding="utf-8").splitlines():
-            if not line:
-                continue
-            count += 1
-            route = json.loads(line).get("x_expected_route", "unlabeled")
-            routes[str(route)] = routes.get(str(route), 0) + 1
-    return {"path": str(path), "sha256": sha256(path), "prompt_count": count, "route_distribution": routes,
-            "dataset": {"name": "speed-bench", "config": "qualitative", "split": "test"}}
 
 
 def main() -> None:
@@ -92,12 +113,22 @@ def main() -> None:
     parser.add_argument("--llmrouter-bin")
     parser.add_argument("--llmrouter-config")
     parser.add_argument("--policy", type=Path, required=True)
-    parser.add_argument("--prompts", type=Path, required=True)
+    parser.add_argument("--workload-descriptor", type=Path, required=True)
+    parser.add_argument("--xsr-distill-model")
     args = parser.parse_args()
     systems = set(args.systems.split(","))
     uses_docker = bool(systems & {"envoy-only", "vsr"})
     uses_llmrouter = "llmrouter" in systems
     llmrouter_config = Path(args.llmrouter_config) if uses_llmrouter and args.llmrouter_config else None
+    workload = json.loads(args.workload_descriptor.read_text(encoding="utf-8"))
+    prompts_path = Path(workload["prompts"]["path"])
+    actual_prompts_sha = sha256(prompts_path)
+    if actual_prompts_sha != workload["prompts"]["sha256"]:
+        raise SystemExit(
+            f"prompt corpus changed after selection: expected {workload['prompts']['sha256']}, "
+            f"found {actual_prompts_sha}"
+        )
+    distill_model = Path(args.xsr_distill_model).expanduser().resolve() if args.xsr_distill_model else None
     status = command("git", "status", "--porcelain") or ""
     os_release = Path("/etc/os-release").read_text(encoding="utf-8", errors="replace") if Path("/etc/os-release").exists() else None
     metadata: dict[str, Any] = {
@@ -106,24 +137,31 @@ def main() -> None:
             "commit": command("git", "rev-parse", "HEAD"), "working_tree": "clean" if not status else "dirty",
             "build_profile": "prod" if args.profile == "paper" else "dev", "compiler": command("cc", "--version"),
             "compile_flags": "Makefile OPT_CFLAGS / BPF_CFLAGS", "routing_mode": "SK_SKB/SOCKMAP",
+            "distill_model": {
+                "path": str(distill_model), "sha256": sha256(distill_model)
+            } if distill_model else unavailable(),
         },
-        "workload": {"policy_path": str(args.policy), "policy_sha256": sha256(args.policy), "prompts": prompt_details(args.prompts)},
+        "workload": {**workload, "policy_path": str(args.policy), "policy_sha256": sha256(args.policy)},
         "benchmark": {"mode": args.mode, "profile": args.profile, "trial_count": args.trials, "duration": args.duration,
                       "warmup_duration": args.warmup_duration, "concurrency": args.concurrency, "rates": args.rates,
                       "systems": args.systems.split(","), "include_stress": args.include_stress == "1",
                       "xsr_warmup": {
                           "lifecycle": args.xsr_warmup_lifecycle,
                           "measured_instance_warmed": {"true": True, "false": False}.get(args.xsr_measured_instance_warmed, "not-applicable"),
-                          "note": "XSR is restarted after load warm-up because closed clients leave unreaped SOCKMAP connection sets; fixing this requires a router lifecycle change.",
+                          "note": xsr_warmup_note(args.xsr_warmup_lifecycle),
                       },
                       "wrk": {"path": args.wrk_bin, "version": command(args.wrk_bin, "--version")},
                       "wrk2": {"path": args.wrk2_bin, "binary_sha256": sha256(Path(args.wrk2_bin)),
                                "pinned_revision": "44a94c17d8e6a0bac8559b53da76848e430cb7a7",
                                "calibration_patch": {"path": str(WRK2_CALIBRATION_PATCH),
                                                      "sha256": sha256(WRK2_CALIBRATION_PATCH)}}},
-        "environment": {"macos_host": unavailable(), "virtualization": unavailable(), "linux_distribution": os_release,
-                        "kernel": platform.release(), "cpu_count": os.cpu_count(),
-                        "memory": command("sh", "-c", "grep MemTotal /proc/meminfo"),
+        "environment": {"macos_host": unavailable(), "virtualization": command("systemd-detect-virt"),
+                        "linux_distribution": os_release, "kernel": platform.release(), "cpu_count": os.cpu_count(),
+                        "lscpu": command("lscpu"),
+                        "numa_topology": command("lscpu", "--extended=CPU,NODE,SOCKET,CORE"),
+                        "memory": command("sh", "-c", "cat /proc/meminfo"),
+                        "memory_summary": command("free", "-h"),
+                        "azure_instance": azure_instance_metadata(),
                         "network_namespaces": command("ip", "netns", "list"),
                         "interfaces": command("ip", "-details", "link", "show", "veth0"),
                         "offloads": command("ethtool", "-k", "veth0")},

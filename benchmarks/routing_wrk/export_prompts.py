@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import concurrent.futures
+import hashlib
 import json
 import os
 from types import SimpleNamespace
@@ -338,6 +339,30 @@ def main() -> None:
             body = json.loads(chat_body(case.prompt))
             body["x_expected_route"] = label
             f.write(json.dumps(body, separators=(",", ":")) + "\n")
+
+    spec = DATASETS[args.dataset]
+    dataset_identity = {
+        "name": args.dataset,
+        "repository": spec["dataset"],
+        "config": spec.get("config"),
+        "split": spec.get("split", args.routerarena_split),
+        "revision": spec.get("revision"),
+    }
+    sidecar = {
+        "schema_version": 1,
+        "prompts_sha256": hashlib.sha256(args.output.read_bytes()).hexdigest(),
+        "workload_identity": {
+            "id": ":".join(str(value) for value in (
+                args.dataset, dataset_identity["config"], dataset_identity["split"]
+            ) if value),
+            "kind": "keyword-dataset",
+            "dataset": dataset_identity,
+            "labeler": args.labeler,
+        },
+    }
+    Path(f"{args.output.resolve()}.metadata.json").write_text(
+        json.dumps(sidecar, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
 
     labels = [label for _, label in reviewed_cases]
     counts = {route: labels.count(route) for route in ROUTES}

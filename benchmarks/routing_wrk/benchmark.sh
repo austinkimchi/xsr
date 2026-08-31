@@ -24,10 +24,13 @@ for benchmark_arg in "$@"; do
         VALIDATE_LOAD=*) VALIDATE_LOAD="${benchmark_arg#VALIDATE_LOAD=}" ;;
         INCLUDE_XDP=*) INCLUDE_XDP="${benchmark_arg#INCLUDE_XDP=}" ;;
         KEYWORD_POLICY=*) KEYWORD_POLICY="${benchmark_arg#KEYWORD_POLICY=}" ;;
+        PROMPTS_FILE=*) PROMPTS_FILE="${benchmark_arg#PROMPTS_FILE=}" ;;
+        WORKLOAD_ID=*) WORKLOAD_ID="${benchmark_arg#WORKLOAD_ID=}" ;;
         INCLUDE_STRESS=*) INCLUDE_STRESS="${benchmark_arg#INCLUDE_STRESS=}" ;;
         BENCHMARK_SYSTEMS=*) BENCHMARK_SYSTEMS="${benchmark_arg#BENCHMARK_SYSTEMS=}" ;;
         LLMROUTER_CONFIG=*) LLMROUTER_CONFIG="${benchmark_arg#LLMROUTER_CONFIG=}" ;;
         LLMROUTER_PORT=*) LLMROUTER_PORT="${benchmark_arg#LLMROUTER_PORT=}" ;;
+        XSR_DISTILL_MODEL=*) XSR_DISTILL_MODEL="${benchmark_arg#XSR_DISTILL_MODEL=}" ;;
     esac
 done
 
@@ -100,6 +103,18 @@ ENVOY_ONLY_CONTAINER="${ENVOY_ONLY_CONTAINER:-xsr-benchmark-envoy-only-${RUN_ID:
 ENVOY_ONLY_URL="${ENVOY_ONLY_URL:-}"
 REPORT_DIR="${ROOT_DIR}/results/routing-performance"
 KEYWORD_POLICY="${KEYWORD_POLICY:-${ROOT_DIR}/config/policy_ngram.yaml}"
+DEFAULT_PROMPTS_FILE="${ROOT_DIR}/benchmarks/dataset_prompts.jsonl"
+if [ "${PROMPTS_EXPLICIT+x}" != "x" ]; then
+    if [ "${PROMPTS_FILE+x}" = "x" ]; then
+        PROMPTS_EXPLICIT=1
+    else
+        PROMPTS_EXPLICIT=0
+        PROMPTS_FILE="$DEFAULT_PROMPTS_FILE"
+    fi
+fi
+WORKLOAD_ID="${WORKLOAD_ID:-}"
+XSR_DISTILL_MODEL="${XSR_DISTILL_MODEL:-}"
+export XSR_DISTILL_MODEL
 
 if [ "$EUID" -ne 0 ] && [ "$BENCHMARK_DRY_RUN" != "1" ]; then
     echo "Routing benchmark uses sudo for cleanup and firewall setup. Elevating..."
@@ -121,6 +136,9 @@ if [ "$EUID" -ne 0 ] && [ "$BENCHMARK_DRY_RUN" != "1" ]; then
         TOPOLOGY_MODE="$TOPOLOGY_MODE"
         INCLUDE_XDP="$INCLUDE_XDP"
         KEYWORD_POLICY="$KEYWORD_POLICY"
+        PROMPTS_FILE="$PROMPTS_FILE"
+        PROMPTS_EXPLICIT="$PROMPTS_EXPLICIT"
+        WORKLOAD_ID="$WORKLOAD_ID"
         INCLUDE_STRESS="$INCLUDE_STRESS"
         BENCHMARK_SYSTEMS="$BENCHMARK_SYSTEMS"
         BENCHMARK_PYTHON="$PYTHON_BIN"
@@ -286,15 +304,24 @@ if system_selected llmrouter && [ -z "$LLMROUTER_CONFIG" ]; then
 fi
 
 if [ "$BENCHMARK_DRY_RUN" = "1" ]; then
-    printf 'profile=%s trials=%s duration=%s warmup_duration=%s build_profile=%s mode=%s tool=%s concurrencies=%q include_stress=%s systems=%s llmrouter_config=%s\n' \
+    printf 'profile=%s trials=%s duration=%s warmup_duration=%s build_profile=%s mode=%s tool=%s rates=%q random_seed=%s concurrencies=%q include_stress=%s systems=%s llmrouter_config=%s prompts_file=%s prompts_selection=%s workload_id=%s xsr_measured_instance_warmed=%s\n' \
         "$BENCHMARK_PROFILE" "$TRIALS" "$DURATION" "$WARMUP_DURATION" \
         "$([ "$BENCHMARK_PROFILE" = paper ] && echo prod || echo dev)" "$BENCHMARK_MODE" "$WRK_BIN" \
-        "${CONCURRENCY:-${DEFAULT_CONCURRENCIES[*]}}" "$INCLUDE_STRESS" "$SELECTED_SYSTEMS_CSV" "${LLMROUTER_CONFIG:-not-selected}"
+        "$([ "$BENCHMARK_MODE" = fixed-rate ] && echo "$RATES" || echo not-applicable)" "$RANDOM_SEED" \
+        "${CONCURRENCY:-${DEFAULT_CONCURRENCIES[*]}}" "$INCLUDE_STRESS" "$SELECTED_SYSTEMS_CSV" "${LLMROUTER_CONFIG:-not-selected}" \
+        "$PROMPTS_FILE" "$([ "$PROMPTS_EXPLICIT" = 1 ] && echo explicit || echo default)" "${WORKLOAD_ID:-auto}" "$XSR_MEASURED_INSTANCE_WARMED"
     exit 0
+fi
+
+if [ -n "$XSR_DISTILL_MODEL" ] && [ ! -f "$XSR_DISTILL_MODEL" ]; then
+    echo "Error: XSR_DISTILL_MODEL does not exist: ${XSR_DISTILL_MODEL}" >&2
+    exit 1
 fi
 
 BENCHMARK_SYSTEMS="$SELECTED_SYSTEMS_CSV" BENCHMARK_PYTHON="$PYTHON_BIN" \
     CC="${CC:-cc}" \
+    BENCHMARK_MODE="$BENCHMARK_MODE" WRK_BIN="$WRK_BIN" WRK2_BIN="$WRK2_BIN" \
+    NETNS="$NETNS" IFNAME="$IFNAME" XDP_PEER_IF="$XDP_PEER_IF" REQUIRE_BENCHMARK_NETWORK=1 \
     LLMROUTER_PYTHON="$LLMROUTER_PYTHON" LLMROUTER_BIN="$LLMROUTER_BIN" \
     VLLM_HOST="$VLLM_HOST" "${SCRIPT_DIR}/check_environments.sh"
 
@@ -303,17 +330,23 @@ RUN_ID="${RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)-$$}"
 RUN_ROOT="${REPORT_DIR}/${RUN_ID}"
 RAW_DIR="${RUN_ROOT}/raw"
 mkdir -p "$RAW_DIR"
+
+WORKLOAD_DESCRIPTOR="${RUN_ROOT}/workload.json"
+prepare_workload_args=(
+    --output "$WORKLOAD_DESCRIPTOR"
+    --prompts "$PROMPTS_FILE"
+    --policy "$KEYWORD_POLICY"
+)
+[ "$PROMPTS_EXPLICIT" = "1" ] && prepare_workload_args+=(--explicit)
+[ -n "$WORKLOAD_ID" ] && prepare_workload_args+=(--workload-id "$WORKLOAD_ID")
+"$PYTHON_BIN" "${SCRIPT_DIR}/prepare_workload.py" "${prepare_workload_args[@]}"
+PROMPTS_FILE=$("$PYTHON_BIN" -c 'import json, sys; print(json.load(open(sys.argv[1]))["prompts"]["path"])' "$WORKLOAD_DESCRIPTOR")
+
 "$PYTHON_BIN" "${SCRIPT_DIR}/manifest.py" --path "${RUN_ROOT}/manifest.json" --run-id "$RUN_ID" --profile "$BENCHMARK_PROFILE" \
     --mode "$BENCHMARK_MODE" --trials "$TRIALS" --duration "$DURATION" --warmup-duration "$WARMUP_DURATION" --seed "$RANDOM_SEED" \
     --systems "$SELECTED_SYSTEMS_CSV" --include-stress "$INCLUDE_STRESS" \
-    --xsr-warmup-lifecycle "$XSR_WARMUP_LIFECYCLE"
-
-# Generate prompts before metadata capture so a fresh clone records the exact
-# workload hash, count, and route distribution used by the run.
-if [ ! -f "benchmarks/dataset_prompts.jsonl" ] || ! head -n 1 benchmarks/dataset_prompts.jsonl | grep -q '"x_expected_route"'; then
-    echo "Generating dataset_prompts.jsonl..."
-    "$PYTHON_BIN" "${SCRIPT_DIR}/export_prompts.py" --config "$KEYWORD_POLICY"
-fi
+    --xsr-warmup-lifecycle "$XSR_WARMUP_LIFECYCLE" --xsr-measured-instance-warmed "$XSR_MEASURED_INSTANCE_WARMED" \
+    --workload-descriptor "$WORKLOAD_DESCRIPTOR"
 
 "$PYTHON_BIN" "${SCRIPT_DIR}/collect_metadata.py" --output "${RUN_ROOT}/metadata.json" --mode "$BENCHMARK_MODE" \
     --profile "$BENCHMARK_PROFILE" --trials "$TRIALS" --duration "$DURATION" --warmup-duration "$WARMUP_DURATION" \
@@ -322,7 +355,7 @@ fi
     --xsr-warmup-lifecycle "$XSR_WARMUP_LIFECYCLE" --xsr-measured-instance-warmed "$XSR_MEASURED_INSTANCE_WARMED" \
     --vllm-container "$VLLM_HOST" --vsr-container "${VSR_CONTAINER:-${VLLM_HOST/envoy/router}}" \
     --llmrouter-python "$LLMROUTER_PYTHON" --llmrouter-bin "$LLMROUTER_BIN" --llmrouter-config "${LLMROUTER_CONFIG:-}" \
-    --policy "$KEYWORD_POLICY" --prompts "${ROOT_DIR}/benchmarks/dataset_prompts.jsonl"
+    --policy "$KEYWORD_POLICY" --workload-descriptor "$WORKLOAD_DESCRIPTOR" --xsr-distill-model "$XSR_DISTILL_MODEL"
 
 if ! ip netns exec "$NETNS" ip link show dev "$XDP_PEER_IF" >/dev/null 2>&1; then
     echo "Error: ${NETNS}/${XDP_PEER_IF} is missing. Run 'make setup' first." >&2
@@ -794,7 +827,7 @@ run_wrk() {
     reason_file="${RAW_DIR}/${3}/invalid.txt"
     mkdir -p "${RAW_DIR}/${3}"
     if [ "$WARMUP_DURATION" != "0" ] && [ "$WARMUP_DURATION" != "0s" ]; then
-        ip netns exec "$NETNS" "$WRK_BIN" -t"$THREADS" -c"$CONCURRENCY" -d"$WARMUP_DURATION" $RATE_ARG -s "${SCRIPT_DIR}/prompts.lua" "$1" \
+        PROMPTS_FILE="$PROMPTS_FILE" ip netns exec "$NETNS" "$WRK_BIN" -t"$THREADS" -c"$CONCURRENCY" -d"$WARMUP_DURATION" $RATE_ARG -s "${SCRIPT_DIR}/prompts.lua" "$1" \
             > "${RAW_DIR}/${3}/warmup.txt" 2>&1 || { echo "Error: warm-up failed for $2." >&2; return 1; }
         if [ "$3" = "xsr" ]; then
             # SOCKMAP mode owns five persistent backend sockets for every
@@ -807,7 +840,7 @@ run_wrk() {
         fi
     fi
     set +e
-    output=$(ip netns exec "$NETNS" "$WRK_BIN" -t"$THREADS" -c"$CONCURRENCY" -d"$DURATION" $RATE_ARG -s "${SCRIPT_DIR}/prompts.lua" "$1" 2>&1)
+    output=$(PROMPTS_FILE="$PROMPTS_FILE" ip netns exec "$NETNS" "$WRK_BIN" -t"$THREADS" -c"$CONCURRENCY" -d"$DURATION" $RATE_ARG -s "${SCRIPT_DIR}/prompts.lua" "$1" 2>&1)
     status=$?
     set -e
     printf '%s\n' "$output" > "$raw_file"

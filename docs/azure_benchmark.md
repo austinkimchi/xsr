@@ -1,0 +1,89 @@
+# Azure paper benchmark readiness
+
+The benchmark runner provisions no Azure resources and accepts no cloud
+credentials. Prepare the VM, clone the reviewed commit, and start the pinned VSR
+Envoy deployment separately. The local readiness sequence is:
+
+```bash
+git clone https://github.com/austinkimchi/xsr.git
+cd xsr
+git switch fix/azure-benchmark-readiness
+make benchmark-install
+sudo systemctl enable --now docker
+sudo make setup iproutes
+make test
+make profile-check
+make test-llmrouter
+make prod
+sudo make benchmark
+```
+
+`sudo make benchmark` is read-only. It checks Linux, build/libbpf tools,
+SOCKMAP/SK_SKB capabilities, both wrk variants, Python environments, the pinned
+LLMRouter revision, Docker, the running VSR Envoy container, and the configured
+`veth0` plus `ns1/veth1` addresses.
+Where kernel configuration is readable, `CONFIG_BPF`, `CONFIG_BPF_SYSCALL`, and
+`CONFIG_BPF_STREAM_PARSER` are mandatory. The runner also starts and routes
+through XSR once before any timed trial, so a BPF-object load failure on the
+actual Azure kernel is an invocation-level failure gate.
+
+The repository expects the external VSR deployment's Envoy container to be
+running as `vllm-sr-envoy-container` (override with `VLLM_HOST`). Verify its
+identity before the canary:
+
+```bash
+sudo docker inspect --format '{{.State.Running}} {{.Image}} {{.Config.Image}}' \
+  vllm-sr-envoy-container
+```
+
+## Azure canary
+
+Use production XSR settings but override only run length and trial count. This
+exercises all five systems at the reviewed connection count without launching
+the long experiment:
+
+```bash
+sudo make performance \
+  args="BENCHMARK_PROFILE=paper TRIALS=1 CONCURRENCY=64 DURATION=5s WARMUP_DURATION=3s"
+sudo make performance-fixed-rate \
+  args="BENCHMARK_PROFILE=paper TRIALS=1 CONCURRENCY=64 DURATION=5s \
+  WARMUP_DURATION=3s RATES='100 500'"
+```
+
+For an intent-manifest corpus, add the following assignments to both `args`
+strings (the exporter sidecar normally supplies the workload identity):
+
+```text
+PROMPTS_FILE=/absolute/path/intent-test.jsonl
+XSR_DISTILL_MODEL=/absolute/path/distilled_int8.xsrf
+LLMROUTER_CONFIG=/absolute/path/benchmarks/llmrouter/configs/intent.yaml
+```
+
+Do not proceed unless all five systems start, routing preflight and the Azure
+kernel BPF load pass, the LLMRouter revision matches, all HTTP/socket error
+counts are zero, and direct throughput is comfortably above XSR. If direct and
+XSR flatten together, treat the client as the suspected ceiling. Review
+`metadata.json` for a clean XSR commit, kernel, CPU/NUMA/memory, prompt and
+policy hashes, workload identity, and VSR/Envoy image IDs.
+
+## Long paper collection (only after the canary)
+
+The saturation run keeps the full `1,2,4,8,16,32,64,96,128,192` sweep. The
+fixed-rate run measures only the reviewed 64-connection slice:
+
+```bash
+sudo make performance args="BENCHMARK_PROFILE=paper"
+sudo make performance-fixed-rate \
+  args="BENCHMARK_PROFILE=paper CONCURRENCY=64 RATES='100 250 500 750 900'"
+```
+
+Add `INCLUDE_STRESS=1` only to an optional saturation run to append `256,512`.
+Do not add it to the paper-default command.
+
+XSR is deliberately restarted after each load warm-up. The current userspace
+SOCKMAP router retains a six-socket set after the separate wrk process closes;
+safe reclamation needs connection ownership and close monitoring, not a small
+benchmark-only patch. Consequently, metadata records
+`xsr_measured_instance_warmed=false`; VSR and LLMRouter remain alive after their
+warm-up. Reports must describe this per-system lifecycle rather than saying all
+systems used warmed measured instances.

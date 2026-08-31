@@ -33,20 +33,20 @@ run() {
 if command -v apt-get >/dev/null 2>&1; then
     packages=(build-essential clang libbpf-dev pkg-config iproute2 ethtool iptables)
     if [ "$mode" = "benchmark" ]; then
-        packages+=(curl docker.io git libssl-dev perl python3 python3-venv unzip zlib1g-dev)
+        packages+=(curl docker.io git libssl-dev "linux-tools-$(uname -r)" linux-tools-common perl python3 python3-venv unzip zlib1g-dev)
     fi
     run "${as_root[@]}" apt-get update
     run "${as_root[@]}" apt-get install -y "${packages[@]}"
 elif command -v dnf >/dev/null 2>&1; then
     packages=(gcc make clang libbpf-devel pkgconf-pkg-config iproute ethtool iptables)
     if [ "$mode" = "benchmark" ]; then
-        packages+=(curl git openssl-devel perl python3 python3-pip unzip zlib-devel)
+        packages+=(bpftool curl git openssl-devel perl python3 python3-pip unzip zlib-devel)
     fi
     run "${as_root[@]}" dnf install -y "${packages[@]}"
 elif command -v pacman >/dev/null 2>&1; then
     packages=(base-devel clang libbpf pkgconf iproute2 ethtool iptables)
     if [ "$mode" = "benchmark" ]; then
-        packages+=(curl docker git openssl perl python unzip zlib)
+        packages+=(bpf curl docker git openssl perl python unzip zlib)
     fi
     run "${as_root[@]}" pacman -Syu --needed --noconfirm "${packages[@]}"
 else
