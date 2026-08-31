@@ -98,6 +98,32 @@ class XSRRoutingAdapterTest(unittest.TestCase):
                     self.assertEqual(result["intent"], LABELS[direct_id])
                     self.assertEqual(result["model_name"], route)
 
+    def test_relative_environment_model_path_uses_working_directory(self) -> None:
+        weights = np.zeros((CLASS_COUNT, DEPLOYMENT_FEATURE_COUNT), dtype=np.int8)
+        bias = np.zeros(CLASS_COUNT, dtype=np.int32)
+        bias[3] = 1
+        model = QuantizedModel(weights=weights, bias=bias, scale=1.0)
+
+        with tempfile.TemporaryDirectory() as directory:
+            working_directory = Path(directory)
+            model_path = working_directory / "models" / "deployment.xsrf"
+            model_path.parent.mkdir()
+            write_kernel_model(model_path, model)
+            original_directory = Path.cwd()
+            with mock.patch.dict(
+                os.environ, {"XSR_DISTILL_MODEL": "models/deployment.xsrf"}
+            ):
+                os.chdir(working_directory)
+                try:
+                    adapter = XSRRoutingAdapter.from_config(
+                        INTEGRATION_DIR / "configs" / "intent.yaml"
+                    )
+                finally:
+                    os.chdir(original_directory)
+
+        result = adapter.route({"query": "test"})
+        self.assertEqual(result["model_name"], "coding")
+
 
 class PinnedLLMRouterPluginIntegrationTest(unittest.TestCase):
     def plugin_system_path(self) -> Path | None:

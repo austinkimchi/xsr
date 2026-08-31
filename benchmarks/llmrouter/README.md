@@ -41,7 +41,9 @@ ports used by the routing harness, start those backends and run:
 
 Swap the router config for `bm25.yaml`, or for `intent.yaml` after setting
 `XSR_DISTILL_MODEL`. `serve-local.yaml` contains no credentials and is only a
-local baseline topology.
+local baseline topology. Relative `XSR_DISTILL_MODEL` paths resolve from the
+process working directory; model paths written in a config resolve beside that
+config file.
 
 The adapter accepts LLMRouter's `{"query": "..."}` input and also extracts
 text from `prompt` or the latest user message in an OpenAI-style `messages`

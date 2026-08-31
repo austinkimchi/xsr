@@ -86,7 +86,9 @@ class XSRRoutingAdapter:
             raw = values.get(key)
             value = str(raw) if isinstance(raw, str) and raw else ""
             if not value and environment:
-                value = os.environ.get(environment, "")
+                environment_value = os.environ.get(environment, "")
+                if environment_value:
+                    return Path(environment_value).expanduser().resolve()
             if not value:
                 return None
             path = Path(value).expanduser()
