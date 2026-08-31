@@ -58,10 +58,10 @@ def azure_instance_metadata() -> dict[str, Any]:
 
 
 def xsr_warmup_note(lifecycle: str) -> str:
-    if lifecycle == "router-restart-after-load-warmup":
+    if lifecycle == "same-process-load-warmup":
         return (
-            "XSR is restarted after load warm-up because closed clients leave unreaped "
-            "SOCKMAP connection sets; safe reclamation requires a router lifecycle change."
+            "XSR reaps closed SOCKMAP connection sets and waits for deterministic "
+            "quiescence; warm-up and measurement use the same router process."
         )
     if lifecycle == "disabled":
         return "Load warm-up was disabled; the measured XSR instance was not warmed."

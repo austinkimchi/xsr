@@ -60,6 +60,7 @@ help:
 	@echo "  make test-distill    Run NumPy distillation tests in the benchmark venv"
 	@echo "  make llmrouter-install  Install the optional pinned LLMRouter baseline"
 	@echo "  make test-llmrouter  Test the optional LLMRouter adapter"
+	@echo "  sudo make test-sockmap-lifecycle  Stress connection cleanup and slot reuse"
 	@echo "  make dev             Build benchmark helpers with debug output"
 	@echo "  make legacy          Build the older XDP router when explicitly needed"
 	@echo "  make policy          Regenerate the checked-in policy header"
@@ -76,7 +77,7 @@ build: sk_router sk_router.bpf.o
 
 legacy: xdp_router xdp_router.bpf.o
 
-benchmark-build: build benchmarks/mock_backend
+benchmark-build: build benchmarks/mock_backend benchmarks/sockmap_lifecycle_semantics
 
 prod:
 	$(MAKE) clean
@@ -131,6 +132,10 @@ llmrouter-install:
 test-llmrouter:
 	@test -x "$(LLMROUTER_PYTHON)" || { echo "Error: run 'make llmrouter-install' first." >&2; exit 1; }
 	$(LLMROUTER_PYTHON) -m unittest discover -s benchmarks/llmrouter -p 'test_*.py'
+
+test-sockmap-lifecycle: benchmark-build benchmarks/mock_backend_delayed
+	$(require_sudo)
+	./benchmarks/routing_wrk/run_sockmap_lifecycle_stress.sh
 
 GENERATED_SIGNAL_DIR := bpf/stages/signals/generated
 
@@ -217,6 +222,12 @@ sk_router: src/sk_router.c src/distill_model_loader.c include/xsr/distill_model_
 benchmarks/mock_backend: benchmarks/mock_backend.c
 	$(CC) -O3 $< -o $@ -lpthread
 
+benchmarks/mock_backend_delayed: benchmarks/mock_backend.c
+	$(CC) -O3 -DXSR_MOCK_DELAY=1 $< -o $@ -lpthread
+
+benchmarks/sockmap_lifecycle_semantics: benchmarks/sockmap_lifecycle_semantics.c
+	$(CC) $(USER_CFLAGS) $< -o $@ $(LIBBPF_FLAGS)
+
 xdp_router.bpf.o: bpf/programs/xdp_router.bpf.c include/xsr/router.h include/xsr/distill_model_format.h bpf/stages/parsing/xdp_datapath_limits.h bpf/stages/parsing/xdp_http_parser.bpf.h bpf/stages/signals/xdp_classifier.bpf.h bpf/stages/signals/xdp_distill_classifier.bpf.h bpf/stages/signals/xdp_ngram_classifier.bpf.h bpf/stages/signals/xdp_jaccard_classifier.bpf.h bpf/stages/signals/xdp_bm25_classifier.bpf.h $(GENERATED_SIGNAL_DIR)/xdp_keyword_modules.generated.h $(GENERATED_SIGNAL_DIR)/xdp_unicode_word.generated.h
 	$(BPF_CLANG) $(BPF_CFLAGS) -c $< -o $@
 
@@ -224,7 +235,7 @@ sk_router.bpf.o: bpf/programs/sk_router.bpf.c include/xsr/router.h include/xsr/d
 	$(BPF_CLANG) $(BPF_CFLAGS) -c $< -o $@
 
 clean:
-	rm -f xdp_router sk_router xdp_router.bpf.o sk_router.bpf.o benchmarks/mock_backend
+	rm -f xdp_router sk_router xdp_router.bpf.o sk_router.bpf.o benchmarks/mock_backend benchmarks/mock_backend_delayed benchmarks/sockmap_lifecycle_semantics
 
 clean-setup:
 	@ip link delete $(XDP_HOST_IF) 2>/dev/null || true

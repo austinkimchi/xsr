@@ -249,8 +249,8 @@ elif [ "$WARMUP_DURATION" = "0" ] || [ "$WARMUP_DURATION" = "0s" ]; then
     XSR_WARMUP_LIFECYCLE="disabled"
     XSR_MEASURED_INSTANCE_WARMED="false"
 else
-    XSR_WARMUP_LIFECYCLE="router-restart-after-load-warmup"
-    XSR_MEASURED_INSTANCE_WARMED="false"
+    XSR_WARMUP_LIFECYCLE="same-process-load-warmup"
+    XSR_MEASURED_INSTANCE_WARMED="true"
 fi
 
 if [ "$INCLUDE_STRESS" = "1" ]; then
@@ -304,12 +304,12 @@ if system_selected llmrouter && [ -z "$LLMROUTER_CONFIG" ]; then
 fi
 
 if [ "$BENCHMARK_DRY_RUN" = "1" ]; then
-    printf 'profile=%s trials=%s duration=%s warmup_duration=%s build_profile=%s mode=%s tool=%s rates=%q random_seed=%s concurrencies=%q include_stress=%s systems=%s llmrouter_config=%s prompts_file=%s prompts_selection=%s workload_id=%s xsr_measured_instance_warmed=%s\n' \
+    printf 'profile=%s trials=%s duration=%s warmup_duration=%s build_profile=%s mode=%s tool=%s rates=%q random_seed=%s concurrencies=%q include_stress=%s systems=%s llmrouter_config=%s prompts_file=%s prompts_selection=%s workload_id=%s xsr_warmup_lifecycle=%s xsr_measured_instance_warmed=%s\n' \
         "$BENCHMARK_PROFILE" "$TRIALS" "$DURATION" "$WARMUP_DURATION" \
         "$([ "$BENCHMARK_PROFILE" = paper ] && echo prod || echo dev)" "$BENCHMARK_MODE" "$WRK_BIN" \
         "$([ "$BENCHMARK_MODE" = fixed-rate ] && echo "$RATES" || echo not-applicable)" "$RANDOM_SEED" \
         "${CONCURRENCY:-${DEFAULT_CONCURRENCIES[*]}}" "$INCLUDE_STRESS" "$SELECTED_SYSTEMS_CSV" "${LLMROUTER_CONFIG:-not-selected}" \
-        "$PROMPTS_FILE" "$([ "$PROMPTS_EXPLICIT" = 1 ] && echo explicit || echo default)" "${WORKLOAD_ID:-auto}" "$XSR_MEASURED_INSTANCE_WARMED"
+        "$PROMPTS_FILE" "$([ "$PROMPTS_EXPLICIT" = 1 ] && echo explicit || echo default)" "${WORKLOAD_ID:-auto}" "$XSR_WARMUP_LIFECYCLE" "$XSR_MEASURED_INSTANCE_WARMED"
     exit 0
 fi
 
@@ -445,6 +445,7 @@ fi
 
 ROUTER_PID=""
 ROUTER_LOG="/tmp/sk_router_wrk.log"
+ROUTER_STATUS_SOCKET=""
 LLMROUTER_PID=""
 LLMROUTER_LOG="${RUN_ROOT}/raw/llmrouter-server.log"
 VLLM_IF=""
@@ -709,6 +710,7 @@ cleanup() {
             wait "$pid" 2>/dev/null || true
         fi
     done
+    [ -n "$ROUTER_STATUS_SOCKET" ] && rm -f "$ROUTER_STATUS_SOCKET"
     iptables -D INPUT -p tcp --dport "${XDP_PORT}" -j ACCEPT >/dev/null 2>&1 || true
     iptables -D INPUT -p tcp --dport "${CODING_BACKEND_PORT}" -j ACCEPT >/dev/null 2>&1 || true
     iptables -D INPUT -p tcp --dport "${MATH_BACKEND_PORT}" -j ACCEPT >/dev/null 2>&1 || true
@@ -770,8 +772,11 @@ start_routing_proxy() {
     ROUTER_LOG="$log_path"
     mkdir -p "$(dirname "$ROUTER_LOG")"
     if [ "$mode" = "sockmap" ]; then
-        SK_ROUTER_MODE=sockmap ./sk_router > "$ROUTER_LOG" 2>&1 &
+        ROUTER_STATUS_SOCKET="/tmp/xsr-status-${BASHPID}-${RANDOM}.sock"
+        rm -f "$ROUTER_STATUS_SOCKET"
+        SK_ROUTER_MODE=sockmap XSR_STATUS_SOCKET="$ROUTER_STATUS_SOCKET" ./sk_router > "$ROUTER_LOG" 2>&1 &
     else
+        ROUTER_STATUS_SOCKET=""
         ./sk_router > "$ROUTER_LOG" 2>&1 &
     fi
     ROUTER_PID=$!
@@ -819,6 +824,8 @@ stop_routing_proxy() {
         wait "$ROUTER_PID" 2>/dev/null || true
         ROUTER_PID=""
     fi
+    [ -n "$ROUTER_STATUS_SOCKET" ] && rm -f "$ROUTER_STATUS_SOCKET"
+    ROUTER_STATUS_SOCKET=""
 }
 
 run_wrk() {
@@ -830,13 +837,17 @@ run_wrk() {
         PROMPTS_FILE="$PROMPTS_FILE" ip netns exec "$NETNS" "$WRK_BIN" -t"$THREADS" -c"$CONCURRENCY" -d"$WARMUP_DURATION" $RATE_ARG -s "${SCRIPT_DIR}/prompts.lua" "$1" \
             > "${RAW_DIR}/${3}/warmup.txt" 2>&1 || { echo "Error: warm-up failed for $2." >&2; return 1; }
         if [ "$3" = "xsr" ]; then
-            # SOCKMAP mode owns five persistent backend sockets for every
-            # accepted frontend connection.  A separate wrk/wrk2 warm-up
-            # process closes its peers, but the userspace router has no
-            # connection reaper and retains those socket sets.  Reset XSR so
-            # the measured process is not competing with stale warm-up state.
-            stop_routing_proxy
-            start_routing_proxy sockmap "${RAW_DIR}/${3}/router-measurement.log" || return 1
+            # The measured process must be the warmed process. Wait on XSR's
+            # lifecycle counter so every warm-up connection and six-slot block
+            # is reclaimed before the timed client begins.
+            "$PYTHON_BIN" "${SCRIPT_DIR}/wait_for_xsr_quiescence.py" \
+                --socket "$ROUTER_STATUS_SOCKET" --pid "$ROUTER_PID" --timeout 30 \
+                > "${RAW_DIR}/${3}/warmup-quiescence.txt" || {
+                    echo "Error: XSR did not reclaim warm-up connections." >&2
+                    return 1
+                }
+            printf 'warmup_router_pid=%s\nmeasurement_router_pid=%s\n' \
+                "$ROUTER_PID" "$ROUTER_PID" > "${RAW_DIR}/${3}/router-pid.txt"
         fi
     fi
     set +e
@@ -906,11 +917,7 @@ run_benchmark() {
                 ;;
             xsr)
                 heading="XSR (SK_SKB/SOCKMAP)"
-                if [ "$WARMUP_DURATION" != "0" ] && [ "$WARMUP_DURATION" != "0s" ]; then
-                    start_routing_proxy sockmap "${RAW_DIR}/${system}/router-warmup.log" || return 1
-                else
-                    start_routing_proxy sockmap "${RAW_DIR}/${system}/router-measurement.log" || return 1
-                fi
+                start_routing_proxy sockmap "${RAW_DIR}/${system}/router.log" || return 1
                 validate_untimed_load "xsr" "$XDP_URL" || return 1
                 ;;
             xsr-legacy)

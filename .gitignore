@@ -37,6 +37,7 @@ tests/
 xdp_router
 sk_router
 mock_backend
+sockmap_lifecycle_semantics
 *.bpf.o
 
 # Generated policy headers: ignore by default, then retain reviewed snapshots
