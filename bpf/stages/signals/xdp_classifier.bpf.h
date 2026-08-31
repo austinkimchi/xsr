@@ -64,7 +64,9 @@ static __always_inline __u32 xdp_classifier_route(struct xdp_classifier_state *s
 #if XDP_SIGNAL_ENABLE_DISTILL
   __u8 distill_enabled = 0;
   __u32 distill_route = xdp_distill_route(&state->distill, &distill_enabled);
-  if (distill_enabled)
+  /* In explicit mixed mode, intent owns its two specialized routes while an
+   * intent fallback remains eligible for the configured keyword signals. */
+  if (distill_enabled && distill_route != XDP_ROUTE_GENERAL)
     return distill_route;
 #endif
 #if XDP_SIGNAL_ENABLE_NGRAM

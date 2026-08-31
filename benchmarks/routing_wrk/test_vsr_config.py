@@ -19,7 +19,7 @@ class VSRConfigurationVerificationTest(unittest.TestCase):
             "Mounts": [],
         }
 
-    def test_automatic_bm25_configuration_is_snapshotted(self) -> None:
+    def test_automatic_bm25_configuration_records_identity_without_contents(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             config = root / "router.yaml"
@@ -33,7 +33,11 @@ class VSRConfigurationVerificationTest(unittest.TestCase):
                 verify_vsr_config.main()
             result = json.loads(output.read_text(encoding="utf-8"))
             self.assertEqual(result["verification_mode"], "automatic-inspection")
-            self.assertTrue(Path(result["configuration_artifacts"][0]["snapshot_path"]).is_file())
+            artifact = result["configuration_artifacts"][0]
+            self.assertEqual(artifact["source_path"], str(config))
+            self.assertEqual(artifact["sha256"], hashlib.sha256(config.read_bytes()).hexdigest())
+            self.assertNotIn("snapshot_path", artifact)
+            self.assertFalse((output.parent / "configs").exists())
 
     def test_opaque_config_requires_exact_reviewed_contract(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

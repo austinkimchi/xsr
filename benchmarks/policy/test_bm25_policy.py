@@ -125,6 +125,13 @@ class Bm25CompatibilityTests(unittest.TestCase):
         self.assertEqual(threshold_micro("0.1000005"), 100001)
 
 class ModuleSelectionTests(unittest.TestCase):
+    def test_mixed_profile_allows_keywords_after_intent_fallback(self) -> None:
+        classifier = (ROOT / "bpf/stages/signals/xdp_classifier.bpf.h").read_text(encoding="utf-8")
+        self.assertIn(
+            "if (distill_enabled && distill_route != XDP_ROUTE_GENERAL)",
+            classifier,
+        )
+
     def test_ngram_bm25_and_mixed_selection(self) -> None:
         cases = {
             "policy_ngram.yaml": (1, 0),

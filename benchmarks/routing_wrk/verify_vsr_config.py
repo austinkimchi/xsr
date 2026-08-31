@@ -7,7 +7,6 @@ import argparse
 import hashlib
 import json
 import re
-import shutil
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -105,14 +104,13 @@ def main() -> None:
             )
         verification_mode = "caller-reviewed-hash-contract"
 
-    snapshot_dir = args.output.parent / "configs" / "vsr"
-    snapshot_dir.mkdir(parents=True, exist_ok=True)
-    artifacts = []
-    for index, (source, _, digest) in enumerate(candidates):
-        source_path = Path(source)
-        snapshot = snapshot_dir / f"{index:02d}-{source_path.name}"
-        shutil.copy2(source_path, snapshot)
-        artifacts.append({"source_path": source, "snapshot_path": str(snapshot), "sha256": digest})
+    # Config contents may contain credentials even when their filenames look
+    # harmless. Preserve identity without copying sensitive contents into the
+    # shareable benchmark result directory.
+    artifacts = [
+        {"source_path": source, "sha256": digest}
+        for source, _, digest in candidates
+    ]
 
     result = {
         "requested_profile": args.profile,

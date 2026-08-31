@@ -89,9 +89,11 @@ and float-to-int8 prediction changes are retained in local artifacts.
 
 ## Kernel and parity
 
-Build normally, then load the exported model in either SOCKMAP or legacy XDP:
+Generate and build the intent-only profile, then load the exported model in
+either SOCKMAP or legacy XDP:
 
 ```bash
+make SIGNAL_PROFILE=intent policy
 make
 sudo env SK_ROUTER_MODE=distill \
   XSR_DISTILL_MODEL=$PWD/benchmarks/lora_distill/artifacts/model/distilled_int8.xsrf \
