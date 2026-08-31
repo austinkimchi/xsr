@@ -72,9 +72,40 @@ def write_outputs(run_dir: Path, summary: list[dict[str, Any]]) -> None:
     if isinstance(systems, list):
         systems = ",".join(str(system) for system in systems)
     xsr_warmup = benchmark.get("xsr_warmup", {})
+    signals = xsr.get("signals", {}) if isinstance(xsr.get("signals"), dict) else {}
     prompt_info = workload.get("prompts", {}) if isinstance(workload.get("prompts"), dict) else {}
     identity = workload.get("identity", {}) if isinstance(workload.get("identity"), dict) else {}
-    lines = ["# Routing performance summary", "", "## Provenance", "", f"- XSR commit: `{xsr.get('commit', 'unavailable')}` ({xsr.get('working_tree', 'unavailable')})", f"- XSR build/routing: `{xsr.get('build_profile', 'unavailable')}` / `{xsr.get('routing_mode', 'unavailable')}`", f"- Benchmark: `{benchmark.get('profile', 'unavailable')}` / `{benchmark.get('mode', 'unavailable')}`; trials=`{benchmark.get('trial_count', 'unavailable')}`, duration=`{benchmark.get('duration', 'unavailable')}`, warm-up=`{benchmark.get('warmup_duration', 'unavailable')}`", f"- Systems / stress points: `{systems}` / `{benchmark.get('include_stress', 'unavailable')}`", f"- XSR warm-up lifecycle: `{xsr_warmup.get('lifecycle', 'unavailable') if isinstance(xsr_warmup, dict) else 'unavailable'}`; measured instance warmed=`{xsr_warmup.get('measured_instance_warmed', 'unavailable') if isinstance(xsr_warmup, dict) else 'unavailable'}`", f"- Linux kernel / CPUs: `{environment.get('kernel', 'unavailable')}` / `{environment.get('cpu_count', 'unavailable')}`", f"- Policy SHA-256: `{workload.get('policy_sha256', 'unavailable')}`", f"- Workload identity: `{identity.get('id', 'unavailable')}` ({identity.get('kind', 'unavailable')})", f"- Prompt corpus: `{prompt_info.get('path', 'unavailable')}`", f"- Prompt corpus SHA-256: `{prompt_info.get('sha256', 'unavailable')}`", f"- VSR image ID: `{docker.get('vsr', {}).get('image_id', 'unavailable') if isinstance(docker.get('vsr'), dict) else 'unavailable'}`", f"- Envoy image ID/version: `{docker.get('envoy', {}).get('image_id', 'unavailable') if isinstance(docker.get('envoy'), dict) else 'unavailable'}` / `{docker.get('envoy_version', 'unavailable')}`", f"- Raw trial artifacts: [`raw/`](raw/); full provenance: [`metadata.json`](metadata.json)", "", "| Mode | Configuration | System | Topology | Valid | Failed | Throughput mean ± 95% CI |", "| --- | --- | --- | --- | ---: | ---: | ---: |"]
+    lines = [
+        "# Routing performance summary",
+        "",
+        "## Provenance",
+        "",
+        f"- XSR commit: `{xsr.get('commit', 'unavailable')}` ({xsr.get('working_tree', 'unavailable')})",
+        f"- XSR build/routing: `{xsr.get('build_profile', 'unavailable')}` / `{xsr.get('routing_mode', 'unavailable')}`",
+        f"- Signal profile requested/effective: `{signals.get('requested_profile', 'unavailable')}` / `{signals.get('effective_compiled_profile', 'unavailable')}`; parity debug=`{signals.get('parity_debug', 'unavailable')}`",
+        f"- Benchmark: `{benchmark.get('profile', 'unavailable')}` / `{benchmark.get('mode', 'unavailable')}`; trials=`{benchmark.get('trial_count', 'unavailable')}`, duration=`{benchmark.get('duration', 'unavailable')}`, warm-up=`{benchmark.get('warmup_duration', 'unavailable')}`",
+        f"- Systems / stress points: `{systems}` / `{benchmark.get('include_stress', 'unavailable')}`",
+        f"- XSR warm-up lifecycle: `{xsr_warmup.get('lifecycle', 'unavailable') if isinstance(xsr_warmup, dict) else 'unavailable'}`; measured instance warmed=`{xsr_warmup.get('measured_instance_warmed', 'unavailable') if isinstance(xsr_warmup, dict) else 'unavailable'}`",
+        f"- Linux kernel / CPUs: `{environment.get('kernel', 'unavailable')}` / `{environment.get('cpu_count', 'unavailable')}`",
+        f"- Policy SHA-256: `{workload.get('policy_sha256', 'unavailable')}`",
+        f"- Workload identity: `{identity.get('id', 'unavailable')}` ({identity.get('kind', 'unavailable')})",
+        f"- Prompt corpus: `{prompt_info.get('path', 'unavailable')}`",
+        f"- Prompt corpus SHA-256: `{prompt_info.get('sha256', 'unavailable')}`",
+        f"- VSR image ID: `{docker.get('vsr', {}).get('image_id', 'unavailable') if isinstance(docker.get('vsr'), dict) else 'unavailable'}`",
+        f"- Envoy image ID/version: `{docker.get('envoy', {}).get('image_id', 'unavailable') if isinstance(docker.get('envoy'), dict) else 'unavailable'}` / `{docker.get('envoy_version', 'unavailable')}`",
+        "- Raw trial artifacts: [`raw/`](raw/); full provenance: [`metadata.json`](metadata.json)",
+        "",
+        "| Mode | Configuration | System | Topology | Valid | Failed | Throughput mean ± 95% CI |",
+        "| --- | --- | --- | --- | ---: | ---: | ---: |",
+    ]
+    distill = xsr.get("distill_model", {}) if isinstance(xsr.get("distill_model"), dict) else {}
+    vsr_verification = metadata.get("vsr_configuration_verification", {})
+    llmrouter = metadata.get("llmrouter", {}) if isinstance(metadata.get("llmrouter"), dict) else {}
+    lines[-3:-3] = [
+        f"- Distill model SHA-256: `{distill.get('sha256', 'not-applicable')}`",
+        f"- LLMRouter config SHA-256: `{llmrouter.get('config_sha256', 'not-applicable')}`",
+        f"- VSR signal verification: `{vsr_verification.get('verified_profile', 'not-selected') if isinstance(vsr_verification, dict) else 'not-selected'}` / `{vsr_verification.get('verification_mode', 'not-selected') if isinstance(vsr_verification, dict) else 'not-selected'}`",
+    ]
     for row in summary:
         throughput = row["metrics"]["throughput_rps"]
         mean = "unavailable" if throughput["mean"] is None else f"{throughput['mean']:.2f} ± {throughput['ci95']:.2f}"

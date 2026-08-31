@@ -42,6 +42,8 @@ XDP_PEER_IF ?= veth1
 XDP_HOST_ADDR ?= 10.10.0.1/24
 XDP_PEER_ADDR ?= 10.10.0.2/24
 KEYWORD_POLICY ?= config/policy_ngram.yaml
+SIGNAL_PROFILE ?= auto
+XSR_DISTILL_PARITY_DEBUG ?= 0
 VSR_BACKEND_PORTS ?= 18391 18392 18393 18394 18395
 BENCHMARK_SYSTEMS ?= direct,envoy-only,xsr,vsr,llmrouter
 args ?=
@@ -64,6 +66,8 @@ help:
 	@echo "  make dev             Build benchmark helpers with debug output"
 	@echo "  make legacy          Build the older XDP router when explicitly needed"
 	@echo "  make policy          Regenerate the checked-in policy header"
+	@echo "  make SIGNAL_PROFILE=intent policy  Generate an intent-only build"
+	@echo "  make parity-build    Build intent-only with kernel parity diagnostics"
 	@echo "  sudo make setup      Create or repair ns1 and veth0/veth1"
 	@echo "  sudo make correctness [args=\"...\"]"
 	@echo "  sudo make performance [args=\"CONCURRENCY=1 DURATION=30s ...\"]"
@@ -139,12 +143,14 @@ test-sockmap-lifecycle: benchmark-build benchmarks/mock_backend_delayed
 
 GENERATED_SIGNAL_DIR := bpf/stages/signals/generated
 
-policy: $(GENERATED_SIGNAL_DIR)/xdp_keyword_modules.generated.h
+policy:
+	$(PYTHON) benchmarks/policy/generate_policy_modules.py $(KEYWORD_POLICY) $(GENERATED_SIGNAL_DIR) \
+		--signal-profile $(SIGNAL_PROFILE) $(if $(filter 1,$(XSR_DISTILL_PARITY_DEBUG)),--parity-debug,)
 
-$(GENERATED_SIGNAL_DIR)/xdp_keyword_modules.generated.h: FORCE
-	$(PYTHON) benchmarks/policy/generate_policy_modules.py $(KEYWORD_POLICY) $(GENERATED_SIGNAL_DIR)
-
-FORCE:
+parity-build:
+	$(MAKE) clean
+	$(MAKE) policy SIGNAL_PROFILE=intent XSR_DISTILL_PARITY_DEBUG=1
+	$(MAKE) build SIGNAL_PROFILE=intent XSR_DISTILL_PARITY_DEBUG=1
 
 define require_sudo
 	@if [ "$$(id -u)" -ne 0 ]; then \
@@ -277,4 +283,4 @@ iproutes:
 	done
 	@echo "benchmark backend ports allowed: $(VSR_BACKEND_PORTS)"
 
-.PHONY: help all build legacy benchmark-build prod dev install benchmark benchmark-install policy FORCE correctness performance performance-fixed-rate wrk check-build check check-benchmark check-performance check-performance-fixed-rate install-wrk install-wrk2 llmrouter-install test-llmrouter clean clean-setup setup iproutes
+.PHONY: help all build legacy benchmark-build prod dev install benchmark benchmark-install policy parity-build correctness performance performance-fixed-rate wrk check-build check check-benchmark check-performance check-performance-fixed-rate install-wrk install-wrk2 llmrouter-install test-llmrouter clean clean-setup setup iproutes

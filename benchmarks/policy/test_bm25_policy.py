@@ -16,7 +16,7 @@ from generate_bm25_policy_header import (
     vocabulary_aliases,
     vocabulary_by_stem,
 )
-from generate_policy_modules import methods, selection_header
+from generate_policy_modules import methods, resolve_profile, selection_header
 from vsr_bm25_tokenizer import ENGLISH_STOP_WORDS, stem_english, tokenize, tokenize_query
 
 
@@ -137,6 +137,20 @@ class ModuleSelectionTests(unittest.TestCase):
             header = selection_header(path, selected)
             self.assertIn(f"XDP_KEYWORD_ENABLE_NGRAM {enabled[0]}", header)
             self.assertIn(f"XDP_KEYWORD_ENABLE_BM25 {enabled[1]}", header)
+
+    def test_profiles_are_isolated_and_contradictions_fail(self) -> None:
+        ngram = ROOT / "config" / "policy_ngram.yaml"
+        profile, selected = resolve_profile(ngram, "intent")
+        header = selection_header(ngram, profile, selected)
+        self.assertIn("XDP_SIGNAL_ENABLE_DISTILL 1", header)
+        self.assertIn("XDP_SIGNAL_ENABLE_NGRAM 0", header)
+        with self.assertRaisesRegex(ValueError, "contradicts"):
+            resolve_profile(ngram, "bm25")
+
+    def test_parity_diagnostics_are_explicit(self) -> None:
+        policy = ROOT / "config" / "policy_ngram.yaml"
+        self.assertIn("XSR_DISTILL_PARITY_DEBUG 0", selection_header(policy, "intent", set()))
+        self.assertIn("XSR_DISTILL_PARITY_DEBUG 1", selection_header(policy, "intent", set(), True))
 
 
 if __name__ == "__main__":

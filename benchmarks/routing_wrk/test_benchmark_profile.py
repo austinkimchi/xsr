@@ -22,6 +22,13 @@ def dry_run(**overrides: str) -> str:
         "INCLUDE_STRESS",
         "KEYWORD_POLICY",
         "LLMROUTER_CONFIG",
+        "SIGNAL_PROFILE",
+        "XSR_DISTILL_MODEL",
+        "XSR_DISTILL_PARITY_DEBUG",
+        "VSR_CONTAINER",
+        "VSR_CONFIG_PATH",
+        "VSR_CONFIG_SHA256",
+        "VSR_SIGNAL_PROFILE",
         "PROMPTS_EXPLICIT",
         "PROMPTS_FILE",
         "RANDOM_SEED",
@@ -38,6 +45,16 @@ def dry_run(**overrides: str) -> str:
 
 
 class BenchmarkProfileTest(unittest.TestCase):
+    def test_intent_preflight_maps_qa_and_writing_prompts_to_fallback(self) -> None:
+        source = SCRIPT.read_text(encoding="utf-8")
+        function = source.split("preflight_routing_cases() {", 1)[1].split("\n}", 1)[0]
+        intent_block = function.split('if [ "$SIGNAL_PROFILE" = intent ]; then', 1)[1].split("else", 1)[0]
+        self.assertIn("others|answer this question: what is the capital of France?", intent_block)
+        self.assertIn("others|write a short poem about rain", intent_block)
+        self.assertNotIn("qa|answer this question", intent_block)
+        self.assertNotIn("writing|write a short poem", intent_block)
+        self.assertEqual(source.count("done < <(preflight_routing_cases)"), 3)
+
     def test_xsr_warmup_uses_quiescence_without_a_router_restart(self) -> None:
         source = SCRIPT.read_text(encoding="utf-8")
         self.assertIn("same-process-load-warmup", source)
@@ -69,6 +86,25 @@ class BenchmarkProfileTest(unittest.TestCase):
         output = dry_run(BENCHMARK_SYSTEMS="llmrouter", KEYWORD_POLICY=str(policy))
         self.assertIn("systems=llmrouter", output)
         self.assertIn("/benchmarks/llmrouter/configs/bm25.yaml", output)
+
+    def test_intent_profile_selects_intent_adapter_and_reports_no_debug(self) -> None:
+        output = dry_run(
+            BENCHMARK_SYSTEMS="xsr,llmrouter", SIGNAL_PROFILE="intent",
+            XSR_DISTILL_MODEL="/bin/true", PROMPTS_FILE="/data/intent.jsonl",
+            WORKLOAD_ID="intent:heldout",
+        )
+        self.assertIn("effective_compiled_profile=intent", output)
+        self.assertIn("parity_debug=0", output)
+        self.assertIn("/benchmarks/llmrouter/configs/intent.yaml", output)
+
+    def test_explicit_adapter_mismatch_fails(self) -> None:
+        policy = SCRIPT.parents[2] / "config" / "policy_bm25.yaml"
+        with self.assertRaises(subprocess.CalledProcessError):
+            dry_run(
+                BENCHMARK_SYSTEMS="llmrouter", SIGNAL_PROFILE="bm25",
+                LLMROUTER_CONFIG=str(SCRIPT.parents[1] / "llmrouter/configs/ngram.yaml"),
+                KEYWORD_POLICY=str(policy),
+            )
 
     def test_explicit_workload_is_visible_in_dry_run(self) -> None:
         output = dry_run(PROMPTS_FILE="/data/intent.jsonl", WORKLOAD_ID="intent:heldout")

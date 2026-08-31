@@ -114,10 +114,15 @@ the Python integer reference. It must report 100% before performance results are
 accepted:
 
 ```bash
+make parity-build
+# Start the resulting router with XSR_DISTILL_MODEL set, then run:
 sudo .venv-distill/bin/python benchmarks/lora_distill/kernel_parity.py \
   --model benchmarks/lora_distill/artifacts/model/distilled_int8.xsrf \
   --prompts benchmarks/lora_distill/artifacts/manifest.jsonl
 ```
+
+The parity build is intentionally separate: normal intent and paper builds omit
+`xdp_distill_last_prediction` and its per-inference score writes.
 
 ## Performance methodology
 

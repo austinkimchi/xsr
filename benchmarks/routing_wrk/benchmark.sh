@@ -31,6 +31,12 @@ for benchmark_arg in "$@"; do
         LLMROUTER_CONFIG=*) LLMROUTER_CONFIG="${benchmark_arg#LLMROUTER_CONFIG=}" ;;
         LLMROUTER_PORT=*) LLMROUTER_PORT="${benchmark_arg#LLMROUTER_PORT=}" ;;
         XSR_DISTILL_MODEL=*) XSR_DISTILL_MODEL="${benchmark_arg#XSR_DISTILL_MODEL=}" ;;
+        SIGNAL_PROFILE=*) SIGNAL_PROFILE="${benchmark_arg#SIGNAL_PROFILE=}" ;;
+        XSR_DISTILL_PARITY_DEBUG=*) XSR_DISTILL_PARITY_DEBUG="${benchmark_arg#XSR_DISTILL_PARITY_DEBUG=}" ;;
+        VSR_SIGNAL_PROFILE=*) VSR_SIGNAL_PROFILE="${benchmark_arg#VSR_SIGNAL_PROFILE=}" ;;
+        VSR_CONFIG_PATH=*) VSR_CONFIG_PATH="${benchmark_arg#VSR_CONFIG_PATH=}" ;;
+        VSR_CONFIG_SHA256=*) VSR_CONFIG_SHA256="${benchmark_arg#VSR_CONFIG_SHA256=}" ;;
+        VSR_CONTAINER=*) VSR_CONTAINER="${benchmark_arg#VSR_CONTAINER=}" ;;
     esac
 done
 
@@ -77,6 +83,7 @@ WRITING_BACKEND_PORT="${WRITING_BACKEND_PORT:-18395}"
 VLLM_BACKEND_PORT="${VLLM_BACKEND_PORT:-18396}"
 START_VLLM_MOCK="${START_VLLM_MOCK:-0}"
 VLLM_HOST="${VLLM_HOST:-vllm-sr-envoy-container}"
+VSR_CONTAINER="${VSR_CONTAINER:-${VLLM_HOST/envoy/router}}"
 VLLM_PORT="${VLLM_PORT:-8899}"
 LLMROUTER_PYTHON="${LLMROUTER_PYTHON:-${ROOT_DIR}/.venv-llmrouter/bin/python}"
 LLMROUTER_BIN="${LLMROUTER_BIN:-${ROOT_DIR}/.venv-llmrouter/bin/llmrouter}"
@@ -114,6 +121,11 @@ if [ "${PROMPTS_EXPLICIT+x}" != "x" ]; then
 fi
 WORKLOAD_ID="${WORKLOAD_ID:-}"
 XSR_DISTILL_MODEL="${XSR_DISTILL_MODEL:-}"
+SIGNAL_PROFILE="${SIGNAL_PROFILE:-auto}"
+XSR_DISTILL_PARITY_DEBUG="${XSR_DISTILL_PARITY_DEBUG:-0}"
+VSR_SIGNAL_PROFILE="${VSR_SIGNAL_PROFILE:-}"
+VSR_CONFIG_PATH="${VSR_CONFIG_PATH:-}"
+VSR_CONFIG_SHA256="${VSR_CONFIG_SHA256:-}"
 export XSR_DISTILL_MODEL
 
 if [ "$EUID" -ne 0 ] && [ "$BENCHMARK_DRY_RUN" != "1" ]; then
@@ -152,6 +164,11 @@ if [ "$EUID" -ne 0 ] && [ "$BENCHMARK_DRY_RUN" != "1" ]; then
         LLMROUTER_SERVE_SCRIPT="$LLMROUTER_SERVE_SCRIPT"
         LLMROUTER_CONFIG="$LLMROUTER_CONFIG"
         XSR_DISTILL_MODEL="${XSR_DISTILL_MODEL:-}"
+        SIGNAL_PROFILE="$SIGNAL_PROFILE"
+        XSR_DISTILL_PARITY_DEBUG="$XSR_DISTILL_PARITY_DEBUG"
+        VSR_SIGNAL_PROFILE="$VSR_SIGNAL_PROFILE"
+        VSR_CONFIG_PATH="$VSR_CONFIG_PATH"
+        VSR_CONFIG_SHA256="$VSR_CONFIG_SHA256"
         XDP_PORT="$XDP_PORT"
         CODING_BACKEND_PORT="$CODING_BACKEND_PORT"
         MATH_BACKEND_PORT="$MATH_BACKEND_PORT"
@@ -161,6 +178,7 @@ if [ "$EUID" -ne 0 ] && [ "$BENCHMARK_DRY_RUN" != "1" ]; then
         VLLM_BACKEND_PORT="$VLLM_BACKEND_PORT"
         START_VLLM_MOCK="$START_VLLM_MOCK"
         VLLM_HOST="$VLLM_HOST"
+        VSR_CONTAINER="$VSR_CONTAINER"
         VLLM_PORT="$VLLM_PORT"
         VLLM_IP="$VLLM_IP"
         IFNAME="$IFNAME"
@@ -292,21 +310,74 @@ case "$BENCHMARK_MODE" in
         ;;
 esac
 
+case "$XSR_DISTILL_PARITY_DEBUG" in 0|1) ;; *) echo "Error: XSR_DISTILL_PARITY_DEBUG must be 0 or 1." >&2; exit 1 ;; esac
+if [ "$SIGNAL_PROFILE" = auto ]; then
+    if [ -n "$XSR_DISTILL_MODEL" ]; then
+        SIGNAL_PROFILE=intent
+    elif grep -Eq '^[[:space:]]*method:[[:space:]]*bm25([[:space:]]|$)' "$KEYWORD_POLICY" && \
+         ! grep -Eq '^[[:space:]]*method:[[:space:]]*ngram([[:space:]]|$)' "$KEYWORD_POLICY"; then
+        SIGNAL_PROFILE=bm25
+    elif grep -Eq '^[[:space:]]*method:[[:space:]]*ngram([[:space:]]|$)' "$KEYWORD_POLICY" && \
+         ! grep -Eq '^[[:space:]]*method:[[:space:]]*bm25([[:space:]]|$)' "$KEYWORD_POLICY"; then
+        SIGNAL_PROFILE=ngram
+    else
+        SIGNAL_PROFILE=mixed
+    fi
+fi
+case "$SIGNAL_PROFILE" in ngram|bm25|intent|mixed) ;; *) echo "Error: SIGNAL_PROFILE must be ngram, bm25, intent, or mixed." >&2; exit 1 ;; esac
+if [ "$SIGNAL_PROFILE" = ngram ] || [ "$SIGNAL_PROFILE" = bm25 ]; then
+    if [ ! -f "$KEYWORD_POLICY" ] || ! grep -Eq "^[[:space:]]*method:[[:space:]]*${SIGNAL_PROFILE}([[:space:]]|$)" "$KEYWORD_POLICY"; then
+        echo "Error: SIGNAL_PROFILE=${SIGNAL_PROFILE} requires a matching keyword policy." >&2; exit 1
+    fi
+    other_profile="$([ "$SIGNAL_PROFILE" = ngram ] && echo bm25 || echo ngram)"
+    if grep -Eq "^[[:space:]]*method:[[:space:]]*${other_profile}([[:space:]]|$)" "$KEYWORD_POLICY"; then
+        echo "Error: SIGNAL_PROFILE=${SIGNAL_PROFILE} contradicts mixed keyword policy ${KEYWORD_POLICY}." >&2; exit 1
+    fi
+fi
+if { [ "$SIGNAL_PROFILE" = intent ] || [ "$SIGNAL_PROFILE" = mixed ]; } && [ -z "$XSR_DISTILL_MODEL" ]; then
+    echo "Error: SIGNAL_PROFILE=${SIGNAL_PROFILE} requires XSR_DISTILL_MODEL." >&2; exit 1
+fi
+if [ "$SIGNAL_PROFILE" != intent ] && [ "$SIGNAL_PROFILE" != mixed ] && [ -n "$XSR_DISTILL_MODEL" ]; then
+    echo "Error: ${SIGNAL_PROFILE} profile contradicts XSR_DISTILL_MODEL; use SIGNAL_PROFILE=mixed explicitly." >&2; exit 1
+fi
+if [ "$BENCHMARK_PROFILE" = paper ] && [ "$XSR_DISTILL_PARITY_DEBUG" != 0 ]; then
+    echo "Error: paper performance builds require XSR_DISTILL_PARITY_DEBUG=0." >&2; exit 1
+fi
+
 if system_selected llmrouter && [ -z "$LLMROUTER_CONFIG" ]; then
-    if grep -Eq '^[[:space:]]*method:[[:space:]]*bm25([[:space:]]|$)' "$KEYWORD_POLICY"; then
+    if [ "$SIGNAL_PROFILE" = bm25 ]; then
         LLMROUTER_CONFIG="${ROOT_DIR}/benchmarks/llmrouter/configs/bm25.yaml"
-    elif grep -Eq '^[[:space:]]*method:[[:space:]]*ngram([[:space:]]|$)' "$KEYWORD_POLICY"; then
+    elif [ "$SIGNAL_PROFILE" = ngram ]; then
         LLMROUTER_CONFIG="${ROOT_DIR}/benchmarks/llmrouter/configs/ngram.yaml"
+    elif [ "$SIGNAL_PROFILE" = intent ]; then
+        LLMROUTER_CONFIG="${ROOT_DIR}/benchmarks/llmrouter/configs/intent.yaml"
     else
         echo "Error: cannot infer an LLMRouter adapter config from ${KEYWORD_POLICY}; set LLMROUTER_CONFIG explicitly." >&2
         exit 1
     fi
 fi
+if system_selected llmrouter; then
+    configured_method="$(sed -n 's/^[[:space:]]*method:[[:space:]]*\([^#[:space:]]*\).*/\1/p' "$LLMROUTER_CONFIG" | head -1)"
+    if [ "$configured_method" != "$SIGNAL_PROFILE" ]; then
+        echo "Error: XSR profile ${SIGNAL_PROFILE} does not match LLMRouter adapter ${configured_method:-unknown}." >&2
+        exit 1
+    fi
+fi
 
 if [ "$BENCHMARK_DRY_RUN" = "1" ]; then
-    printf 'profile=%s trials=%s duration=%s warmup_duration=%s build_profile=%s mode=%s tool=%s rates=%q random_seed=%s concurrencies=%q include_stress=%s systems=%s llmrouter_config=%s prompts_file=%s prompts_selection=%s workload_id=%s xsr_warmup_lifecycle=%s xsr_measured_instance_warmed=%s\n' \
+    dry_policy_path=not-applicable; dry_policy_sha256=not-applicable
+    dry_model_path=not-applicable; dry_model_sha256=not-applicable
+    if [ "$SIGNAL_PROFILE" != intent ]; then
+        dry_policy_path="$KEYWORD_POLICY"; dry_policy_sha256="$(sha256sum "$KEYWORD_POLICY" | awk '{print $1}')"
+    fi
+    if [ "$SIGNAL_PROFILE" = intent ] || [ "$SIGNAL_PROFILE" = mixed ]; then
+        dry_model_path="$XSR_DISTILL_MODEL"; dry_model_sha256="$(sha256sum "$XSR_DISTILL_MODEL" | awk '{print $1}')"
+    fi
+    printf 'profile=%s trials=%s duration=%s warmup_duration=%s build_profile=%s signal_profile_requested=%s effective_compiled_profile=%s parity_debug=%s keyword_policy=%s keyword_policy_sha256=%s distill_model=%s distill_model_sha256=%s vsr_container=%s vsr_asserted_profile=%s vsr_config_path=%s vsr_config_sha256=%s mode=%s tool=%s rates=%q random_seed=%s concurrencies=%q include_stress=%s systems=%s llmrouter_config=%s prompts_file=%s prompts_selection=%s workload_id=%s xsr_warmup_lifecycle=%s xsr_measured_instance_warmed=%s\n' \
         "$BENCHMARK_PROFILE" "$TRIALS" "$DURATION" "$WARMUP_DURATION" \
-        "$([ "$BENCHMARK_PROFILE" = paper ] && echo prod || echo dev)" "$BENCHMARK_MODE" "$WRK_BIN" \
+        "$([ "$BENCHMARK_PROFILE" = paper ] && echo prod || echo dev)" "$SIGNAL_PROFILE" "$SIGNAL_PROFILE" "$XSR_DISTILL_PARITY_DEBUG" \
+        "$dry_policy_path" "$dry_policy_sha256" "$dry_model_path" "$dry_model_sha256" \
+        "$VSR_CONTAINER" "${VSR_SIGNAL_PROFILE:-not-supplied}" "${VSR_CONFIG_PATH:-not-supplied}" "${VSR_CONFIG_SHA256:-not-supplied}" "$BENCHMARK_MODE" "$WRK_BIN" \
         "$([ "$BENCHMARK_MODE" = fixed-rate ] && echo "$RATES" || echo not-applicable)" "$RANDOM_SEED" \
         "${CONCURRENCY:-${DEFAULT_CONCURRENCIES[*]}}" "$INCLUDE_STRESS" "$SELECTED_SYSTEMS_CSV" "${LLMROUTER_CONFIG:-not-selected}" \
         "$PROMPTS_FILE" "$([ "$PROMPTS_EXPLICIT" = 1 ] && echo explicit || echo default)" "${WORKLOAD_ID:-auto}" "$XSR_WARMUP_LIFECYCLE" "$XSR_MEASURED_INSTANCE_WARMED"
@@ -331,6 +402,32 @@ RUN_ROOT="${REPORT_DIR}/${RUN_ID}"
 RAW_DIR="${RUN_ROOT}/raw"
 mkdir -p "$RAW_DIR"
 
+VSR_VERIFICATION=""
+if system_selected vsr; then
+    if [ "$SIGNAL_PROFILE" = mixed ]; then
+        echo "Error: mixed signal profile is not a supported VSR paper baseline." >&2; exit 1
+    fi
+    VSR_VERIFICATION="${RUN_ROOT}/vsr-verification.json"
+    vsr_verify_args=(--container "$VSR_CONTAINER" --profile "$SIGNAL_PROFILE" --output "$VSR_VERIFICATION")
+    [ -n "$VSR_CONFIG_PATH" ] && vsr_verify_args+=(--config "$VSR_CONFIG_PATH")
+    [ -n "$VSR_CONFIG_SHA256" ] && vsr_verify_args+=(--expected-sha256 "$VSR_CONFIG_SHA256")
+    [ -n "$VSR_SIGNAL_PROFILE" ] && vsr_verify_args+=(--asserted-profile "$VSR_SIGNAL_PROFILE")
+    "$PYTHON_BIN" "${SCRIPT_DIR}/verify_vsr_config.py" "${vsr_verify_args[@]}"
+fi
+
+if system_selected xsr; then
+    make -s KEYWORD_POLICY="$KEYWORD_POLICY" SIGNAL_PROFILE="$SIGNAL_PROFILE" \
+        XSR_DISTILL_PARITY_DEBUG="$XSR_DISTILL_PARITY_DEBUG" policy
+    EFFECTIVE_COMPILED_PROFILE="$(sed -n 's/^#define XDP_SIGNAL_PROFILE_NAME "\([^"]*\)"/\1/p' "${ROOT_DIR}/bpf/stages/signals/generated/xdp_keyword_modules.generated.h")"
+    EFFECTIVE_PARITY_DEBUG="$(sed -n 's/^#define XSR_DISTILL_PARITY_DEBUG \([01]\)$/\1/p' "${ROOT_DIR}/bpf/stages/signals/generated/xdp_keyword_modules.generated.h")"
+    if [ "$EFFECTIVE_COMPILED_PROFILE" != "$SIGNAL_PROFILE" ] || [ "$EFFECTIVE_PARITY_DEBUG" != "$XSR_DISTILL_PARITY_DEBUG" ]; then
+        echo "Error: generated signal build does not match the requested profile." >&2; exit 1
+    fi
+else
+    EFFECTIVE_COMPILED_PROFILE="not-built"
+    EFFECTIVE_PARITY_DEBUG="not-built"
+fi
+
 WORKLOAD_DESCRIPTOR="${RUN_ROOT}/workload.json"
 prepare_workload_args=(
     --output "$WORKLOAD_DESCRIPTOR"
@@ -342,26 +439,35 @@ prepare_workload_args=(
 "$PYTHON_BIN" "${SCRIPT_DIR}/prepare_workload.py" "${prepare_workload_args[@]}"
 PROMPTS_FILE=$("$PYTHON_BIN" -c 'import json, sys; print(json.load(open(sys.argv[1]))["prompts"]["path"])' "$WORKLOAD_DESCRIPTOR")
 
+manifest_vsr_args=()
+[ -n "$VSR_VERIFICATION" ] && manifest_vsr_args=(--vsr-verification "$VSR_VERIFICATION")
 "$PYTHON_BIN" "${SCRIPT_DIR}/manifest.py" --path "${RUN_ROOT}/manifest.json" --run-id "$RUN_ID" --profile "$BENCHMARK_PROFILE" \
     --mode "$BENCHMARK_MODE" --trials "$TRIALS" --duration "$DURATION" --warmup-duration "$WARMUP_DURATION" --seed "$RANDOM_SEED" \
     --systems "$SELECTED_SYSTEMS_CSV" --include-stress "$INCLUDE_STRESS" \
     --xsr-warmup-lifecycle "$XSR_WARMUP_LIFECYCLE" --xsr-measured-instance-warmed "$XSR_MEASURED_INSTANCE_WARMED" \
-    --workload-descriptor "$WORKLOAD_DESCRIPTOR"
+    --workload-descriptor "$WORKLOAD_DESCRIPTOR" \
+    --signal-profile "$SIGNAL_PROFILE" --parity-debug "$XSR_DISTILL_PARITY_DEBUG" \
+    --effective-signal-profile "$EFFECTIVE_COMPILED_PROFILE" --effective-parity-debug "$EFFECTIVE_PARITY_DEBUG" \
+    --policy "$KEYWORD_POLICY" --distill-model "$XSR_DISTILL_MODEL" "${manifest_vsr_args[@]}"
 
+metadata_vsr_args=()
+[ -n "$VSR_VERIFICATION" ] && metadata_vsr_args=(--vsr-verification "$VSR_VERIFICATION")
 "$PYTHON_BIN" "${SCRIPT_DIR}/collect_metadata.py" --output "${RUN_ROOT}/metadata.json" --mode "$BENCHMARK_MODE" \
     --profile "$BENCHMARK_PROFILE" --trials "$TRIALS" --duration "$DURATION" --warmup-duration "$WARMUP_DURATION" \
     --concurrency "${CONCURRENCY:-${DEFAULT_CONCURRENCIES[*]}}" --rates "$RATES" --wrk-bin "$WRK_BIN" --wrk2-bin "$WRK2_BIN" \
     --systems "$SELECTED_SYSTEMS_CSV" --include-stress "$INCLUDE_STRESS" \
     --xsr-warmup-lifecycle "$XSR_WARMUP_LIFECYCLE" --xsr-measured-instance-warmed "$XSR_MEASURED_INSTANCE_WARMED" \
-    --vllm-container "$VLLM_HOST" --vsr-container "${VSR_CONTAINER:-${VLLM_HOST/envoy/router}}" \
+    --vllm-container "$VLLM_HOST" --vsr-container "$VSR_CONTAINER" \
     --llmrouter-python "$LLMROUTER_PYTHON" --llmrouter-bin "$LLMROUTER_BIN" --llmrouter-config "${LLMROUTER_CONFIG:-}" \
-    --policy "$KEYWORD_POLICY" --workload-descriptor "$WORKLOAD_DESCRIPTOR" --xsr-distill-model "$XSR_DISTILL_MODEL"
+    --policy "$KEYWORD_POLICY" --workload-descriptor "$WORKLOAD_DESCRIPTOR" --xsr-distill-model "$XSR_DISTILL_MODEL" \
+    --signal-profile "$SIGNAL_PROFILE" --parity-debug "$XSR_DISTILL_PARITY_DEBUG" \
+    --effective-signal-profile "$EFFECTIVE_COMPILED_PROFILE" --effective-parity-debug "$EFFECTIVE_PARITY_DEBUG" \
+    "${metadata_vsr_args[@]}"
 
 if ! ip netns exec "$NETNS" ip link show dev "$XDP_PEER_IF" >/dev/null 2>&1; then
     echo "Error: ${NETNS}/${XDP_PEER_IF} is missing. Run 'make setup' first." >&2
     exit 1
 fi
-
 if ! command -v curl &> /dev/null; then
     echo "Error: curl is required to verify vLLM-SR backend routing." >&2
     exit 1
@@ -376,13 +482,21 @@ echo "Building routing proxy and mock backends..."
 make benchmarks/mock_backend
 if system_selected xsr; then
     if [ "$BENCHMARK_PROFILE" = "paper" ]; then
-        make KEYWORD_POLICY="$KEYWORD_POLICY" prod
+        make KEYWORD_POLICY="$KEYWORD_POLICY" SIGNAL_PROFILE="$SIGNAL_PROFILE" XSR_DISTILL_PARITY_DEBUG="$XSR_DISTILL_PARITY_DEBUG" prod
     else
-        make KEYWORD_POLICY="$KEYWORD_POLICY" dev
+        make KEYWORD_POLICY="$KEYWORD_POLICY" SIGNAL_PROFILE="$SIGNAL_PROFILE" XSR_DISTILL_PARITY_DEBUG="$XSR_DISTILL_PARITY_DEBUG" dev
+    fi
+fi
+if system_selected xsr; then
+    compiled_profile="$(sed -n 's/^#define XDP_SIGNAL_PROFILE_NAME "\([^"]*\)"/\1/p' "${ROOT_DIR}/bpf/stages/signals/generated/xdp_keyword_modules.generated.h")"
+    compiled_parity="$(sed -n 's/^#define XSR_DISTILL_PARITY_DEBUG \([01]\)$/\1/p' "${ROOT_DIR}/bpf/stages/signals/generated/xdp_keyword_modules.generated.h")"
+    if [ "$compiled_profile" != "$SIGNAL_PROFILE" ] || [ "$compiled_parity" != "$XSR_DISTILL_PARITY_DEBUG" ]; then
+        echo "Error: requested signal build ${SIGNAL_PROFILE}/parity=${XSR_DISTILL_PARITY_DEBUG}, generated ${compiled_profile:-unknown}/parity=${compiled_parity:-unknown}." >&2
+        exit 1
     fi
 fi
 if [ "$INCLUDE_XDP" = "1" ]; then
-    make KEYWORD_POLICY="$KEYWORD_POLICY" legacy
+    make KEYWORD_POLICY="$KEYWORD_POLICY" SIGNAL_PROFILE="$SIGNAL_PROFILE" XSR_DISTILL_PARITY_DEBUG="$XSR_DISTILL_PARITY_DEBUG" legacy
 fi
 
 # Flush old iptables rules for these ports
@@ -523,6 +637,26 @@ start_llmrouter() {
     fi
 }
 
+preflight_routing_cases() {
+    if [ "$SIGNAL_PROFILE" = intent ]; then
+        cat <<'EOF'
+coding|write a python function
+math|calculate the derivative of x squared
+others|answer this question: what is the capital of France?
+others|write a short poem about rain
+others|tell me a short story
+EOF
+    else
+        cat <<'EOF'
+coding|write a python function
+math|calculate the derivative of x squared
+qa|answer this question: what is the capital of France?
+writing|write a short poem about rain
+others|tell me a short story
+EOF
+    fi
+}
+
 verify_llmrouter_backend_routing() {
     local expected prompt response
 
@@ -542,13 +676,7 @@ verify_llmrouter_backend_routing() {
             echo "Error: LLMRouter preflight expected model=${expected}, got: ${response}" >&2
             return 1
         fi
-    done <<'EOF'
-coding|write a python function
-math|calculate the derivative of x squared
-qa|answer this question: what is the capital of France?
-writing|write a short poem about rain
-others|tell me a short story
-EOF
+    done < <(preflight_routing_cases)
 }
 
 setup_vllm_route() {
@@ -682,13 +810,7 @@ verify_vllm_backend_routing() {
             echo "Error: vLLM-SR preflight expected backend=${expected}, got: ${response}" >&2
             return 1
         fi
-    done <<'EOF'
-coding|write a python function
-math|calculate the derivative of x squared
-qa|answer this question: what is the capital of France?
-writing|write a short poem about rain
-others|tell me a short story
-EOF
+    done < <(preflight_routing_cases)
 }
 
 check_marker_backend_processes() {
@@ -800,13 +922,7 @@ verify_router_backend_routing() {
             echo "Error: ${name} preflight expected backend=${expected}, got: ${response}" >&2
             return 1
         fi
-    done <<'EOF'
-coding|write a python function
-math|calculate the derivative of x squared
-qa|answer this question: what is the capital of France?
-writing|write a short poem about rain
-others|tell me a short story
-EOF
+    done < <(preflight_routing_cases)
 }
 
 validate_untimed_load() {

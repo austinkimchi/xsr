@@ -56,8 +56,29 @@ strings (the exporter sidecar normally supplies the workload identity):
 ```text
 PROMPTS_FILE=/absolute/path/intent-test.jsonl
 XSR_DISTILL_MODEL=/absolute/path/distilled_int8.xsrf
-LLMROUTER_CONFIG=/absolute/path/benchmarks/llmrouter/configs/intent.yaml
+SIGNAL_PROFILE=intent
 ```
+
+Use `SIGNAL_PROFILE=ngram`, `bm25`, or `intent` for every paper run. The runner
+uses that single value for the compiled XSR signal set and the corresponding
+LLMRouter adapter, and fails on a mismatch. `mixed` is reserved for explicit
+mixed-function tests. Paper builds always require
+`XSR_DISTILL_PARITY_DEBUG=0`.
+
+Before a VSR run, the runner inspects the container entrypoint, arguments,
+environment, labels, and actual mounted files. If those do not unambiguously
+identify the requested classifier, supply a reviewed fail-closed contract:
+
+```text
+VSR_SIGNAL_PROFILE=bm25
+VSR_CONFIG_PATH=/absolute/path/reviewed-vsr-config.yaml
+VSR_CONFIG_SHA256=<reviewed-lowercase-sha256>
+```
+
+The config hash must match. Intent inspection additionally looks for both the
+mmBERT identity and a LoRA/adapter identity. Results distinguish automatic
+inspection from a caller-reviewed hash contract in `manifest.json`,
+`metadata.json`, and `vsr-verification.json`.
 
 Do not proceed unless all five systems start, routing preflight and the Azure
 kernel BPF load pass, the LLMRouter revision matches, all HTTP/socket error

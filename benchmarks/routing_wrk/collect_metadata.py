@@ -115,6 +115,11 @@ def main() -> None:
     parser.add_argument("--policy", type=Path, required=True)
     parser.add_argument("--workload-descriptor", type=Path, required=True)
     parser.add_argument("--xsr-distill-model")
+    parser.add_argument("--signal-profile", required=True, choices=("ngram", "bm25", "intent", "mixed"))
+    parser.add_argument("--parity-debug", required=True, choices=("0", "1"))
+    parser.add_argument("--effective-signal-profile", required=True)
+    parser.add_argument("--effective-parity-debug", required=True)
+    parser.add_argument("--vsr-verification", type=Path)
     args = parser.parse_args()
     systems = set(args.systems.split(","))
     uses_docker = bool(systems & {"envoy-only", "vsr"})
@@ -140,8 +145,20 @@ def main() -> None:
             "distill_model": {
                 "path": str(distill_model), "sha256": sha256(distill_model)
             } if distill_model else unavailable(),
+            "signals": {
+                "requested_profile": args.signal_profile,
+                "effective_compiled_profile": args.effective_signal_profile,
+                "parity_debug_requested": args.parity_debug == "1",
+                "parity_debug": ({"0": False, "1": True}.get(args.effective_parity_debug, "not-built")),
+                "keyword_policy": ({"path": str(args.policy), "sha256": sha256(args.policy)}
+                                   if args.signal_profile in {"ngram", "bm25", "mixed"} else unavailable()),
+            },
         },
-        "workload": {**workload, "policy_path": str(args.policy), "policy_sha256": sha256(args.policy)},
+        "workload": {
+            **workload,
+            "policy_path": str(args.policy) if args.signal_profile in {"ngram", "bm25", "mixed"} else None,
+            "policy_sha256": sha256(args.policy) if args.signal_profile in {"ngram", "bm25", "mixed"} else None,
+        },
         "benchmark": {"mode": args.mode, "profile": args.profile, "trial_count": args.trials, "duration": args.duration,
                       "warmup_duration": args.warmup_duration, "concurrency": args.concurrency, "rates": args.rates,
                       "systems": args.systems.split(","), "include_stress": args.include_stress == "1",
@@ -188,9 +205,16 @@ def main() -> None:
             "pinned_revision": "da3430baaea672743c3957457b0c76faba19876e",
         },
     }
+    if args.vsr_verification:
+        metadata["vsr_configuration_verification"] = json.loads(
+            args.vsr_verification.read_text(encoding="utf-8")
+        )
     configs = args.output.parent / "configs"
     configs.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(args.policy, configs / args.policy.name)
+    if args.signal_profile in {"ngram", "bm25", "mixed"}:
+        if not args.policy.is_file():
+            raise SystemExit(f"keyword policy does not exist: {args.policy}")
+        shutil.copy2(args.policy, configs / args.policy.name)
     if llmrouter_config:
         snapshot = configs / f"llmrouter-{llmrouter_config.name}"
         shutil.copy2(llmrouter_config, snapshot)
@@ -198,14 +222,6 @@ def main() -> None:
             "path": str(snapshot),
             "sha256": sha256(snapshot),
         }
-    if uses_docker and args.vllm_container:
-        effective = command("docker", "exec", args.vllm_container, "sh", "-c", "cat /etc/envoy/envoy.yaml")
-        if effective:
-            envoy_config = configs / "vsr-envoy.yaml"
-            envoy_config.write_text(effective + "\n", encoding="utf-8")
-            metadata["docker"]["effective_envoy_config"] = {"path": str(envoy_config), "sha256": sha256(envoy_config)}
-        else:
-            metadata["docker"]["effective_envoy_config"] = unavailable()
     args.output.write_text(json.dumps(metadata, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 

@@ -25,7 +25,10 @@ def resolve_map_id(explicit: int | None) -> int:
     # Kernel BPF object names are limited to 15 visible bytes.
     matches = [item for item in bpftool_json("map", "show") if str(item.get("name", "")).startswith("xdp_distill_las")]
     if len(matches) != 1:
-        raise SystemExit(f"expected one live xdp_distill_last_prediction map, found {len(matches)}; pass --map-id")
+        raise SystemExit(
+            f"expected one live xdp_distill_last_prediction map, found {len(matches)}; "
+            "build and run the explicit parity configuration with 'make parity-build', or pass --map-id"
+        )
     return int(matches[0]["id"])
 
 
