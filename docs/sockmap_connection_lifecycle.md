@@ -14,6 +14,20 @@ their six SOCKMAP slots. One epoll loop drives accepts, status queries, and a
 100 ms maintenance `timerfd`. At each tick, one zero-time `poll()` checks all
 active frontend FDs for `POLLRDHUP`, `POLLHUP`, or `POLLERR`; it never reads
 request payloads and installs no persistent readiness hook on a data socket.
+`POLLERR`, `POLLHUP`, and invalid FDs are fatal and reap immediately.
+`POLLRDHUP` alone is only a peer write-side FIN, so it marks a drain state.
+For a client with one outstanding response, cleanup waits until TCP reports
+response bytes acknowledged with no unacknowledged or unsent data. A peer that
+sent no request, or half-closed an incomplete parser flow, can be reclaimed
+immediately.
+
+This drain proof deliberately does not inspect HTTP in userspace or add a BPF
+map update per response. Consequently, half-close correctness is scoped to one
+outstanding response on the connection. Correlating a FIN with the last of
+multiple pipelined or prior keep-alive requests would require an explicit
+per-response completion signal in the data path; XSR does not claim that
+transport behavior. Normal benchmark keep-alive clients close only after their
+responses and remain promptly reclaimable.
 
 Persistent frontend/backend epoll monitoring was tested and rejected because
 socket readiness callbacks run on data arrival even when the requested mask
@@ -67,7 +81,8 @@ enough structure for the router's fixed topology and avoids a general-purpose
 allocator.
 
 When `XSR_STATUS_SOCKET` is set, a local Unix socket reports the router PID,
-owned-set counters, free/quarantined blocks, a confirmed SOCKMAP mutation
+owned-set counters, free/quarantined blocks, half-close and maintenance-poll
+counters, a confirmed SOCKMAP mutation
 count, and actual hash-map entry counts for `sk_routes`, `sk_http_flows`, and
 `sk_route_decisions`. The
 benchmark waits outside timed measurement until the same PID reports zero
@@ -75,7 +90,8 @@ active sets and zero lifecycle-map entries. Any PID mismatch or quarantined
 block fails the trial.
 
 The maintenance interval bounds cleanup latency at 100 ms and costs ten timer
-wakeups and ten batched poll syscalls per second; work scales with active
+wakeups and ten batched poll syscalls per second; `lifecycle_poll_total` makes
+that wake rate directly observable. Work scales with active
 connections, not HTTP requests. A cgroup `BPF_PROG_TYPE_SOCK_OPS`
 state-transition program was unnecessary attachment and event-transport
 complexity. Per-client threads were rejected because hundreds of lifecycle

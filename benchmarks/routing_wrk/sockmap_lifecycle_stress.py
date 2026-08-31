@@ -7,6 +7,7 @@ import argparse
 import concurrent.futures
 import json
 import socket
+import time
 from pathlib import Path
 
 from wait_for_xsr_quiescence import wait_for_quiescence
@@ -45,7 +46,12 @@ def receive_http_response(client: socket.socket) -> bytes:
 
 
 def request_once(
-    host: str, port: int, sequence: int, *, request_backend_close: bool = False
+    host: str,
+    port: int,
+    sequence: int,
+    *,
+    request_backend_close: bool = False,
+    half_close: bool = False,
 ) -> str:
     expected, prompt = ROUTES[sequence % len(ROUTES)]
     route_sequence = f"lifecycle-{sequence}"
@@ -68,6 +74,11 @@ def request_once(
     with socket.create_connection((host, port), timeout=10) as client:
         client.settimeout(10)
         client.sendall(request)
+        if half_close:
+            # Let XSR finish installing the accepted socket set before the FIN;
+            # the delayed backend response still spans multiple lifecycle ticks.
+            time.sleep(0.05)
+            client.shutdown(socket.SHUT_WR)
         parsed = json.loads(receive_http_response(client))
     if parsed.get("backend") != expected:
         raise AssertionError(
@@ -111,17 +122,32 @@ def main() -> None:
     max_sampled_fds = baseline_fds
     sequence = 0
 
-    for sequence in range(args.sequential):
+    for _ in ROUTES:
+        request_once(args.host, args.port, sequence, half_close=True)
+        sequence += 1
+    expected_reaped = baseline["reaped_total"] + len(ROUTES)
+    after_half_close = wait_for_quiescence(
+        args.status_socket, args.pid, args.cleanup_timeout, expected_reaped
+    )
+
+    request_once(args.host, args.port, sequence, request_backend_close=True)
+    sequence += 1
+    expected_reaped += 1
+    after_full_close = wait_for_quiescence(
+        args.status_socket, args.pid, args.cleanup_timeout, expected_reaped
+    )
+
+    for sequence in range(sequence, sequence + args.sequential):
         request_once(args.host, args.port, sequence)
         if sequence % 100 == 99:
             max_sampled_fds = max(max_sampled_fds, fd_count(args.pid))
-    expected_reaped = baseline["reaped_total"] + args.sequential
+    expected_reaped += args.sequential
     after_sequential = wait_for_quiescence(
         args.status_socket, args.pid, args.cleanup_timeout, expected_reaped
     )
     sequential_fds = fd_count(args.pid)
 
-    next_sequence = args.sequential
+    next_sequence = args.sequential + len(ROUTES) + 1
     wave_results: list[dict[str, object]] = []
     for size in args.wave_sizes:
         for repeat in range(args.wave_repeats):
@@ -154,6 +180,8 @@ def main() -> None:
             {
                 "router_pid": args.pid,
                 "baseline": baseline,
+                "after_half_close": after_half_close,
+                "after_full_close": after_full_close,
                 "after_sequential": after_sequential,
                 "final": final,
                 "sequential_lifecycles": args.sequential,

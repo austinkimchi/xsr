@@ -15,9 +15,9 @@
 #include <errno.h>
 #include <linux/bpf.h>
 #include <linux/if_link.h>
+#include <linux/tcp.h>
 #include <net/if.h>
 #include <netinet/in.h>
-#include <netinet/tcp.h>
 #include <poll.h>
 #include <pthread.h>
 #include <signal.h>
@@ -82,8 +82,10 @@ struct connection_set {
   int fds[SOCKS_PER_CONNECTION];
   __u32 slots[SOCKS_PER_CONNECTION];
   __u64 cookies[SOCKS_PER_CONNECTION];
+  __u64 initial_bytes_acked;
   unsigned char allocated;
   unsigned char active;
+  unsigned char peer_write_closed;
   unsigned char sockmap_installed[SOCKS_PER_CONNECTION];
   unsigned char route_installed[SOCKS_PER_CONNECTION];
 };
@@ -99,6 +101,8 @@ struct connection_manager {
   __u32 sockmap_entry_count;
   __u64 accepted_total;
   __u64 reaped_total;
+  __u64 half_close_total;
+  __u64 lifecycle_poll_total;
   int epoll_fd;
   int sock_map_fd;
   int routes_fd;
@@ -791,10 +795,19 @@ static void reset_connection_set(struct connection_set *set) {
   for (int member = 0; member < SOCKS_PER_CONNECTION; member++)
     set->fds[member] = -1;
   memset(set->cookies, 0, sizeof(set->cookies));
+  set->initial_bytes_acked = 0;
   memset(set->sockmap_installed, 0, sizeof(set->sockmap_installed));
   memset(set->route_installed, 0, sizeof(set->route_installed));
   set->allocated = 0;
   set->active = 0;
+  set->peer_write_closed = 0;
+}
+
+static int get_tcp_info(int fd, struct tcp_info *info) {
+  socklen_t info_len = sizeof(*info);
+
+  memset(info, 0, sizeof(*info));
+  return getsockopt(fd, IPPROTO_TCP, TCP_INFO, info, &info_len);
 }
 
 static int reap_connection_set(struct connection_manager *manager,
@@ -920,6 +933,10 @@ static int add_connection_set(struct connection_manager *manager,
   reset_connection_set(set);
   set->allocated = 1;
   set->fds[CONNECTION_CLIENT] = client_fd;
+  /* No response bytes can be sent before XSR installs this frontend in the
+   * SOCKMAP, so zero is the accepted socket's application-byte baseline. */
+  set->initial_bytes_acked = 0;
+  set->peer_write_closed = 0;
 
   for (int member = 1; member < SOCKS_PER_CONNECTION; member++) {
     set->fds[member] = connect_backend(backend_ports[member]);
@@ -1032,6 +1049,24 @@ static int count_map_entries(int map_fd, size_t key_size) {
   return errno == ENOENT ? count : -1;
 }
 
+static int map_contains_key(int map_fd, const void *target, size_t key_size) {
+  unsigned char current[sizeof(__u64)] = {};
+  unsigned char next[sizeof(__u64)] = {};
+  const void *key = NULL;
+
+  if (key_size > sizeof(current)) {
+    errno = EINVAL;
+    return -1;
+  }
+  while (bpf_map_get_next_key(map_fd, key, next) == 0) {
+    if (memcmp(next, target, key_size) == 0)
+      return 1;
+    memcpy(current, next, key_size);
+    key = current;
+  }
+  return errno == ENOENT ? 0 : -1;
+}
+
 static void serve_status(struct connection_manager *manager) {
   int fd;
 
@@ -1047,12 +1082,16 @@ static void serve_status(struct connection_manager *manager) {
     dprintf(fd,
             "pid=%ld active_connection_sets=%u free_slot_sets=%u "
             "quarantined_slot_sets=%u accepted_total=%llu reaped_total=%llu "
+            "half_close_total=%llu "
+            "lifecycle_poll_total=%llu "
             "sockmap_entries=%d routes_entries=%d http_flows_entries=%d "
             "route_decisions_entries=%d\n",
             (long)getpid(), manager->active_count, manager->free_count,
             manager->quarantined_count,
             (unsigned long long)manager->accepted_total,
             (unsigned long long)manager->reaped_total,
+            (unsigned long long)manager->half_close_total,
+            (unsigned long long)manager->lifecycle_poll_total,
             sockmap_entries, routes_entries, http_flows_entries,
             route_decisions_entries);
     close(fd);
@@ -1067,6 +1106,7 @@ static void poll_connection_lifecycle(struct connection_manager *manager) {
   if (read(manager->timer_fd, &expirations, sizeof(expirations)) !=
       sizeof(expirations))
     return;
+  manager->lifecycle_poll_total += expirations;
   for (__u32 i = 0; i < MAX_CONNECTION_SETS; i++) {
     if (!manager->sets[i].active)
       continue;
@@ -1084,11 +1124,40 @@ static void poll_connection_lifecycle(struct connection_manager *manager) {
     return;
   }
   for (__u32 i = 0; i < count && ready > 0; i++) {
-    if (!(manager->poll_fds[i].revents & (POLLRDHUP | POLLHUP | POLLERR)))
+    struct connection_set *set;
+    short revents = manager->poll_fds[i].revents;
+
+    if (!(revents & (POLLRDHUP | POLLHUP | POLLERR | POLLNVAL)))
       continue;
     ready--;
-    reap_connection_set(manager, manager->poll_set_indices[i],
-                        "frontend closed");
+    set = &manager->sets[manager->poll_set_indices[i]];
+    if (revents & (POLLHUP | POLLERR | POLLNVAL)) {
+      reap_connection_set(manager, manager->poll_set_indices[i],
+                          "frontend failed or fully closed");
+      continue;
+    }
+    if (revents & POLLRDHUP) {
+      struct tcp_info info;
+      int flow_present;
+
+      if (!set->peer_write_closed) {
+        set->peer_write_closed = 1;
+        manager->half_close_total++;
+      }
+      if (get_tcp_info(set->fds[CONNECTION_CLIENT], &info) != 0) {
+        reap_connection_set(manager, manager->poll_set_indices[i],
+                            "frontend TCP state unavailable");
+        continue;
+      }
+      flow_present =
+          map_contains_key(manager->http_flows_fd,
+                           &set->cookies[CONNECTION_CLIENT], sizeof(__u64));
+      if (info.tcpi_bytes_received == 0 || flow_present ||
+          (info.tcpi_bytes_acked > set->initial_bytes_acked &&
+           info.tcpi_unacked == 0 && info.tcpi_notsent_bytes == 0))
+        reap_connection_set(manager, manager->poll_set_indices[i],
+                            "frontend half-close drained");
+    }
   }
 }
 

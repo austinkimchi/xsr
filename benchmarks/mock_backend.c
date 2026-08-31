@@ -15,6 +15,9 @@
 #include <sys/socket.h>
 #include <sys/time.h>
 #include <unistd.h>
+#ifdef XSR_MOCK_DELAY
+#include <time.h>
+#endif
 
 #define DEFAULT_PORT 18081
 #define DEFAULT_BACKEND "others"
@@ -23,6 +26,23 @@
 static int server_fd = -1;
 static volatile int running = 1;
 static const char *backend_name = DEFAULT_BACKEND;
+#ifdef XSR_MOCK_DELAY
+static unsigned int response_delay_ms;
+static unsigned char delay_available = 1;
+
+static void delay_first_response(void) {
+  struct timespec delay = {
+      .tv_sec = response_delay_ms / 1000,
+      .tv_nsec = (long)(response_delay_ms % 1000) * 1000000L,
+  };
+
+  if (!response_delay_ms ||
+      !__atomic_exchange_n(&delay_available, 0, __ATOMIC_RELAXED))
+    return;
+  while (nanosleep(&delay, &delay) != 0)
+    ;
+}
+#endif
 
 static int contains_close_token(const char *value, size_t len) {
   const char needle[] = "close";
@@ -224,6 +244,9 @@ static void *worker_thread(void *arg) {
                    "\r\n"
                    "%s",
                    body_len, keep_alive ? "keep-alive" : "close", body);
+#ifdef XSR_MOCK_DELAY
+      delay_first_response();
+#endif
       ssize_t w = write(client_fd, response, (size_t)response_len);
       if (w <= 0)
         goto close_client;
@@ -247,6 +270,12 @@ static void *worker_thread(void *arg) {
 
 int main(int argc, char *argv[]) {
   int port = DEFAULT_PORT;
+
+#ifdef XSR_MOCK_DELAY
+  const char *delay_value = getenv("XSR_MOCK_RESPONSE_DELAY_MS");
+  if (delay_value && *delay_value)
+    response_delay_ms = (unsigned int)strtoul(delay_value, NULL, 10);
+#endif
   if (argc > 1) {
     port = atoi(argv[1]);
   }

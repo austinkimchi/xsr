@@ -37,7 +37,8 @@ iptables -I INPUT 1 -i "$HOST_IF" -p tcp --dport 18081 -j ACCEPT
 FIREWALL_RULE_ADDED=1
 for backend in "18391 coding" "18392 math" "18393 others" "18394 qa" "18395 writing"; do
     read -r port name <<<"$backend"
-    ./benchmarks/mock_backend "$port" "$name" >"${STATUS_DIR}/${name}.log" 2>&1 &
+    XSR_MOCK_RESPONSE_DELAY_MS=250 ./benchmarks/mock_backend_delayed \
+        "$port" "$name" >"${STATUS_DIR}/${name}.log" 2>&1 &
     PIDS+=("$!")
 done
 for port in 18391 18392 18393 18394 18395; do
