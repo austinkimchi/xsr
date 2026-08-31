@@ -1,0 +1,18 @@
+{
+  "base_model": "llm-semantic-router/mmbert-32k-yarn",
+  "base_revision": "72a23a6640489471eb4ff7ad3ec5bc80af8a27de",
+  "adapter": "llm-semantic-router/mmbert32k-intent-classifier-lora",
+  "adapter_revision": "81eb867a46864aea8f95b77d7e2618ef0bed09e5",
+  "adapter_sha256": "aa6fc5a99cb5517787073f4e4824d12a8a67ad7a10393a33a11f394836a8ee37",
+  "tokenizer": "llm-semantic-router/mmbert32k-intent-classifier-lora",
+  "tokenizer_revision": "81eb867a46864aea8f95b77d7e2618ef0bed09e5",
+  "tokenizer_sha256": "17f7d8b9518c403d7429ad9eeeabb6eed49c8d3311de8ef4ed5ad811381a2ced",
+  "mmlu_pro_revision": "b189ec765aa7ed75c8acfea42df31fdae71f97be",
+  "supplement_revision": "c51aed0d3a83a548270e835187cee30615188e60",
+  "verified_utc": "2026-08-29",
+  "class_order": [
+    "biology", "business", "chemistry", "computer science", "economics",
+    "engineering", "health", "history", "law", "math", "other",
+    "philosophy", "physics", "psychology"
+  ]
+}

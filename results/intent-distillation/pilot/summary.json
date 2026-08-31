@@ -1,0 +1,36 @@
+{
+  "scope": "seeded pilot: 20 MMLU-Pro official-test prompts per class plus held-out supplement rows",
+  "seed": 20260829,
+  "counts": {"train": 577, "validation": 72, "test": 343},
+  "manifest_sha256": "7e9689744892c7f9145da902fc90da2b39c92e610e92e25b544d7be8bc9c2617",
+  "teacher_targets_sha256": "bc806a474e137ef04c87ebee74cc9f27c4351afda0087a80fd3f61df3cb1da3a",
+  "selected_distillation": {"temperature": 2.0, "alpha": 0.25, "epoch": 8},
+  "prompt_byte_limit": 16384,
+  "fully_visible_fraction": 1.0,
+  "correctness": {
+    "teacher": {"accuracy": 0.9387755102, "macro_f1": 0.9375444726, "weighted_f1": 0.9385553552},
+    "supervised_float": {"teacher_agreement": 0.2011661808, "accuracy": 0.2011661808},
+    "distilled_float": {"teacher_agreement": 0.1982507289, "accuracy": 0.2011661808},
+    "distilled_int8": {"teacher_agreement": 0.1982507289, "accuracy": 0.2011661808},
+    "xsr_ebpf": {"teacher_agreement": 0.1982507289, "accuracy": 0.2011661808}
+  },
+  "quantization": {"prediction_changes": 0, "max_primary_regression": 0.0},
+  "kernel_parity": {"checked": 992, "agreement": 1.0, "score_parity": true, "byte_count_parity": true},
+  "kernel_model": {
+    "sha256": "cc89ef2c05d735624bd0155ecda2e8dcf89d2fd8d5ab1889fd61bccd78b866a5",
+    "file_bytes": 57436,
+    "raw_weight_bytes": 57344,
+    "global_int8_scale": 185.7402959771,
+    "proven_max_abs_score": 2080633
+  },
+  "performance": {
+    "valid_common_range_available": false,
+    "speedups_computed": false,
+    "invalid_reason": "host load average exceeded 50 from concurrent workloads; VSR timed out at concurrency 16 and 1",
+    "retained_stress_observations_concurrency_16": {
+      "vsr_mmbert": {"requests_per_second": 4.39, "average_latency_ms": 1840.0, "timeouts": 40, "valid": false},
+      "vsr_distilled": {"requests_per_second": 263.38, "average_latency_ms": 57.77, "valid": false},
+      "xsr_distilled": {"requests_per_second": 6407.36, "average_latency_ms": 1.94, "valid": false}
+    }
+  }
+}

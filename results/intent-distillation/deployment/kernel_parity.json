@@ -1,0 +1,37 @@
+{
+  "checked": 5315,
+  "agreement": 1.0,
+  "score_parity": true,
+  "prediction_parity": true,
+  "byte_count_parity": true,
+  "all_14_scores_checked_per_prompt": true,
+  "model_sha256": "355138e68b8f15a4d64a2fb025e02cf2e974d396ee68401726046668de9e13f7",
+  "prompt_manifest_sha256": "520a0c193943405a8c92769a5b474b2658d7bc0022d39eb115cb3205d839b5c3",
+  "live_distill_maps": [
+    {
+      "name": "xdp_distill_con",
+      "type": "array",
+      "bytes_key": 4,
+      "bytes_value": 68,
+      "max_entries": 1,
+      "bytes_memlock": 456
+    },
+    {
+      "name": "xdp_distill_las",
+      "type": "array",
+      "bytes_key": 4,
+      "bytes_value": 64,
+      "max_entries": 1,
+      "bytes_memlock": 448
+    },
+    {
+      "name": "xdp_distill_wei",
+      "type": "array",
+      "bytes_key": 4,
+      "bytes_value": 14,
+      "max_entries": 8192,
+      "bytes_memlock": 131456
+    }
+  ],
+  "live_distill_map_memlock_bytes": 132360
+}

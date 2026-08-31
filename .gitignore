@@ -1,4 +1,75 @@
-scripts/*
+# Local configuration and credentials
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+.secrets/
+secrets/
+credentials.json
+service-account*.json
+
+# Editors and operating systems
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*~
+
+# Python environments and caches
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.cache/
+
+# Native build and tooling output
+build/
+compile_commands.json
+.tools/
+reports/
+tests/
 xdp_router
-xdp_router.bpf.o
-__*
+sk_router
+mock_backend
+*.bpf.o
+
+# Generated policy headers: ignore by default, then retain reviewed snapshots
+*.generated.h
+!bpf/stages/signals/generated/xdp_jaccard_policy.generated.h
+!bpf/stages/signals/generated/xdp_bm25_policy.generated.h
+!bpf/stages/signals/generated/xdp_keyword_modules.generated.h
+!bpf/stages/signals/generated/xdp_unicode_word.generated.h
+
+# Models, datasets, and intermediate experiment artifacts
+**/.vllm-sr/
+**/models/
+benchmarks/lora_distill/artifacts/
+*.jsonl
+*.npz
+*.xsrf
+*.safetensors
+*.pt
+*.pth
+
+# Benchmark output is local until a deliberate publication review
+results/charts/
+results/routing-correctness/
+results/routing-performance/
+results/**/*.csv
+results/**/*.log
+results/**/*.txt
+results/**/*.ipynb
+results/**/raw/
+
+# Only compact intent-distillation provenance is publication-ready
+results/intent-distillation/**
+!results/intent-distillation/**/
+!results/intent-distillation/**/README.md
+!results/intent-distillation/**/summary.json
+!results/intent-distillation/**/manifest_summary.json
+!results/intent-distillation/deployment/kernel_parity.json
