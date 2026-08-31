@@ -47,6 +47,16 @@ struct {
   __type(value, struct http_flow_state);
 } http_flows SEC(".maps");
 
+/* Keep the combined N-Gram/BM25/intent flow initializer off the verifier's
+ * 512-byte stack. Program execution is serialized per CPU, so one scratch
+ * value per CPU is sufficient for initialization before the hash-map copy. */
+struct {
+  __uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
+  __uint(max_entries, 1);
+  __type(key, __u32);
+  __type(value, struct http_flow_state);
+} http_flow_scratch SEC(".maps");
+
 struct {
   __uint(type, BPF_MAP_TYPE_LRU_HASH);
   __uint(max_entries, 4096);
@@ -357,14 +367,19 @@ int xdp_router(struct xdp_md *ctx) {
 
   if (is_post) {
     __u32 body_offset = 0;
+    __u32 scratch_key = 0;
     bool found_body = find_http_body_offset(ctx, data, p, &body_offset);
-    struct http_flow_state new_flow = {
-        .next_seq = tcp_seq,
-        .body_seq = found_body ? tcp_seq + body_offset : 0,
-    };
+    struct http_flow_state *new_flow =
+        bpf_map_lookup_elem(&http_flow_scratch, &scratch_key);
 
-    xdp_classifier_init(&new_flow.classifier);
-    bpf_map_update_elem(&http_flows, &key, &new_flow, BPF_ANY);
+    if (!new_flow)
+      return XDP_PASS;
+    __builtin_memset(new_flow, 0, sizeof(*new_flow));
+    new_flow->next_seq = tcp_seq;
+    new_flow->body_seq = found_body ? tcp_seq + body_offset : 0;
+
+    xdp_classifier_init(&new_flow->classifier);
+    bpf_map_update_elem(&http_flows, &key, new_flow, BPF_ANY);
     flow = bpf_map_lookup_elem(&http_flows, &key);
     if (!flow)
       return XDP_PASS;
