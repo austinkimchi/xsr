@@ -133,7 +133,7 @@ test-llmrouter:
 	@test -x "$(LLMROUTER_PYTHON)" || { echo "Error: run 'make llmrouter-install' first." >&2; exit 1; }
 	$(LLMROUTER_PYTHON) -m unittest discover -s benchmarks/llmrouter -p 'test_*.py'
 
-test-sockmap-lifecycle: benchmark-build
+test-sockmap-lifecycle: benchmark-build benchmarks/mock_backend_delayed
 	$(require_sudo)
 	./benchmarks/routing_wrk/run_sockmap_lifecycle_stress.sh
 
@@ -222,6 +222,9 @@ sk_router: src/sk_router.c src/distill_model_loader.c include/xsr/distill_model_
 benchmarks/mock_backend: benchmarks/mock_backend.c
 	$(CC) -O3 $< -o $@ -lpthread
 
+benchmarks/mock_backend_delayed: benchmarks/mock_backend.c
+	$(CC) -O3 -DXSR_MOCK_DELAY=1 $< -o $@ -lpthread
+
 benchmarks/sockmap_lifecycle_semantics: benchmarks/sockmap_lifecycle_semantics.c
 	$(CC) $(USER_CFLAGS) $< -o $@ $(LIBBPF_FLAGS)
 
@@ -232,7 +235,7 @@ sk_router.bpf.o: bpf/programs/sk_router.bpf.c include/xsr/router.h include/xsr/d
 	$(BPF_CLANG) $(BPF_CFLAGS) -c $< -o $@
 
 clean:
-	rm -f xdp_router sk_router xdp_router.bpf.o sk_router.bpf.o benchmarks/mock_backend benchmarks/sockmap_lifecycle_semantics
+	rm -f xdp_router sk_router xdp_router.bpf.o sk_router.bpf.o benchmarks/mock_backend benchmarks/mock_backend_delayed benchmarks/sockmap_lifecycle_semantics
 
 clean-setup:
 	@ip link delete $(XDP_HOST_IF) 2>/dev/null || true

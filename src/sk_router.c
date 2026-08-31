@@ -15,9 +15,9 @@
 #include <errno.h>
 #include <linux/bpf.h>
 #include <linux/if_link.h>
+#include <linux/tcp.h>
 #include <net/if.h>
 #include <netinet/in.h>
-#include <netinet/tcp.h>
 #include <poll.h>
 #include <pthread.h>
 #include <signal.h>
@@ -57,6 +57,9 @@
 #define BACKEND_WRITING_PORT 18395
 
 #define SK_ROUTER_FLAG_BACKEND 1
+#define SK_LIFECYCLE_REQUEST_FORWARDED 1
+#define SK_LIFECYCLE_REQUEST_INCOMPLETE 2
+#define SK_LIFECYCLE_REDIRECT_FAILED 4
 #define SK_MODEL_CODING 1
 #define SK_MODEL_MATH 2
 #define SK_MODEL_OTHERS 3
@@ -82,8 +85,13 @@ struct connection_set {
   int fds[SOCKS_PER_CONNECTION];
   __u32 slots[SOCKS_PER_CONNECTION];
   __u64 cookies[SOCKS_PER_CONNECTION];
+  __u64 initial_backend_bytes_received;
   unsigned char allocated;
   unsigned char active;
+  unsigned char peer_write_closed;
+  unsigned char backend_writes_shutdown;
+  unsigned char drain_confirmed;
+  unsigned char lifecycle_installed;
   unsigned char sockmap_installed[SOCKS_PER_CONNECTION];
   unsigned char route_installed[SOCKS_PER_CONNECTION];
 };
@@ -99,11 +107,14 @@ struct connection_manager {
   __u32 sockmap_entry_count;
   __u64 accepted_total;
   __u64 reaped_total;
+  __u64 half_close_total;
+  __u64 lifecycle_poll_total;
   int epoll_fd;
   int sock_map_fd;
   int routes_fd;
   int http_flows_fd;
   int route_decisions_fd;
+  int lifecycle_fd;
   int status_fd;
   int timer_fd;
   char status_path[sizeof(((struct sockaddr_un *)0)->sun_path)];
@@ -122,6 +133,7 @@ struct xdp_decision_rule {
 };
 
 struct sk_route_entry {
+  __u64 client_cookie;
   __u32 client_slot;
   __u32 coding_slot;
   __u32 math_slot;
@@ -129,6 +141,13 @@ struct sk_route_entry {
   __u32 qa_slot;
   __u32 writing_slot;
   __u32 flags;
+};
+
+struct sk_lifecycle_state {
+  __u64 response_bytes_forwarded;
+  __u64 request_bytes_processed;
+  __u32 flags;
+  __u32 reserved;
 };
 
 static volatile sig_atomic_t running = 1;
@@ -151,6 +170,7 @@ struct xdp_classifier_runtime {
 };
 
 static void bump_memlock_rlimit(void);
+static int ensure_sockmap_nofile_limit(void);
 
 static void handle_signal(int sig) {
   (void)sig;
@@ -773,6 +793,22 @@ static void bump_memlock_rlimit(void) {
             strerror(errno));
 }
 
+static int ensure_sockmap_nofile_limit(void) {
+  const rlim_t required = MAX_SOCK_SLOTS + 256;
+  struct rlimit limit;
+
+  if (getrlimit(RLIMIT_NOFILE, &limit) != 0)
+    return -1;
+  if (limit.rlim_cur >= required)
+    return 0;
+  if (limit.rlim_max < required) {
+    errno = EMFILE;
+    return -1;
+  }
+  limit.rlim_cur = required;
+  return setrlimit(RLIMIT_NOFILE, &limit);
+}
+
 static int delete_map_key(int map_fd, const void *key) {
   if (bpf_map_delete_elem(map_fd, key) == 0 || errno == ENOENT)
     return 0;
@@ -791,10 +827,69 @@ static void reset_connection_set(struct connection_set *set) {
   for (int member = 0; member < SOCKS_PER_CONNECTION; member++)
     set->fds[member] = -1;
   memset(set->cookies, 0, sizeof(set->cookies));
+  set->initial_backend_bytes_received = 0;
   memset(set->sockmap_installed, 0, sizeof(set->sockmap_installed));
   memset(set->route_installed, 0, sizeof(set->route_installed));
   set->allocated = 0;
   set->active = 0;
+  set->peer_write_closed = 0;
+  set->backend_writes_shutdown = 0;
+  set->drain_confirmed = 0;
+  set->lifecycle_installed = 0;
+}
+
+static int get_tcp_info(int fd, struct tcp_info *info) {
+  socklen_t info_len = sizeof(*info);
+
+  memset(info, 0, sizeof(*info));
+  return getsockopt(fd, IPPROTO_TCP, TCP_INFO, info, &info_len);
+}
+
+static void shutdown_backend_writes(struct connection_set *set) {
+  for (int member = 1; member < SOCKS_PER_CONNECTION; member++)
+    if (set->fds[member] >= 0 && shutdown(set->fds[member], SHUT_WR) != 0 &&
+        errno != ENOTCONN)
+      fprintf(stderr, "warning: backend write shutdown failed: %s\n",
+              strerror(errno));
+  set->backend_writes_shutdown = 1;
+}
+
+static int backend_responses_complete(const struct connection_set *set,
+                                      __u32 *fin_count) {
+  struct pollfd backends[SOCKS_PER_CONNECTION - 1];
+  int ready;
+
+  for (int member = 1; member < SOCKS_PER_CONNECTION; member++) {
+    backends[member - 1].fd = set->fds[member];
+    backends[member - 1].events = POLLRDHUP | POLLHUP | POLLERR;
+    backends[member - 1].revents = 0;
+  }
+  ready = poll(backends, SOCKS_PER_CONNECTION - 1, 0);
+  if (ready < 0)
+    return 0;
+  *fin_count = 0;
+  for (int member = 1; member < SOCKS_PER_CONNECTION; member++)
+    if (!(backends[member - 1].revents &
+          (POLLRDHUP | POLLHUP | POLLERR | POLLNVAL)))
+      return 0;
+    else if (backends[member - 1].revents & POLLRDHUP)
+      (*fin_count)++;
+  return 1;
+}
+
+static int backend_bytes_received(const struct connection_set *set,
+                                  __u64 *bytes_received) {
+  __u64 total = 0;
+
+  for (int member = 1; member < SOCKS_PER_CONNECTION; member++) {
+    struct tcp_info info;
+
+    if (get_tcp_info(set->fds[member], &info) != 0)
+      return -1;
+    total += info.tcpi_bytes_received;
+  }
+  *bytes_received = total;
+  return 0;
 }
 
 static int reap_connection_set(struct connection_manager *manager,
@@ -835,6 +930,12 @@ static int reap_connection_set(struct connection_manager *manager,
     if (delete_map_key(manager->http_flows_fd,
                        &set->cookies[CONNECTION_CLIENT]) != 0)
       cleanup_failed = 1;
+    if (set->lifecycle_installed &&
+        delete_map_key(manager->lifecycle_fd,
+                       &set->cookies[CONNECTION_CLIENT]) != 0)
+      cleanup_failed = 1;
+    else
+      set->lifecycle_installed = 0;
     if (delete_map_key(manager->route_decisions_fd,
                        &set->cookies[CONNECTION_CLIENT]) != 0)
       cleanup_failed = 1;
@@ -871,6 +972,12 @@ static int reap_connection_set(struct connection_manager *manager,
          delete_map_key(manager->route_decisions_fd,
                         &set->cookies[CONNECTION_CLIENT]) != 0))
       cleanup_failed = 1;
+    if (set->lifecycle_installed &&
+        delete_map_key(manager->lifecycle_fd,
+                       &set->cookies[CONNECTION_CLIENT]) != 0)
+      cleanup_failed = 1;
+    else
+      set->lifecycle_installed = 0;
   }
 
   if (cleanup_failed) {
@@ -908,6 +1015,7 @@ static int add_connection_set(struct connection_manager *manager,
   struct sk_route_entry backend_entry = {
       .flags = SK_ROUTER_FLAG_BACKEND,
   };
+  struct sk_lifecycle_state lifecycle = {};
 
   if (!manager->free_count) {
     errno = ENOSPC;
@@ -920,6 +1028,10 @@ static int add_connection_set(struct connection_manager *manager,
   reset_connection_set(set);
   set->allocated = 1;
   set->fds[CONNECTION_CLIENT] = client_fd;
+  set->peer_write_closed = 0;
+  set->backend_writes_shutdown = 0;
+  set->drain_confirmed = 0;
+  set->lifecycle_installed = 0;
 
   for (int member = 1; member < SOCKS_PER_CONNECTION; member++) {
     set->fds[member] = connect_backend(backend_ports[member]);
@@ -931,6 +1043,18 @@ static int add_connection_set(struct connection_manager *manager,
     if (get_socket_cookie(set->fds[member], &set->cookies[member]) != 0)
       goto fail;
   }
+  if (backend_bytes_received(set, &set->initial_backend_bytes_received) != 0)
+    goto fail;
+
+  client_entry.client_cookie = backend_entry.client_cookie =
+      set->cookies[CONNECTION_CLIENT];
+  if (bpf_map_update_elem(manager->lifecycle_fd,
+                          &set->cookies[CONNECTION_CLIENT], &lifecycle,
+                          BPF_NOEXIST) != 0) {
+    perror("initialize lifecycle state");
+    goto fail;
+  }
+  set->lifecycle_installed = 1;
 
   client_entry.client_slot = backend_entry.client_slot = set->slots[0];
   client_entry.coding_slot = backend_entry.coding_slot = set->slots[1];
@@ -1043,18 +1167,24 @@ static void serve_status(struct connection_manager *manager) {
         count_map_entries(manager->http_flows_fd, sizeof(__u64));
     int route_decisions_entries =
         count_map_entries(manager->route_decisions_fd, sizeof(__u64));
+    int lifecycle_entries =
+        count_map_entries(manager->lifecycle_fd, sizeof(__u64));
 
     dprintf(fd,
             "pid=%ld active_connection_sets=%u free_slot_sets=%u "
             "quarantined_slot_sets=%u accepted_total=%llu reaped_total=%llu "
+            "half_close_total=%llu "
+            "lifecycle_poll_total=%llu "
             "sockmap_entries=%d routes_entries=%d http_flows_entries=%d "
-            "route_decisions_entries=%d\n",
+            "route_decisions_entries=%d lifecycle_entries=%d\n",
             (long)getpid(), manager->active_count, manager->free_count,
             manager->quarantined_count,
             (unsigned long long)manager->accepted_total,
             (unsigned long long)manager->reaped_total,
+            (unsigned long long)manager->half_close_total,
+            (unsigned long long)manager->lifecycle_poll_total,
             sockmap_entries, routes_entries, http_flows_entries,
-            route_decisions_entries);
+            route_decisions_entries, lifecycle_entries);
     close(fd);
   }
 }
@@ -1067,6 +1197,7 @@ static void poll_connection_lifecycle(struct connection_manager *manager) {
   if (read(manager->timer_fd, &expirations, sizeof(expirations)) !=
       sizeof(expirations))
     return;
+  manager->lifecycle_poll_total += expirations;
   for (__u32 i = 0; i < MAX_CONNECTION_SETS; i++) {
     if (!manager->sets[i].active)
       continue;
@@ -1084,18 +1215,93 @@ static void poll_connection_lifecycle(struct connection_manager *manager) {
     return;
   }
   for (__u32 i = 0; i < count && ready > 0; i++) {
-    if (!(manager->poll_fds[i].revents & (POLLRDHUP | POLLHUP | POLLERR)))
+    struct connection_set *set;
+    short revents = manager->poll_fds[i].revents;
+
+    if (!(revents & (POLLRDHUP | POLLHUP | POLLERR | POLLNVAL)))
       continue;
     ready--;
-    reap_connection_set(manager, manager->poll_set_indices[i],
-                        "frontend closed");
+    set = &manager->sets[manager->poll_set_indices[i]];
+    if (revents & (POLLHUP | POLLERR | POLLNVAL)) {
+      reap_connection_set(manager, manager->poll_set_indices[i],
+                          "frontend failed or fully closed");
+      continue;
+    }
+    if (revents & POLLRDHUP) {
+      struct tcp_info info;
+      struct sk_lifecycle_state lifecycle;
+      __u64 received = 0;
+      __u64 request_bytes;
+      __u32 backend_fin_count = 0;
+
+      if (!set->peer_write_closed) {
+        set->peer_write_closed = 1;
+        manager->half_close_total++;
+      }
+      if (get_tcp_info(set->fds[CONNECTION_CLIENT], &info) != 0) {
+        reap_connection_set(manager, manager->poll_set_indices[i],
+                            "frontend TCP state unavailable");
+        continue;
+      }
+      /* tcpi_bytes_received includes the peer FIN's sequence byte once
+       * POLLRDHUP is visible. */
+      request_bytes = info.tcpi_bytes_received > 0
+                          ? info.tcpi_bytes_received - 1
+                          : 0;
+      if (request_bytes == 0) {
+        reap_connection_set(manager, manager->poll_set_indices[i],
+                            "frontend half-close without request");
+        continue;
+      }
+      if (bpf_map_lookup_elem(manager->lifecycle_fd,
+                              &set->cookies[CONNECTION_CLIENT],
+                              &lifecycle) != 0) {
+        reap_connection_set(manager, manager->poll_set_indices[i],
+                            "frontend lifecycle state unavailable");
+        continue;
+      }
+      if (!(lifecycle.flags & SK_LIFECYCLE_REQUEST_FORWARDED)) {
+        if (lifecycle.flags & SK_LIFECYCLE_REDIRECT_FAILED) {
+          reap_connection_set(manager, manager->poll_set_indices[i],
+                              "frontend request redirect failed");
+        } else if ((lifecycle.flags & SK_LIFECYCLE_REQUEST_INCOMPLETE) &&
+                   lifecycle.request_bytes_processed >= request_bytes) {
+          reap_connection_set(manager, manager->poll_set_indices[i],
+                              "frontend half-close with incomplete request");
+        }
+        continue;
+      }
+      if (!set->backend_writes_shutdown)
+        shutdown_backend_writes(set);
+      int backend_complete =
+          backend_responses_complete(set, &backend_fin_count);
+      int received_status = backend_bytes_received(set, &received);
+      /* Linux includes each received FIN's sequence byte in
+       * tcpi_bytes_received; the BPF counter contains payload bytes only. */
+      if (backend_complete && received_status == 0 &&
+          received >=
+              set->initial_backend_bytes_received + backend_fin_count &&
+          lifecycle.response_bytes_forwarded >=
+              received - set->initial_backend_bytes_received -
+                  backend_fin_count &&
+          info.tcpi_unacked == 0 && info.tcpi_notsent_bytes == 0) {
+        if (set->drain_confirmed)
+          reap_connection_set(manager, manager->poll_set_indices[i],
+                              "frontend half-close drained");
+        else
+          set->drain_confirmed = 1;
+      } else {
+        set->drain_confirmed = 0;
+      }
+    }
   }
 }
 
 static int initialize_connection_manager(struct connection_manager *manager,
                                          int sock_map_fd, int routes_fd,
                                          int http_flows_fd,
-                                         int route_decisions_fd) {
+                                         int route_decisions_fd,
+                                         int lifecycle_fd) {
   memset(manager, 0, sizeof(*manager));
   manager->epoll_fd = -1;
   manager->status_fd = -1;
@@ -1104,6 +1310,7 @@ static int initialize_connection_manager(struct connection_manager *manager,
   manager->routes_fd = routes_fd;
   manager->http_flows_fd = http_flows_fd;
   manager->route_decisions_fd = route_decisions_fd;
+  manager->lifecycle_fd = lifecycle_fd;
   manager->sets = calloc(MAX_CONNECTION_SETS, sizeof(*manager->sets));
   manager->free_sets = calloc(MAX_CONNECTION_SETS, sizeof(*manager->free_sets));
   manager->poll_set_indices =
@@ -1180,10 +1387,15 @@ static int run_sockmap_router(void) {
   int routes_fd;
   int http_flows_fd;
   int route_decisions_fd;
+  int lifecycle_fd;
   int rules_fd;
   int listener_fd = -1;
 
   bump_memlock_rlimit();
+  if (ensure_sockmap_nofile_limit() != 0) {
+    perror("raise SOCKMAP file descriptor limit");
+    return 1;
+  }
 
   if (verify_backend_available(BACKEND_CODING_PORT) != 0 ||
       verify_backend_available(BACKEND_MATH_PORT) != 0 ||
@@ -1216,10 +1428,12 @@ static int run_sockmap_router(void) {
   http_flows_fd = bpf_object__find_map_fd_by_name(obj, "sk_http_flows");
   route_decisions_fd =
       bpf_object__find_map_fd_by_name(obj, "sk_route_decisions");
+  lifecycle_fd = bpf_object__find_map_fd_by_name(obj, "sk_lifecycle");
   rules_fd = bpf_object__find_map_fd_by_name(obj, "xdp_decision_rules");
 
   if (!parser || !verdict || sock_map_fd < 0 || routes_fd < 0 ||
-      http_flows_fd < 0 || route_decisions_fd < 0 || rules_fd < 0) {
+      http_flows_fd < 0 || route_decisions_fd < 0 || lifecycle_fd < 0 ||
+      rules_fd < 0) {
     fprintf(stderr, "failed to find required BPF programs or maps\n");
     return 1;
   }
@@ -1256,7 +1470,8 @@ static int run_sockmap_router(void) {
   }
 
   if (initialize_connection_manager(&manager, sock_map_fd, routes_fd,
-                                    http_flows_fd, route_decisions_fd) != 0) {
+                                    http_flows_fd, route_decisions_fd,
+                                    lifecycle_fd) != 0) {
     perror("initialize connection manager");
     destroy_connection_manager(&manager);
     close(listener_fd);

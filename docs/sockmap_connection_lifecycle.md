@@ -14,6 +14,34 @@ their six SOCKMAP slots. One epoll loop drives accepts, status queries, and a
 100 ms maintenance `timerfd`. At each tick, one zero-time `poll()` checks all
 active frontend FDs for `POLLRDHUP`, `POLLHUP`, or `POLLERR`; it never reads
 request payloads and installs no persistent readiness hook on a data socket.
+`POLLERR`, `POLLHUP`, and invalid FDs are fatal and reap immediately.
+`POLLRDHUP` alone is only a peer write-side FIN, so it marks a drain state.
+The datapath records when a complete request has actually been redirected, so
+userspace does not infer completion from temporary parser-map absence. While a
+request is incomplete, it also records how many request bytes the parser has
+processed. Userspace only treats that state as terminal after the parser count
+covers every TCP-received payload byte, preventing a stale marker from reaping
+a final chunk that is still queued in SOCKMAP. A failed backend redirect is a
+separate terminal state, so an unavailable selected socket cannot strand the
+owned connection set. The manager then
+propagates the write-side shutdown to all five backend connections. The
+selected backend can finish a multi-write or streaming response before
+observing EOF and closing; unused backends close without a request. For each
+redirected response skb, the datapath adds its length to a client-cookie state
+entry. Cleanup waits until every backend response side has closed, the
+datapath-forwarded byte count covers every byte TCP received from the
+backends, the frontend send queue is empty, and that state remains true across
+two maintenance ticks. Backend closure with no response bytes is also terminal
+rather than a permanent drain. A peer that sent no request, or half-closed an
+incomplete parser flow, can be reclaimed immediately.
+
+Backend FIN plus the datapath byte count is the response-completion signal, so
+neither a temporary empty send queue between streamed chunks nor queued bytes
+ahead of FIN can trigger cleanup. This drain proof does not inspect HTTP in
+userspace. Half-close correctness remains scoped to one outstanding response
+on the connection; correlating a FIN with the last of multiple pipelined
+requests would require deeper per-response state. Normal benchmark keep-alive
+clients close only after their responses and remain promptly reclaimable.
 
 Persistent frontend/backend epoll monitoring was tested and rejected because
 socket readiness callbacks run on data arrival even when the requested mask
@@ -62,20 +90,25 @@ invariant that a recycled slot can never refer to an earlier connection.
 ## Slot allocator and benchmark quiescence
 
 The 16,384-entry map is divided into 2,730 fixed six-slot blocks, with four
-unused tail entries. A free stack allocates and recycles whole blocks. This is
-enough structure for the router's fixed topology and avoids a general-purpose
+unused tail entries. A free stack allocates and recycles whole blocks. XSR
+raises its soft `RLIMIT_NOFILE` to cover the advertised SOCKMAP capacity plus
+control FDs, failing startup if the hard limit is insufficient. This is enough
+structure for the router's fixed topology and avoids a general-purpose
 allocator.
 
 When `XSR_STATUS_SOCKET` is set, a local Unix socket reports the router PID,
-owned-set counters, free/quarantined blocks, a confirmed SOCKMAP mutation
+owned-set counters, free/quarantined blocks, half-close and maintenance-poll
+counters, a confirmed SOCKMAP mutation
 count, and actual hash-map entry counts for `sk_routes`, `sk_http_flows`, and
-`sk_route_decisions`. The
+`sk_route_decisions`, plus the request/response datapath state in
+`sk_lifecycle`. The
 benchmark waits outside timed measurement until the same PID reports zero
 active sets and zero lifecycle-map entries. Any PID mismatch or quarantined
 block fails the trial.
 
 The maintenance interval bounds cleanup latency at 100 ms and costs ten timer
-wakeups and ten batched poll syscalls per second; work scales with active
+wakeups and ten batched poll syscalls per second; `lifecycle_poll_total` makes
+that wake rate directly observable. Work scales with active
 connections, not HTTP requests. A cgroup `BPF_PROG_TYPE_SOCK_OPS`
 state-transition program was unnecessary attachment and event-transport
 complexity. Per-client threads were rejected because hundreds of lifecycle

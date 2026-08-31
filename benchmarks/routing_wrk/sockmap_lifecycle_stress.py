@@ -7,9 +7,11 @@ import argparse
 import concurrent.futures
 import json
 import socket
+import time
 from pathlib import Path
+from typing import Callable
 
-from wait_for_xsr_quiescence import wait_for_quiescence
+from wait_for_xsr_quiescence import read_status, wait_for_quiescence
 
 
 ROUTES = (
@@ -45,10 +47,20 @@ def receive_http_response(client: socket.socket) -> bytes:
 
 
 def request_once(
-    host: str, port: int, sequence: int, *, request_backend_close: bool = False
+    host: str,
+    port: int,
+    sequence: int,
+    *,
+    request_backend_close: bool = False,
+    half_close: bool = False,
+    no_response: bool = False,
+    split_request: bool = False,
+    before_half_close: Callable[[], None] | None = None,
 ) -> str:
     expected, prompt = ROUTES[sequence % len(ROUTES)]
-    route_sequence = f"lifecycle-{sequence}"
+    route_sequence = (
+        f"no-response-{sequence}" if no_response else f"lifecycle-{sequence}"
+    )
     body = json.dumps(
         {
             "model": "MoM",
@@ -67,8 +79,29 @@ def request_once(
     ).encode() + body
     with socket.create_connection((host, port), timeout=10) as client:
         client.settimeout(10)
-        client.sendall(request)
-        parsed = json.loads(receive_http_response(client))
+        if split_request:
+            client.sendall(request[:-1])
+            if before_half_close:
+                before_half_close()
+                before_half_close = None
+            # Establish an incomplete-parser marker, then put the final body
+            # byte and FIN back-to-back to exercise stale-marker races.
+            time.sleep(0.02)
+            client.sendall(request[-1:])
+        else:
+            client.sendall(request)
+        if half_close:
+            if before_half_close:
+                before_half_close()
+            client.shutdown(socket.SHUT_WR)
+        if no_response:
+            if client.recv(1):
+                raise AssertionError(f"request {sequence}: expected an empty response")
+            return expected
+        try:
+            parsed = json.loads(receive_http_response(client))
+        except Exception as error:
+            raise RuntimeError(f"request {sequence}: response failed") from error
     if parsed.get("backend") != expected:
         raise AssertionError(
             f"request {sequence}: expected backend={expected}, found {parsed!r}"
@@ -82,6 +115,20 @@ def request_once(
 
 def fd_count(pid: int) -> int:
     return len(list((Path("/proc") / str(pid) / "fd").iterdir()))
+
+
+def wait_for_accepted(
+    status_socket: Path, pid: int, minimum_accepted: int, timeout: float
+) -> None:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        status = read_status(status_socket)
+        if status["pid"] != pid:
+            raise RuntimeError(f"XSR PID changed: expected {pid}, found {status['pid']}")
+        if status["accepted_total"] >= minimum_accepted:
+            return
+        time.sleep(0.01)
+    raise TimeoutError(f"XSR did not accept connection {minimum_accepted}")
 
 
 def run_wave(host: str, port: int, start: int, count: int) -> None:
@@ -110,18 +157,64 @@ def main() -> None:
     baseline_fds = fd_count(args.pid)
     max_sampled_fds = baseline_fds
     sequence = 0
+    expected_accepted = baseline["accepted_total"]
 
-    for sequence in range(args.sequential):
+    for _ in ROUTES:
+        expected_accepted += 1
+        request_once(
+            args.host,
+            args.port,
+            sequence,
+            half_close=True,
+            split_request=True,
+            before_half_close=lambda expected=expected_accepted: wait_for_accepted(
+                args.status_socket, args.pid, expected, args.cleanup_timeout
+            ),
+        )
+        sequence += 1
+    expected_reaped = baseline["reaped_total"] + len(ROUTES)
+    after_half_close = wait_for_quiescence(
+        args.status_socket, args.pid, args.cleanup_timeout, expected_reaped
+    )
+
+    expected_accepted += 1
+    request_once(
+        args.host,
+        args.port,
+        sequence,
+        half_close=True,
+        no_response=True,
+        before_half_close=lambda: wait_for_accepted(
+            args.status_socket,
+            args.pid,
+            expected_accepted,
+            args.cleanup_timeout,
+        ),
+    )
+    sequence += 1
+    expected_reaped += 1
+    after_empty_response = wait_for_quiescence(
+        args.status_socket, args.pid, args.cleanup_timeout, expected_reaped
+    )
+
+    request_once(args.host, args.port, sequence, request_backend_close=True)
+    sequence += 1
+    expected_reaped += 1
+    after_full_close = wait_for_quiescence(
+        args.status_socket, args.pid, args.cleanup_timeout, expected_reaped
+    )
+
+    for sequence in range(sequence, sequence + args.sequential):
         request_once(args.host, args.port, sequence)
         if sequence % 100 == 99:
             max_sampled_fds = max(max_sampled_fds, fd_count(args.pid))
-    expected_reaped = baseline["reaped_total"] + args.sequential
+    expected_reaped += args.sequential
     after_sequential = wait_for_quiescence(
         args.status_socket, args.pid, args.cleanup_timeout, expected_reaped
     )
     sequential_fds = fd_count(args.pid)
 
-    next_sequence = args.sequential
+    next_sequence = args.sequential + len(ROUTES) + 2
     wave_results: list[dict[str, object]] = []
     for size in args.wave_sizes:
         for repeat in range(args.wave_repeats):
@@ -154,6 +247,9 @@ def main() -> None:
             {
                 "router_pid": args.pid,
                 "baseline": baseline,
+                "after_half_close": after_half_close,
+                "after_empty_response": after_empty_response,
+                "after_full_close": after_full_close,
                 "after_sequential": after_sequential,
                 "final": final,
                 "sequential_lifecycles": args.sequential,
