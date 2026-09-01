@@ -65,9 +65,14 @@ LLMRouter adapter, and fails on a mismatch. `mixed` is reserved for explicit
 mixed-function tests. Paper builds always require
 `XSR_DISTILL_PARITY_DEBUG=0`.
 
-Before a VSR run, the runner inspects the container entrypoint, arguments,
-environment, labels, and actual mounted files. If those do not unambiguously
-identify the requested classifier, supply a reviewed fail-closed contract:
+Before a VSR run, automatic verification trusts only narrow active evidence:
+an explicit router command-line selector, the exact configuration file named
+by that command line, the corresponding model/config identity, and a simply
+provable active Envoy ExtProc binding. Environment-variable names, label names,
+mount destinations/types, and a hash of the active argv are recorded only as
+minimal provenance; their values do not certify a classifier. If the active
+configuration or binding is absent or ambiguous, supply a reviewed fail-closed
+contract:
 
 ```text
 VSR_SIGNAL_PROFILE=bm25

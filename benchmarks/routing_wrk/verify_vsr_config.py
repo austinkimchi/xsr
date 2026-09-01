@@ -11,7 +11,6 @@ import subprocess
 import tomllib
 from pathlib import Path
 from typing import Any
-from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 
 PROFILE_PATTERNS = {
@@ -44,79 +43,9 @@ def inspect_container(name: str) -> dict[str, Any]:
     return json.loads(raw)[0]
 
 
-def redacted_environment(values: list[str] | None) -> list[str]:
-    result = []
-    for value in values or []:
-        name, separator, setting = value.partition("=")
-        if separator and SENSITIVE_NAME.search(name):
-            result.append(f"{name}=<redacted>")
-        elif separator:
-            result.append(f"{name}={redacted_setting(setting)}")
-        else:
-            result.append(value)
-    return result
-
-
-def redacted_mapping(values: dict[str, Any] | None) -> dict[str, Any]:
-    return {
-        key: "<redacted>" if SENSITIVE_NAME.search(key) else redacted_setting(str(value))
-        for key, value in (values or {}).items()
-    }
-
-
-def redact_url(value: str) -> str:
-    try:
-        parsed = urlsplit(value)
-        if not parsed.scheme or not parsed.netloc:
-            return value
-        hostname = parsed.hostname or ""
-        netloc = hostname
-        if parsed.port:
-            netloc += f":{parsed.port}"
-    except ValueError:
-        return "<redacted-invalid-url>" if "://" in value else value
-    if parsed.username is not None or parsed.password is not None:
-        netloc = f"<redacted>@{netloc}"
-    query = urlencode([
-        (name, "<redacted>" if SENSITIVE_NAME.search(name) else setting)
-        for name, setting in parse_qsl(parsed.query, keep_blank_values=True)
-    ])
-    return urlunsplit((parsed.scheme, netloc, parsed.path, query, ""))
-
-
-def redacted_setting(value: str) -> str:
-    stripped = value.strip()
-    if SENSITIVE_NAME.search(stripped) or re.search(r"\b(?:bearer|basic)\s+\S+", stripped, re.I):
-        return "<redacted-composite>"
-    if "://" in stripped and not re.match(r"^[A-Za-z][A-Za-z0-9+.-]*://", stripped):
-        return "<redacted-composite>"
-    return redact_url(value)
-
-
-def redacted_argv(values: list[str] | None) -> list[str]:
-    result: list[str] = []
-    redact_next = False
-    for raw in values or []:
-        value = str(raw)
-        if redact_next:
-            result.append("<redacted>")
-            redact_next = False
-            continue
-        composite = bool(re.search(r"\s", value.strip()))
-        if composite and (SENSITIVE_NAME.search(value) or "://" in value
-                          or re.search(r"\b(?:bearer|basic)\s+\S+", value, re.I)):
-            result.append("<redacted-shell-command>")
-            continue
-        name, separator, setting = value.partition("=")
-        if SENSITIVE_NAME.search(name.lstrip("-")):
-            result.append(f"{name}=<redacted>" if separator else name)
-            redact_next = not separator
-            continue
-        if separator:
-            result.append(f"{name}={redacted_setting(setting)}")
-        else:
-            result.append(redacted_setting(value))
-    return result
+def json_sha256(value: Any) -> str:
+    encoded = json.dumps(value, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
 
 
 def field_kind(name: str) -> str | None:
@@ -217,11 +146,6 @@ def runtime_evidence(config: dict[str, Any]) -> list[tuple[str, str]]:
                 result.append((kind, setting))
             elif index + 1 < len(argv):
                 result.append((kind, argv[index + 1]))
-    for value in config.get("Env") or []:
-        name, separator, setting = str(value).partition("=")
-        kind = field_kind(name)
-        if separator and kind:
-            result.append((kind, setting))
     return result
 
 
@@ -233,7 +157,6 @@ def active_runtime_strings(inspected: dict[str, Any]) -> list[str]:
     config = inspected.get("Config") or {}
     values = [str(value) for value in (config.get("Entrypoint") or [])]
     values.extend(str(value) for value in (config.get("Cmd") or []))
-    values.extend(str(value) for value in (config.get("Env") or []))
     return values
 
 
@@ -430,7 +353,13 @@ def main() -> None:
     args = parser.parse_args()
 
     inspected = inspect_container(args.container)
-    deployment_binding = verify_envoy_binding(args.container, inspected, args.envoy_container)
+    try:
+        deployment_binding = verify_envoy_binding(args.container, inspected, args.envoy_container)
+        binding_proven = True
+    except SystemExit:
+        deployment_binding = {"mode": "automatic-unavailable",
+                              "envoy_container": args.envoy_container}
+        binding_proven = False
     mounts = inspected.get("Mounts", [])
     candidates: list[tuple[str, str, str | None]] = []
     supplied_config_bound = True
@@ -457,14 +386,20 @@ def main() -> None:
                 candidates.append((str(source), source.read_text(encoding="utf-8", errors="replace"), sha256(source)))
 
     config = inspected.get("Config", {})
-    runtime_identity = json.dumps({
-        "entrypoint": redacted_argv(config.get("Entrypoint")),
-        "cmd": redacted_argv(config.get("Cmd")),
-        "environment": redacted_environment(config.get("Env")),
-        "labels": redacted_mapping(config.get("Labels")),
-        "mounts": [{"source": m.get("Source"), "destination": m.get("Destination"), "type": m.get("Type")}
-                   for m in inspected.get("Mounts", [])],
-    }, sort_keys=True)
+    runtime_identity = {
+        "argv_sha256": json_sha256({
+            "entrypoint": config.get("Entrypoint") or [],
+            "cmd": config.get("Cmd") or [],
+        }),
+        "environment_variable_names": sorted(
+            str(value).partition("=")[0] for value in (config.get("Env") or [])
+        ),
+        "label_names": sorted(str(key) for key in (config.get("Labels") or {})),
+        "mounts": [
+            {"destination": mount.get("Destination"), "type": mount.get("Type")}
+            for mount in inspected.get("Mounts", [])
+        ],
+    }
     # Mount/source paths are provenance only: profile-looking path components
     # must never count as automatic classifier evidence.
     evidence = runtime_evidence(config)
@@ -479,7 +414,8 @@ def main() -> None:
         selector_profile(value) == args.profile for value in classifier_selectors
     )
     selector_proof = selectors_match and (bool(classifier_selectors) or args.profile == "intent")
-    automatic = detected == [args.profile] and supplied_config_bound and selector_proof
+    automatic = (detected == [args.profile] and supplied_config_bound
+                 and selector_proof and binding_proven)
     if args.profile == "intent" and automatic:
         automatic = bool(
             re.search(r"mmbert[-_ ]?32k", model_identity, re.I)
@@ -515,7 +451,7 @@ def main() -> None:
         "container_image_id": inspected.get("Image"),
         "measured_deployment_binding": deployment_binding,
         "configuration_artifacts": artifacts,
-        "runtime_identity": json.loads(runtime_identity),
+        "runtime_identity": runtime_identity,
         "intent_identity_requirements": {
             "mmbert_32k_marker": bool(re.search(r"mmbert[-_ ]?32k", model_identity, re.I)),
             "lora_adapter_marker": bool(re.search(r"lora|adapter", adapter_identity, re.I)),
