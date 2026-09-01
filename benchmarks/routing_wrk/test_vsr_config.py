@@ -144,7 +144,8 @@ class VSRConfigurationVerificationTest(unittest.TestCase):
                 "      envoy_grpc:\n"
                 "        cluster_name: active_extproc\n"
                 "clusters:\n"
-                "- name: active_extproc\n"
+                "- connect_timeout: 1s\n"
+                "  name: active_extproc\n"
                 "  load_assignment:\n"
                 "    endpoints:\n"
                 "    - socket_address:\n"
@@ -171,14 +172,28 @@ class VSRConfigurationVerificationTest(unittest.TestCase):
             with patch.object(verify_vsr_config, "inspect_container", return_value=envoy):
                 binding = verify_vsr_config.verify_envoy_binding("router", router, "envoy")
             self.assertEqual(binding["mode"], "envoy-config-reference")
-            self.assertEqual(binding["matched_router_identity"], "router")
-            self.assertEqual(binding["active_extproc_target"], "active_extproc")
+            self.assertEqual(
+                binding["active_extproc_endpoints"],
+                [{"target": "active_extproc", "endpoint": "router",
+                  "matched_router_identity": "router"}],
+            )
+
+            config.write_text(config.read_text(encoding="utf-8").replace(
+                "        address: router\n",
+                "        address: router\n"
+                "    - socket_address:\n"
+                "        address: unverified-router\n",
+                1,
+            ), encoding="utf-8")
+            with patch.object(verify_vsr_config, "inspect_container", return_value=envoy), \
+                 self.assertRaisesRegex(SystemExit, "active ExtProc endpoint"):
+                verify_vsr_config.verify_envoy_binding("router", router, "envoy")
 
             config.write_text(config.read_text(encoding="utf-8").replace(
                 "address: router", "address: unmeasured-router", 1
             ), encoding="utf-8")
             with patch.object(verify_vsr_config, "inspect_container", return_value=envoy), \
-                 self.assertRaisesRegex(SystemExit, "could not prove"):
+                 self.assertRaisesRegex(SystemExit, "active ExtProc endpoint"):
                 verify_vsr_config.verify_envoy_binding("router", router, "envoy")
 
     def test_opaque_config_requires_exact_reviewed_contract(self) -> None:

@@ -264,25 +264,47 @@ def record_subtree(
     return records[start + 1:end]
 
 
+def yaml_list_items(
+    records: list[tuple[int, bool, str, str]],
+) -> list[tuple[int, list[tuple[int, bool, str, str]]]]:
+    return [
+        (record[0], [record, *record_subtree(records, index)])
+        for index, record in enumerate(records) if record[1]
+    ]
+
+
+def direct_item_value(
+    base_indent: int, item: list[tuple[int, bool, str, str]], key: str,
+) -> str | None:
+    continuation_indents = [indent for indent, _, _, _ in item[1:] if indent > base_indent]
+    direct_indent = min(continuation_indents, default=base_indent)
+    for index, (indent, _, item_key, value) in enumerate(item):
+        if item_key == key and (index == 0 or indent == direct_indent):
+            return value
+    return None
+
+
 def active_extproc_endpoints(text: str) -> list[tuple[str, str]]:
     """Return (active target, endpoint) pairs from Envoy's ExtProc configuration."""
     records = envoy_yaml_records(text)
     cluster_names: set[str] = set()
     direct_targets: list[str] = []
-    for index, (_, _, key, value) in enumerate(records):
-        if key == "name" and value == "envoy.filters.http.ext_proc":
-            for _, _, child_key, child_value in record_subtree(records, index):
+    items = yaml_list_items(records)
+    for base_indent, item in items:
+        if direct_item_value(base_indent, item, "name") == "envoy.filters.http.ext_proc":
+            for _, _, child_key, child_value in item:
                 if child_key == "cluster_name" and child_value:
                     cluster_names.add(child_value)
                 elif child_key in {"target_uri", "uri"} and child_value:
                     direct_targets.append(child_value)
 
     endpoints = [("direct", target) for target in direct_targets]
-    for index, (_, is_list, key, value) in enumerate(records):
-        if is_list and key == "name" and value in cluster_names:
-            for _, _, child_key, child_value in record_subtree(records, index):
+    for base_indent, item in items:
+        cluster_name = direct_item_value(base_indent, item, "name")
+        if cluster_name in cluster_names:
+            for _, _, child_key, child_value in item:
                 if child_key in {"address", "socket_address", "target_uri"} and child_value:
-                    endpoints.append((value, child_value))
+                    endpoints.append((cluster_name, child_value))
     return endpoints
 
 
@@ -305,25 +327,31 @@ def verify_envoy_binding(
         identities.add(str(network.get("IPAddress") or ""))
         identities.update(str(alias) for alias in (network.get("Aliases") or []))
     active_endpoints = active_extproc_endpoints(envoy_configuration_text(envoy))
-    matched_pair = next(
-        ((target, endpoint, identity) for target, endpoint in active_endpoints
-         for identity in sorted(identities, key=len, reverse=True)
-         if identity and re.search(rf"(?<![\w.-]){re.escape(identity)}(?![\w.-])", endpoint)),
-        None,
-    )
-    if not matched_pair:
+    matched_endpoints: list[tuple[str, str, str]] = []
+    for target, endpoint in active_endpoints:
+        matched = next(
+            (identity for identity in sorted(identities, key=len, reverse=True)
+             if identity and re.search(rf"(?<![\w.-]){re.escape(identity)}(?![\w.-])", endpoint)),
+            None,
+        )
+        if not matched:
+            raise SystemExit(
+                f"active ExtProc endpoint {endpoint!r} does not reference VSR router {router_name!r}"
+            )
+        matched_endpoints.append((target, endpoint, matched))
+    if not matched_endpoints:
         raise SystemExit(
             f"could not prove measured Envoy {envoy_name!r} references VSR router {router_name!r}"
         )
-    target, endpoint, matched = matched_pair
     return {
         "mode": "envoy-config-reference",
         "envoy_container": envoy_name,
         "envoy_image_id": envoy.get("Image"),
         "shared_networks": shared_networks,
-        "active_extproc_target": target,
-        "active_extproc_endpoint": endpoint,
-        "matched_router_identity": matched,
+        "active_extproc_endpoints": [
+            {"target": target, "endpoint": endpoint, "matched_router_identity": matched}
+            for target, endpoint, matched in matched_endpoints
+        ],
     }
 
 
