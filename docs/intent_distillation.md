@@ -94,7 +94,7 @@ either SOCKMAP or legacy XDP:
 
 ```bash
 make SIGNAL_PROFILE=intent policy
-make
+make SIGNAL_PROFILE=intent
 sudo env SK_ROUTER_MODE=distill \
   XSR_DISTILL_MODEL=$PWD/benchmarks/lora_distill/artifacts/model/distilled_int8.xsrf \
   ./sk_router

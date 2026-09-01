@@ -172,6 +172,8 @@ class ModuleSelectionTests(unittest.TestCase):
         policy = ROOT / "config" / "policy_ngram.yaml"
         self.assertIn("XSR_DISTILL_PARITY_DEBUG 0", selection_header(policy, "intent", set()))
         self.assertIn("XSR_DISTILL_PARITY_DEBUG 1", selection_header(policy, "intent", set(), True))
+        with self.assertRaisesRegex(ValueError, "require an intent or mixed"):
+            selection_header(policy, "ngram", {"ngram"}, True)
 
 
 if __name__ == "__main__":

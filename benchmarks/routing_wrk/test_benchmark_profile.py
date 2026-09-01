@@ -149,6 +149,10 @@ class BenchmarkProfileTest(unittest.TestCase):
         self.assertIn("parity_debug=0", output)
         self.assertIn("/benchmarks/llmrouter/configs/intent.yaml", output)
 
+    def test_parity_diagnostics_reject_non_distill_profile(self) -> None:
+        with self.assertRaises(subprocess.CalledProcessError):
+            dry_run(SIGNAL_PROFILE="ngram", XSR_DISTILL_PARITY_DEBUG="1")
+
     def test_explicit_adapter_mismatch_fails(self) -> None:
         policy = SCRIPT.parents[2] / "config" / "policy_bm25.yaml"
         with self.assertRaises(subprocess.CalledProcessError):

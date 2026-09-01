@@ -75,6 +75,8 @@ def selection_header(
         selected = profile
         profile = next(iter(selected)) if len(selected) == 1 else "mixed"
     assert selected is not None
+    if parity_debug and profile not in {"intent", "mixed"}:
+        raise ValueError("distill parity diagnostics require an intent or mixed signal profile")
     if enable_distill is None:
         enable_distill = profile in {"intent", "mixed"}
     return "\n".join(

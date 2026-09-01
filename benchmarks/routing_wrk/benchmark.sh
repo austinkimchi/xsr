@@ -336,6 +336,10 @@ SIGNAL_PROFILE="$("$PYTHON_BIN" "${ROOT_DIR}/benchmarks/policy/generate_policy_m
     echo "Error: signal profile does not match ${KEYWORD_POLICY}." >&2
     exit 1
 }
+if [ "$XSR_DISTILL_PARITY_DEBUG" = 1 ] && \
+   [ "$SIGNAL_PROFILE" != intent ] && [ "$SIGNAL_PROFILE" != mixed ]; then
+    echo "Error: distill parity diagnostics require SIGNAL_PROFILE=intent or mixed." >&2; exit 1
+fi
 LOCAL_DISTILL_REQUIRED=0
 if system_selected xsr || system_selected llmrouter || [ "$INCLUDE_XDP" = "1" ]; then
     LOCAL_DISTILL_REQUIRED=1
