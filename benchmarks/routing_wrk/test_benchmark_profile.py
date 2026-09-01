@@ -4,6 +4,7 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -99,6 +100,14 @@ class BenchmarkProfileTest(unittest.TestCase):
         output = dry_run(BENCHMARK_SYSTEMS="llmrouter", KEYWORD_POLICY=str(policy))
         self.assertIn("systems=llmrouter", output)
         self.assertIn("/benchmarks/llmrouter/configs/bm25.yaml", output)
+
+    def test_quoted_yaml_method_uses_the_policy_parser(self) -> None:
+        source = (SCRIPT.parents[2] / "config" / "policy_ngram.yaml").read_text(encoding="utf-8")
+        with tempfile.TemporaryDirectory() as temporary:
+            policy = Path(temporary) / "quoted.yaml"
+            policy.write_text(source.replace("method: ngram", 'method: "ngram"'), encoding="utf-8")
+            output = dry_run(BENCHMARK_SYSTEMS="xsr", KEYWORD_POLICY=str(policy))
+        self.assertIn("effective_compiled_profile=ngram", output)
 
     def test_intent_profile_selects_intent_adapter_and_reports_no_debug(self) -> None:
         output = dry_run(

@@ -59,7 +59,13 @@ def main() -> None:
     args = parser.parse_args()
 
     inspected = inspect_container(args.container)
+    mounted_sources = {
+        str(Path(str(mount.get("Source", ""))).expanduser().resolve())
+        for mount in inspected.get("Mounts", [])
+        if mount.get("Source")
+    }
     candidates: list[tuple[str, str, str | None]] = []
+    supplied_config_bound = True
     if args.config:
         path = args.config.expanduser().resolve()
         if not path.is_file():
@@ -70,6 +76,7 @@ def main() -> None:
                 f"VSR config hash mismatch: expected {args.expected_sha256.lower()}, found {actual_hash}"
             )
         candidates.append((str(path), path.read_text(encoding="utf-8", errors="replace"), actual_hash))
+        supplied_config_bound = str(path) in mounted_sources
     else:
         for mount in inspected.get("Mounts", []):
             source = Path(str(mount.get("Source", "")))
@@ -90,7 +97,7 @@ def main() -> None:
     }, sort_keys=True)
     searchable += "\n" + "\n".join(text for _, text, _ in candidates)
     detected = [name for name, pattern in PROFILE_PATTERNS.items() if pattern.search(searchable)]
-    automatic = detected == [args.profile]
+    automatic = detected == [args.profile] and supplied_config_bound
     if args.profile == "intent" and automatic:
         automatic = bool(re.search(r"mmbert[-_ ]?32k", searchable, re.I) and re.search(r"lora|adapter", searchable, re.I))
 

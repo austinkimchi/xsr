@@ -25,10 +25,12 @@ class VSRConfigurationVerificationTest(unittest.TestCase):
             config = root / "router.yaml"
             config.write_text("classifier: bm25\n", encoding="utf-8")
             output = root / "run" / "vsr-verification.json"
+            inspected = self.inspect()
+            inspected["Mounts"] = [{"Source": str(config), "Destination": "/config/router.yaml", "Type": "bind"}]
             argv = ["verify_vsr_config.py", "--container", "router", "--profile", "bm25",
                     "--config", str(config), "--output", str(output)]
             with patch.object(sys, "argv", argv), patch.object(
-                verify_vsr_config, "inspect_container", return_value=self.inspect()
+                verify_vsr_config, "inspect_container", return_value=inspected
             ):
                 verify_vsr_config.main()
             result = json.loads(output.read_text(encoding="utf-8"))
@@ -38,6 +40,19 @@ class VSRConfigurationVerificationTest(unittest.TestCase):
             self.assertEqual(artifact["sha256"], hashlib.sha256(config.read_bytes()).hexdigest())
             self.assertNotIn("snapshot_path", artifact)
             self.assertFalse((output.parent / "configs").exists())
+
+    def test_unbound_supplied_config_is_not_automatic_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            config = root / "router.yaml"
+            config.write_text("classifier: bm25\n", encoding="utf-8")
+            output = root / "run" / "vsr-verification.json"
+            argv = ["verify_vsr_config.py", "--container", "router", "--profile", "bm25",
+                    "--config", str(config), "--output", str(output)]
+            with patch.object(sys, "argv", argv), patch.object(
+                verify_vsr_config, "inspect_container", return_value=self.inspect()
+            ), self.assertRaisesRegex(SystemExit, "reviewed configuration contract"):
+                verify_vsr_config.main()
 
     def test_opaque_config_requires_exact_reviewed_contract(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

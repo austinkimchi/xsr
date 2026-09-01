@@ -99,11 +99,17 @@ def selection_header(
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("policy", type=Path)
-    parser.add_argument("output_dir", type=Path)
+    parser.add_argument("output_dir", type=Path, nargs="?")
     parser.add_argument("--signal-profile", default="auto", choices=sorted(PROFILES))
     parser.add_argument("--parity-debug", action="store_true")
+    parser.add_argument("--resolve-only", action="store_true")
     args = parser.parse_args()
     profile, selected = resolve_profile(args.policy, args.signal_profile)
+    if args.resolve_only:
+        print(profile)
+        return 0
+    if args.output_dir is None:
+        parser.error("output_dir is required unless --resolve-only is used")
     args.output_dir.mkdir(parents=True, exist_ok=True)
     (args.output_dir / "xdp_keyword_modules.generated.h").write_text(
         selection_header(

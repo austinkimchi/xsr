@@ -330,29 +330,14 @@ case "$BENCHMARK_MODE" in
 esac
 
 case "$XSR_DISTILL_PARITY_DEBUG" in 0|1) ;; *) echo "Error: XSR_DISTILL_PARITY_DEBUG must be 0 or 1." >&2; exit 1 ;; esac
-if [ "$SIGNAL_PROFILE" = auto ]; then
-    if [ -n "$XSR_DISTILL_MODEL" ]; then
-        SIGNAL_PROFILE=intent
-    elif grep -Eq '^[[:space:]]*method:[[:space:]]*bm25([[:space:]]|$)' "$KEYWORD_POLICY" && \
-         ! grep -Eq '^[[:space:]]*method:[[:space:]]*ngram([[:space:]]|$)' "$KEYWORD_POLICY"; then
-        SIGNAL_PROFILE=bm25
-    elif grep -Eq '^[[:space:]]*method:[[:space:]]*ngram([[:space:]]|$)' "$KEYWORD_POLICY" && \
-         ! grep -Eq '^[[:space:]]*method:[[:space:]]*bm25([[:space:]]|$)' "$KEYWORD_POLICY"; then
-        SIGNAL_PROFILE=ngram
-    else
-        SIGNAL_PROFILE=mixed
-    fi
+if [ "$SIGNAL_PROFILE" = auto ] && [ -n "$XSR_DISTILL_MODEL" ]; then
+    SIGNAL_PROFILE=intent
 fi
-case "$SIGNAL_PROFILE" in ngram|bm25|intent|mixed) ;; *) echo "Error: SIGNAL_PROFILE must be ngram, bm25, intent, or mixed." >&2; exit 1 ;; esac
-if [ "$SIGNAL_PROFILE" = ngram ] || [ "$SIGNAL_PROFILE" = bm25 ]; then
-    if [ ! -f "$KEYWORD_POLICY" ] || ! grep -Eq "^[[:space:]]*method:[[:space:]]*${SIGNAL_PROFILE}([[:space:]]|$)" "$KEYWORD_POLICY"; then
-        echo "Error: SIGNAL_PROFILE=${SIGNAL_PROFILE} requires a matching keyword policy." >&2; exit 1
-    fi
-    other_profile="$([ "$SIGNAL_PROFILE" = ngram ] && echo bm25 || echo ngram)"
-    if grep -Eq "^[[:space:]]*method:[[:space:]]*${other_profile}([[:space:]]|$)" "$KEYWORD_POLICY"; then
-        echo "Error: SIGNAL_PROFILE=${SIGNAL_PROFILE} contradicts mixed keyword policy ${KEYWORD_POLICY}." >&2; exit 1
-    fi
-fi
+SIGNAL_PROFILE="$("$PYTHON_BIN" "${ROOT_DIR}/benchmarks/policy/generate_policy_modules.py" \
+    "$KEYWORD_POLICY" --signal-profile "$SIGNAL_PROFILE" --resolve-only)" || {
+    echo "Error: signal profile does not match ${KEYWORD_POLICY}." >&2
+    exit 1
+}
 if { [ "$SIGNAL_PROFILE" = intent ] || [ "$SIGNAL_PROFILE" = mixed ]; } && [ -z "$XSR_DISTILL_MODEL" ]; then
     echo "Error: SIGNAL_PROFILE=${SIGNAL_PROFILE} requires XSR_DISTILL_MODEL." >&2; exit 1
 fi
