@@ -4,6 +4,7 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -22,6 +23,13 @@ def dry_run(**overrides: str) -> str:
         "INCLUDE_STRESS",
         "KEYWORD_POLICY",
         "LLMROUTER_CONFIG",
+        "SIGNAL_PROFILE",
+        "XSR_DISTILL_MODEL",
+        "XSR_DISTILL_PARITY_DEBUG",
+        "VSR_CONTAINER",
+        "VSR_CONFIG_PATH",
+        "VSR_CONFIG_SHA256",
+        "VSR_SIGNAL_PROFILE",
         "PROMPTS_EXPLICIT",
         "PROMPTS_FILE",
         "RANDOM_SEED",
@@ -38,6 +46,32 @@ def dry_run(**overrides: str) -> str:
 
 
 class BenchmarkProfileTest(unittest.TestCase):
+    def test_intent_preflight_maps_qa_and_writing_prompts_to_fallback(self) -> None:
+        source = SCRIPT.read_text(encoding="utf-8")
+        function = source.split("preflight_routing_cases() {", 1)[1].split("\n}", 1)[0]
+        intent_block = function.split(
+            'if [ "$SIGNAL_PROFILE" = intent ] || [ "$SIGNAL_PROFILE" = mixed ]; then', 1
+        )[1].split("else", 1)[0]
+        self.assertIn("others|answer this question: what is the capital of France?", intent_block)
+        self.assertIn("others|write a short poem about rain", intent_block)
+        self.assertNotIn("qa|answer this question", intent_block)
+        self.assertNotIn("writing|write a short poem", intent_block)
+        self.assertEqual(source.count("done < <(preflight_routing_cases)"), 3)
+        self.assertIn('[ "$SIGNAL_PROFILE" = intent ] || [ "$SIGNAL_PROFILE" = mixed ]', function)
+
+    def test_legacy_only_builds_generate_and_validate_the_requested_profile(self) -> None:
+        source = SCRIPT.read_text(encoding="utf-8")
+        self.assertGreaterEqual(
+            source.count('if system_selected xsr || [ "$INCLUDE_XDP" = "1" ]; then'),
+            2,
+        )
+        self.assertIn('KEYWORD_POLICY="$BUILD_KEYWORD_POLICY"', source)
+
+    def test_metadata_uses_pre_generation_source_state(self) -> None:
+        source = SCRIPT.read_text(encoding="utf-8")
+        self.assertIn('--source-working-tree "$XSR_SOURCE_WORKING_TREE"', source)
+        self.assertLess(source.index("XSR_SOURCE_WORKING_TREE="), source.index("make -s KEYWORD_POLICY="))
+
     def test_xsr_warmup_uses_quiescence_without_a_router_restart(self) -> None:
         source = SCRIPT.read_text(encoding="utf-8")
         self.assertIn("same-process-load-warmup", source)
@@ -51,6 +85,8 @@ class BenchmarkProfileTest(unittest.TestCase):
         self.assertIn(r"concurrencies=1\ 2\ 4\ 8\ 16\ 32\ 64\ 96\ 128\ 192 ", output)
         self.assertNotIn(r"\ 256", output)
         self.assertIn("systems=direct,envoy-only,xsr,vsr,llmrouter", output)
+        self.assertIn("signal_profile_requested=auto", output)
+        self.assertIn("effective_compiled_profile=ngram", output)
         self.assertIn("llmrouter_config=", output)
         self.assertIn("/benchmarks/llmrouter/configs/ngram.yaml", output)
 
@@ -69,6 +105,87 @@ class BenchmarkProfileTest(unittest.TestCase):
         output = dry_run(BENCHMARK_SYSTEMS="llmrouter", KEYWORD_POLICY=str(policy))
         self.assertIn("systems=llmrouter", output)
         self.assertIn("/benchmarks/llmrouter/configs/bm25.yaml", output)
+
+    def test_llmrouter_policy_artifact_must_match_selected_policy(self) -> None:
+        source = (SCRIPT.parents[2] / "config" / "policy_ngram.yaml").read_text(encoding="utf-8")
+        with tempfile.TemporaryDirectory() as temporary:
+            policy = Path(temporary) / "custom.yaml"
+            policy.write_text(source + "\n# distinct reviewed artifact\n", encoding="utf-8")
+            with self.assertRaises(subprocess.CalledProcessError):
+                dry_run(BENCHMARK_SYSTEMS="llmrouter", KEYWORD_POLICY=str(policy))
+
+    def test_intent_llmrouter_accepts_model_from_adapter_config(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            config = Path(temporary) / "intent.yaml"
+            config.write_text("xsr:\n  method: intent\n  model: /bin/true\n", encoding="utf-8")
+            output = dry_run(
+                BENCHMARK_SYSTEMS="llmrouter", SIGNAL_PROFILE="intent",
+                LLMROUTER_CONFIG=str(config),
+            )
+        self.assertIn("effective_compiled_profile=intent", output)
+        self.assertIn("distill_model=/bin/true", output)
+
+    def test_quoted_yaml_method_uses_the_policy_parser(self) -> None:
+        source = (SCRIPT.parents[2] / "config" / "policy_ngram.yaml").read_text(encoding="utf-8")
+        with tempfile.TemporaryDirectory() as temporary:
+            policy = Path(temporary) / "quoted.yaml"
+            policy.write_text(source.replace("method: ngram", 'method: "ngram"'), encoding="utf-8")
+            output = dry_run(BENCHMARK_SYSTEMS="xsr", KEYWORD_POLICY=str(policy))
+        self.assertIn("effective_compiled_profile=ngram", output)
+
+    def test_auto_profile_resolves_mixed_policy_before_model_validation(self) -> None:
+        policy = SCRIPT.parents[2] / "config" / "policy_mixed.yaml"
+        output = dry_run(
+            BENCHMARK_SYSTEMS="xsr", KEYWORD_POLICY=str(policy),
+            XSR_DISTILL_MODEL="/bin/true",
+        )
+        self.assertIn("signal_profile_requested=auto", output)
+        self.assertIn("effective_compiled_profile=mixed", output)
+
+    def test_quoted_llmrouter_method_uses_the_adapter_parser(self) -> None:
+        source = (SCRIPT.parents[1] / "llmrouter/configs/ngram.yaml").read_text(encoding="utf-8")
+        with tempfile.TemporaryDirectory() as temporary:
+            config = Path(temporary) / "quoted.yaml"
+            policy = SCRIPT.parents[2] / "config" / "policy_ngram.yaml"
+            config.write_text(
+                source.replace("method: ngram", 'method: "ngram"').replace(
+                    "../../../config/policy_ngram.yaml", str(policy)
+                ),
+                encoding="utf-8",
+            )
+            output = dry_run(
+                BENCHMARK_SYSTEMS="llmrouter", SIGNAL_PROFILE="ngram",
+                LLMROUTER_CONFIG=str(config),
+            )
+        self.assertIn("effective_compiled_profile=ngram", output)
+
+    def test_vsr_only_intent_does_not_require_local_distill_model(self) -> None:
+        output = dry_run(BENCHMARK_SYSTEMS="vsr", SIGNAL_PROFILE="intent")
+        self.assertIn("effective_compiled_profile=intent", output)
+        self.assertIn("distill_model=not-applicable", output)
+
+    def test_intent_profile_selects_intent_adapter_and_reports_no_debug(self) -> None:
+        output = dry_run(
+            BENCHMARK_SYSTEMS="xsr,llmrouter", SIGNAL_PROFILE="intent",
+            XSR_DISTILL_MODEL="/bin/true", PROMPTS_FILE="/data/intent.jsonl",
+            WORKLOAD_ID="intent:heldout",
+        )
+        self.assertIn("effective_compiled_profile=intent", output)
+        self.assertIn("parity_debug=0", output)
+        self.assertIn("/benchmarks/llmrouter/configs/intent.yaml", output)
+
+    def test_parity_diagnostics_reject_non_distill_profile(self) -> None:
+        with self.assertRaises(subprocess.CalledProcessError):
+            dry_run(SIGNAL_PROFILE="ngram", XSR_DISTILL_PARITY_DEBUG="1")
+
+    def test_explicit_adapter_mismatch_fails(self) -> None:
+        policy = SCRIPT.parents[2] / "config" / "policy_bm25.yaml"
+        with self.assertRaises(subprocess.CalledProcessError):
+            dry_run(
+                BENCHMARK_SYSTEMS="llmrouter", SIGNAL_PROFILE="bm25",
+                LLMROUTER_CONFIG=str(SCRIPT.parents[1] / "llmrouter/configs/ngram.yaml"),
+                KEYWORD_POLICY=str(policy),
+            )
 
     def test_explicit_workload_is_visible_in_dry_run(self) -> None:
         output = dry_run(PROMPTS_FILE="/data/intent.jsonl", WORKLOAD_ID="intent:heldout")

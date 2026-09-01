@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+import subprocess
+import sys
 from pathlib import Path
 
 from bm25_reference import fixed_scores, keyword_scores, rule_matches
@@ -16,7 +18,7 @@ from generate_bm25_policy_header import (
     vocabulary_aliases,
     vocabulary_by_stem,
 )
-from generate_policy_modules import methods, selection_header
+from generate_policy_modules import methods, resolve_profile, selection_header
 from vsr_bm25_tokenizer import ENGLISH_STOP_WORDS, stem_english, tokenize, tokenize_query
 
 
@@ -125,6 +127,13 @@ class Bm25CompatibilityTests(unittest.TestCase):
         self.assertEqual(threshold_micro("0.1000005"), 100001)
 
 class ModuleSelectionTests(unittest.TestCase):
+    def test_mixed_profile_allows_keywords_after_intent_fallback(self) -> None:
+        classifier = (ROOT / "bpf/stages/signals/xdp_classifier.bpf.h").read_text(encoding="utf-8")
+        self.assertIn(
+            "if (distill_enabled && distill_route != XDP_ROUTE_GENERAL)",
+            classifier,
+        )
+
     def test_ngram_bm25_and_mixed_selection(self) -> None:
         cases = {
             "policy_ngram.yaml": (1, 0),
@@ -137,6 +146,34 @@ class ModuleSelectionTests(unittest.TestCase):
             header = selection_header(path, selected)
             self.assertIn(f"XDP_KEYWORD_ENABLE_NGRAM {enabled[0]}", header)
             self.assertIn(f"XDP_KEYWORD_ENABLE_BM25 {enabled[1]}", header)
+
+    def test_profiles_are_isolated_and_contradictions_fail(self) -> None:
+        ngram = ROOT / "config" / "policy_ngram.yaml"
+        profile, selected = resolve_profile(ngram, "intent")
+        header = selection_header(ngram, profile, selected)
+        self.assertIn("XDP_SIGNAL_ENABLE_DISTILL 1", header)
+        self.assertIn("XDP_SIGNAL_ENABLE_NGRAM 0", header)
+        with self.assertRaisesRegex(ValueError, "contradicts"):
+            resolve_profile(ngram, "bm25")
+
+    def test_auto_resolved_mixed_profile_enables_distill(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary)
+            subprocess.run(
+                [sys.executable, str(ROOT / "benchmarks/policy/generate_policy_modules.py"),
+                 str(ROOT / "config/policy_mixed.yaml"), str(output), "--signal-profile", "auto"],
+                check=True,
+            )
+            header = (output / "xdp_keyword_modules.generated.h").read_text(encoding="utf-8")
+        self.assertIn("XDP_SIGNAL_PROFILE_NAME \"mixed\"", header)
+        self.assertIn("XDP_SIGNAL_ENABLE_DISTILL 1", header)
+
+    def test_parity_diagnostics_are_explicit(self) -> None:
+        policy = ROOT / "config" / "policy_ngram.yaml"
+        self.assertIn("XSR_DISTILL_PARITY_DEBUG 0", selection_header(policy, "intent", set()))
+        self.assertIn("XSR_DISTILL_PARITY_DEBUG 1", selection_header(policy, "intent", set(), True))
+        with self.assertRaisesRegex(ValueError, "require an intent or mixed"):
+            selection_header(policy, "ngram", {"ngram"}, True)
 
 
 if __name__ == "__main__":

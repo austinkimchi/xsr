@@ -4,8 +4,13 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 from pathlib import Path
+
+
+def sha256(path: Path | None) -> str | None:
+    return hashlib.sha256(path.read_bytes()).hexdigest() if path and path.is_file() else None
 
 
 def main() -> None:
@@ -23,6 +28,14 @@ def main() -> None:
     parser.add_argument("--xsr-warmup-lifecycle")
     parser.add_argument("--xsr-measured-instance-warmed", choices=("true", "false", "not-applicable"))
     parser.add_argument("--workload-descriptor", type=Path)
+    parser.add_argument("--signal-profile")
+    parser.add_argument("--requested-signal-profile")
+    parser.add_argument("--parity-debug", choices=("0", "1"))
+    parser.add_argument("--effective-signal-profile")
+    parser.add_argument("--effective-parity-debug")
+    parser.add_argument("--policy", type=Path)
+    parser.add_argument("--distill-model", type=Path)
+    parser.add_argument("--vsr-verification", type=Path)
     parser.add_argument("--configuration")
     parser.add_argument("--trial", type=int)
     parser.add_argument("--order", nargs="+")
@@ -45,6 +58,20 @@ def main() -> None:
                 "true": True, "false": False
             }.get(args.xsr_measured_instance_warmed, "not-applicable"),
             "workload": workload,
+            "signals": {
+                "requested_profile": args.requested_signal_profile,
+                "effective_compiled_profile": args.effective_signal_profile,
+                "parity_debug_requested": args.parity_debug == "1",
+                "parity_debug": ({"0": False, "1": True}.get(args.effective_parity_debug, "not-built")),
+                "keyword_policy": ({"path": str(args.policy), "sha256": sha256(args.policy)}
+                                   if args.signal_profile in {"ngram", "bm25", "mixed"} else None),
+                "distill_model": ({"path": str(args.distill_model), "sha256": sha256(args.distill_model)}
+                                  if args.distill_model and args.distill_model.is_file() else None),
+            },
+            "vsr_configuration_verification": (
+                json.loads(args.vsr_verification.read_text(encoding="utf-8"))
+                if args.vsr_verification else None
+            ),
         })
     if args.configuration:
         data.setdefault("trials", []).append({"configuration": args.configuration, "trial": args.trial, "system_order": args.order})

@@ -17,11 +17,13 @@ struct xdp_distill_config {
   __u32 prompt_byte_limit;
   __u32 proven_score_bound;
 };
+#if XSR_DISTILL_PARITY_DEBUG
 struct xdp_distill_debug {
   __s32 score[XDP_DISTILL_CLASSES];
   __u32 intent;
   __u32 bytes_seen;
 };
+#endif
 
 struct {
   __uint(type, BPF_MAP_TYPE_ARRAY);
@@ -35,6 +37,7 @@ struct {
   __type(key, __u32);
   __type(value, struct xdp_distill_config);
 } xdp_distill_config_map SEC(".maps");
+#if XSR_DISTILL_PARITY_DEBUG
 /* Sequential parity tests read this diagnostic map; routing never consumes it. */
 struct {
   __uint(type, BPF_MAP_TYPE_ARRAY);
@@ -42,6 +45,7 @@ struct {
   __type(key, __u32);
   __type(value, struct xdp_distill_debug);
 } xdp_distill_last_prediction SEC(".maps");
+#endif
 
 struct xdp_distill_state {
   __s32 score[XDP_DISTILL_CLASSES];
@@ -92,7 +96,6 @@ static __always_inline void xdp_distill_score_char(struct xdp_distill_state *sta
 }
 
 static __always_inline __u32 xdp_distill_intent(struct xdp_distill_state *state, __u8 *enabled) {
-  struct xdp_distill_debug *debug;
   __u32 key = 0, best = 0;
   struct xdp_distill_config *config = bpf_map_lookup_elem(&xdp_distill_config_map, &key);
   if (!config || !config->enabled) {
@@ -104,7 +107,8 @@ static __always_inline __u32 xdp_distill_intent(struct xdp_distill_state *state,
   for (int c = 1; c < XDP_DISTILL_CLASSES; c++)
     if (state->score[c] > state->score[best])
       best = c;
-  debug = bpf_map_lookup_elem(&xdp_distill_last_prediction, &key);
+#if XSR_DISTILL_PARITY_DEBUG
+  struct xdp_distill_debug *debug = bpf_map_lookup_elem(&xdp_distill_last_prediction, &key);
   if (debug) {
 #pragma unroll
     for (int c = 0; c < XDP_DISTILL_CLASSES; c++)
@@ -112,6 +116,7 @@ static __always_inline __u32 xdp_distill_intent(struct xdp_distill_state *state,
     debug->intent = best;
     debug->bytes_seen = state->bytes_seen;
   }
+#endif
   return best;
 }
 
