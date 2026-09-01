@@ -148,6 +148,23 @@ class VSRConfigurationVerificationTest(unittest.TestCase):
             self.assertTrue(result["automatic_detection"])
             self.assertTrue(result["intent_identity_requirements"]["mmbert_32k_marker"])
 
+    def test_unknown_classifier_cannot_be_masked_by_intent_model_identity(self) -> None:
+        inspected = self.inspect()
+        inspected["Config"] = {
+            "Entrypoint": ["router"],
+            "Cmd": ["--classifier", "proprietary", "--model", "mmBERT-32K",
+                    "--adapter", "intent-LoRA"],
+            "Env": [], "Labels": {},
+        }
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary) / "run" / "vsr-verification.json"
+            argv = ["verify_vsr_config.py", "--container", "router", "--profile", "intent",
+                    "--output", str(output)]
+            with patch.object(sys, "argv", argv), patch.object(
+                verify_vsr_config, "inspect_container", return_value=inspected
+            ), self.assertRaisesRegex(SystemExit, "reviewed configuration contract"):
+                verify_vsr_config.main()
+
 
 if __name__ == "__main__":
     unittest.main()

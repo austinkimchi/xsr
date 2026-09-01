@@ -13,8 +13,6 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
-import yaml
-
 
 PROFILE_PATTERNS = {
     "ngram": re.compile(r"(?:n[-_ ]?gram|ngrammatic|jaccard)", re.I),
@@ -26,7 +24,7 @@ SENSITIVE_NAME = re.compile(r"(?:secret|password|passwd|token|private|credential
 PROFILE_FIELD = re.compile(r"^(?:classifier|classifier_method|method|routing_method|signal_profile|router_profile)$", re.I)
 MODEL_FIELD = re.compile(r"^(?:model|model_name|base_model|tokenizer)$", re.I)
 ADAPTER_FIELD = re.compile(r"^(?:adapter|adapter_name|lora|lora_adapter)$", re.I)
-ACTIVE_CONTAINER_FIELD = re.compile(r"^(?:router|routing|classifier_config|signal|settings|config)$", re.I)
+ACTIVE_CONTAINER_FIELD = re.compile(r"^(?:router|routing|classifier_config|signal|signals|settings|config)$", re.I)
 
 
 def sha256(path: Path) -> str:
@@ -102,16 +100,30 @@ def redacted_argv(values: list[str] | None) -> list[str]:
     return result
 
 
-def active_values(value: Any, *, within_active_container: bool = True) -> list[str]:
+def field_kind(name: str) -> str | None:
+    if PROFILE_FIELD.fullmatch(name):
+        return "profile"
+    if MODEL_FIELD.fullmatch(name):
+        return "model"
+    if ADAPTER_FIELD.fullmatch(name):
+        return "adapter"
+    return None
+
+
+def active_values(value: Any, *, within_active_container: bool = True) -> list[tuple[str, str]]:
     """Return values of fields that actively select classifier/model identity."""
-    result: list[str] = []
+    result: list[tuple[str, str]] = []
     if isinstance(value, dict):
         for key, setting in value.items():
-            if PROFILE_FIELD.fullmatch(str(key)) or MODEL_FIELD.fullmatch(str(key)) or ADAPTER_FIELD.fullmatch(str(key)):
+            kind = field_kind(str(key))
+            if kind:
                 if isinstance(setting, (str, int, float, bool)):
-                    result.append(str(setting))
+                    result.append((kind, str(setting)))
                 elif isinstance(setting, list):
-                    result.extend(str(item) for item in setting if isinstance(item, (str, int, float, bool)))
+                    result.extend(
+                        (kind, str(item)) for item in setting
+                        if isinstance(item, (str, int, float, bool))
+                    )
             elif (within_active_container and ACTIVE_CONTAINER_FIELD.fullmatch(str(key))
                   and isinstance(setting, (dict, list))):
                 result.extend(active_values(setting))
@@ -121,11 +133,35 @@ def active_values(value: Any, *, within_active_container: bool = True) -> list[s
     return result
 
 
-def parsed_config_evidence(source: str, text: str) -> list[str]:
+def yaml_evidence(text: str) -> list[tuple[str, str]]:
+    """Parse conservative YAML key/scalar paths without external dependencies."""
+    result: list[tuple[str, str]] = []
+    parents: list[tuple[int, str]] = []
+    for raw_line in text.splitlines():
+        line = re.sub(r"\s+#.*$", "", raw_line).rstrip()
+        if not line or line.lstrip().startswith("#"):
+            continue
+        match = re.match(r"^(\s*)(?:-\s*)?([A-Za-z_][\w.-]*)\s*:\s*(.*?)\s*$", line)
+        if not match or "\t" in match.group(1):
+            continue
+        indent = len(match.group(1))
+        while parents and parents[-1][0] >= indent:
+            parents.pop()
+        key, setting = match.group(2), match.group(3)
+        active_path = all(ACTIVE_CONTAINER_FIELD.fullmatch(parent) for _, parent in parents)
+        kind = field_kind(key)
+        if setting and active_path and kind:
+            result.append((kind, setting.strip().strip("\"'")))
+        if not setting:
+            parents.append((indent, key))
+    return result
+
+
+def parsed_config_evidence(source: str, text: str) -> list[tuple[str, str]]:
     suffix = Path(source).suffix.lower()
     try:
         if suffix in {".yaml", ".yml"}:
-            parsed = yaml.safe_load(text)
+            return yaml_evidence(text)
         elif suffix == ".json":
             parsed = json.loads(text)
         elif suffix == ".toml":
@@ -139,27 +175,29 @@ def parsed_config_evidence(source: str, text: str) -> list[str]:
                     parsed[name.strip()] = setting.strip().strip("\"'")
         else:
             return []
-    except (ValueError, TypeError, yaml.YAMLError, tomllib.TOMLDecodeError):
+    except (ValueError, TypeError, tomllib.TOMLDecodeError):
         return []
     return active_values(parsed)
 
 
-def runtime_evidence(config: dict[str, Any]) -> list[str]:
-    result: list[str] = []
+def runtime_evidence(config: dict[str, Any]) -> list[tuple[str, str]]:
+    result: list[tuple[str, str]] = []
     argv = [str(value) for value in (config.get("Entrypoint") or [])]
     argv.extend(str(value) for value in (config.get("Cmd") or []))
     for index, value in enumerate(argv):
         name, separator, setting = value.partition("=")
         field = name.lstrip("-")
-        if PROFILE_FIELD.fullmatch(field) or MODEL_FIELD.fullmatch(field) or ADAPTER_FIELD.fullmatch(field):
+        kind = field_kind(field)
+        if kind:
             if separator:
-                result.append(setting)
+                result.append((kind, setting))
             elif index + 1 < len(argv):
-                result.append(argv[index + 1])
+                result.append((kind, argv[index + 1]))
     for value in config.get("Env") or []:
         name, separator, setting = str(value).partition("=")
-        if separator and (PROFILE_FIELD.fullmatch(name) or MODEL_FIELD.fullmatch(name) or ADAPTER_FIELD.fullmatch(name)):
-            result.append(setting)
+        kind = field_kind(name)
+        if separator and kind:
+            result.append((kind, setting))
     result.extend(active_values(config.get("Labels") or {}))
     return result
 
@@ -214,11 +252,22 @@ def main() -> None:
     evidence = runtime_evidence(config)
     for source, candidate_text, _ in candidates:
         evidence.extend(parsed_config_evidence(source, candidate_text))
-    searchable = "\n".join(evidence)
+    searchable = "\n".join(value for _, value in evidence)
     detected = [name for name, pattern in PROFILE_PATTERNS.items() if pattern.search(searchable)]
-    automatic = detected == [args.profile] and supplied_config_bound
+    classifier_selectors = [value for kind, value in evidence if kind == "profile"]
+    model_identity = "\n".join(value for kind, value in evidence if kind == "model")
+    adapter_identity = "\n".join(value for kind, value in evidence if kind == "adapter")
+    selectors_match = all(
+        [name for name, pattern in PROFILE_PATTERNS.items() if pattern.search(value)] == [args.profile]
+        for value in classifier_selectors
+    )
+    selector_proof = selectors_match and (bool(classifier_selectors) or args.profile == "intent")
+    automatic = detected == [args.profile] and supplied_config_bound and selector_proof
     if args.profile == "intent" and automatic:
-        automatic = bool(re.search(r"mmbert[-_ ]?32k", searchable, re.I) and re.search(r"lora|adapter", searchable, re.I))
+        automatic = bool(
+            re.search(r"mmbert[-_ ]?32k", model_identity, re.I)
+            and re.search(r"lora|adapter", adapter_identity, re.I)
+        )
 
     verification_mode = "automatic-inspection"
     if not automatic:
@@ -244,13 +293,14 @@ def main() -> None:
         "verification_mode": verification_mode,
         "automatic_detection": automatic,
         "detected_profile_markers": detected,
+        "active_classifier_selectors": classifier_selectors,
         "container": args.container,
         "container_image_id": inspected.get("Image"),
         "configuration_artifacts": artifacts,
         "runtime_identity": json.loads(runtime_identity),
         "intent_identity_requirements": {
-            "mmbert_32k_marker": bool(re.search(r"mmbert[-_ ]?32k", searchable, re.I)),
-            "lora_adapter_marker": bool(re.search(r"lora|adapter", searchable, re.I)),
+            "mmbert_32k_marker": bool(re.search(r"mmbert[-_ ]?32k", model_identity, re.I)),
+            "lora_adapter_marker": bool(re.search(r"lora|adapter", adapter_identity, re.I)),
         } if args.profile == "intent" else None,
     }
     args.output.parent.mkdir(parents=True, exist_ok=True)
