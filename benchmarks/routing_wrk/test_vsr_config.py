@@ -80,6 +80,38 @@ class VSRConfigurationVerificationTest(unittest.TestCase):
             ), self.assertRaisesRegex(SystemExit, "reviewed configuration contract"):
                 verify_vsr_config.main()
 
+    def test_supplied_config_inside_mounted_directory_is_bound(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            config_dir = Path(temporary) / "configs"
+            config_dir.mkdir()
+            config = config_dir / "router.yaml"
+            config.write_text("classifier: bm25\n", encoding="utf-8")
+            output = Path(temporary) / "run" / "vsr-verification.json"
+            inspected = self.inspect()
+            inspected["Mounts"].append(
+                {"Source": str(config_dir), "Destination": "/etc/router", "Type": "bind"}
+            )
+            argv = ["verify_vsr_config.py", "--container", "router", "--envoy-container", "router",
+                    "--profile", "bm25", "--config", str(config), "--output", str(output)]
+            with patch.object(sys, "argv", argv), patch.object(
+                verify_vsr_config, "inspect_container", return_value=inspected
+            ):
+                verify_vsr_config.main()
+            result = json.loads(output.read_text(encoding="utf-8"))
+            self.assertEqual(result["verification_mode"], "automatic-inspection")
+
+    def test_informational_labels_are_not_classifier_evidence(self) -> None:
+        inspected = self.inspect()
+        inspected["Config"]["Labels"] = {"classifier": "bm25"}
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary) / "run" / "vsr-verification.json"
+            argv = ["verify_vsr_config.py", "--container", "router", "--envoy-container", "router",
+                    "--profile", "bm25", "--output", str(output)]
+            with patch.object(sys, "argv", argv), patch.object(
+                verify_vsr_config, "inspect_container", return_value=inspected
+            ), self.assertRaisesRegex(SystemExit, "reviewed configuration contract"):
+                verify_vsr_config.main()
+
     def test_profile_marker_in_mount_path_is_not_automatic_evidence(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

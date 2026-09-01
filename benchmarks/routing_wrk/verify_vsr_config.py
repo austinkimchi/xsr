@@ -222,7 +222,6 @@ def runtime_evidence(config: dict[str, Any]) -> list[tuple[str, str]]:
         kind = field_kind(name)
         if separator and kind:
             result.append((kind, setting))
-    result.extend(active_values(config.get("Labels") or {}))
     return result
 
 
@@ -405,7 +404,7 @@ def main() -> None:
     inspected = inspect_container(args.container)
     deployment_binding = verify_envoy_binding(args.container, inspected, args.envoy_container)
     mounted_sources = {
-        str(Path(str(mount.get("Source", ""))).expanduser().resolve())
+        Path(str(mount.get("Source", ""))).expanduser().resolve()
         for mount in inspected.get("Mounts", [])
         if mount.get("Source")
     }
@@ -421,7 +420,10 @@ def main() -> None:
                 f"VSR config hash mismatch: expected {args.expected_sha256.lower()}, found {actual_hash}"
             )
         candidates.append((str(path), path.read_text(encoding="utf-8", errors="replace"), actual_hash))
-        supplied_config_bound = str(path) in mounted_sources
+        supplied_config_bound = any(
+            path == source or (source.is_dir() and path.is_relative_to(source))
+            for source in mounted_sources
+        )
     else:
         for mount in inspected.get("Mounts", []):
             source = Path(str(mount.get("Source", "")))
