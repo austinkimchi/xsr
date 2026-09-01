@@ -106,6 +106,25 @@ class BenchmarkProfileTest(unittest.TestCase):
         self.assertIn("systems=llmrouter", output)
         self.assertIn("/benchmarks/llmrouter/configs/bm25.yaml", output)
 
+    def test_llmrouter_policy_artifact_must_match_selected_policy(self) -> None:
+        source = (SCRIPT.parents[2] / "config" / "policy_ngram.yaml").read_text(encoding="utf-8")
+        with tempfile.TemporaryDirectory() as temporary:
+            policy = Path(temporary) / "custom.yaml"
+            policy.write_text(source + "\n# distinct reviewed artifact\n", encoding="utf-8")
+            with self.assertRaises(subprocess.CalledProcessError):
+                dry_run(BENCHMARK_SYSTEMS="llmrouter", KEYWORD_POLICY=str(policy))
+
+    def test_intent_llmrouter_accepts_model_from_adapter_config(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            config = Path(temporary) / "intent.yaml"
+            config.write_text("xsr:\n  method: intent\n  model: /bin/true\n", encoding="utf-8")
+            output = dry_run(
+                BENCHMARK_SYSTEMS="llmrouter", SIGNAL_PROFILE="intent",
+                LLMROUTER_CONFIG=str(config),
+            )
+        self.assertIn("effective_compiled_profile=intent", output)
+        self.assertIn("distill_model=/bin/true", output)
+
     def test_quoted_yaml_method_uses_the_policy_parser(self) -> None:
         source = (SCRIPT.parents[2] / "config" / "policy_ngram.yaml").read_text(encoding="utf-8")
         with tempfile.TemporaryDirectory() as temporary:
@@ -127,7 +146,13 @@ class BenchmarkProfileTest(unittest.TestCase):
         source = (SCRIPT.parents[1] / "llmrouter/configs/ngram.yaml").read_text(encoding="utf-8")
         with tempfile.TemporaryDirectory() as temporary:
             config = Path(temporary) / "quoted.yaml"
-            config.write_text(source.replace("method: ngram", 'method: "ngram"'), encoding="utf-8")
+            policy = SCRIPT.parents[2] / "config" / "policy_ngram.yaml"
+            config.write_text(
+                source.replace("method: ngram", 'method: "ngram"').replace(
+                    "../../../config/policy_ngram.yaml", str(policy)
+                ),
+                encoding="utf-8",
+            )
             output = dry_run(
                 BENCHMARK_SYSTEMS="llmrouter", SIGNAL_PROFILE="ngram",
                 LLMROUTER_CONFIG=str(config),

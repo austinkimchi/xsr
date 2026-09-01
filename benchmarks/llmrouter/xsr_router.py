@@ -26,6 +26,24 @@ def configured_method(config_path: Path) -> str:
     return method
 
 
+def configured_path(config_path: Path, key: str, environment: str | None = None) -> Path | None:
+    config_path = config_path.resolve()
+    config = load_policy(config_path)
+    values = config.get("xsr")
+    if not isinstance(values, dict):
+        raise ValueError("adapter config requires an 'xsr' mapping")
+    raw = values.get(key)
+    value = str(raw) if isinstance(raw, str) and raw else ""
+    if not value and environment:
+        environment_value = os.environ.get(environment, "")
+        if environment_value:
+            return Path(environment_value).expanduser().resolve()
+    if not value:
+        return None
+    path = Path(value).expanduser()
+    return path if path.is_absolute() else (config_path.parent / path).resolve()
+
+
 def query_text(query_input: dict[str, Any]) -> str:
     """Extract text from LLMRouter's query dict or an OpenAI-style request."""
     query = query_input.get("query")
@@ -93,22 +111,10 @@ class XSRRoutingAdapter:
 
         method = configured_method(config_path)
 
-        def configured_path(key: str, environment: str | None = None) -> Path | None:
-            raw = values.get(key)
-            value = str(raw) if isinstance(raw, str) and raw else ""
-            if not value and environment:
-                environment_value = os.environ.get(environment, "")
-                if environment_value:
-                    return Path(environment_value).expanduser().resolve()
-            if not value:
-                return None
-            path = Path(value).expanduser()
-            return path if path.is_absolute() else (config_path.parent / path).resolve()
-
         return cls(
             method,
-            policy_path=configured_path("policy"),
-            model_path=configured_path("model", "XSR_DISTILL_MODEL"),
+            policy_path=configured_path(config_path, "policy"),
+            model_path=configured_path(config_path, "model", "XSR_DISTILL_MODEL"),
         )
 
     def route(self, query_input: dict[str, Any]) -> dict[str, Any]:

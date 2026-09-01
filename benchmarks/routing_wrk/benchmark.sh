@@ -341,15 +341,8 @@ if [ "$XSR_DISTILL_PARITY_DEBUG" = 1 ] && \
     echo "Error: distill parity diagnostics require SIGNAL_PROFILE=intent or mixed." >&2; exit 1
 fi
 LOCAL_DISTILL_REQUIRED=0
-if system_selected xsr || system_selected llmrouter || [ "$INCLUDE_XDP" = "1" ]; then
+if system_selected xsr || [ "$INCLUDE_XDP" = "1" ]; then
     LOCAL_DISTILL_REQUIRED=1
-fi
-if { [ "$SIGNAL_PROFILE" = intent ] || [ "$SIGNAL_PROFILE" = mixed ]; } && \
-   [ "$LOCAL_DISTILL_REQUIRED" = "1" ] && [ -z "$XSR_DISTILL_MODEL" ]; then
-    echo "Error: SIGNAL_PROFILE=${SIGNAL_PROFILE} requires XSR_DISTILL_MODEL." >&2; exit 1
-fi
-if [ "$SIGNAL_PROFILE" != intent ] && [ "$SIGNAL_PROFILE" != mixed ] && [ -n "$XSR_DISTILL_MODEL" ]; then
-    echo "Error: ${SIGNAL_PROFILE} profile contradicts XSR_DISTILL_MODEL; use SIGNAL_PROFILE=mixed explicitly." >&2; exit 1
 fi
 if [ "$BENCHMARK_PROFILE" = paper ] && [ "$XSR_DISTILL_PARITY_DEBUG" != 0 ]; then
     echo "Error: paper performance builds require XSR_DISTILL_PARITY_DEBUG=0." >&2; exit 1
@@ -378,6 +371,38 @@ if system_selected llmrouter; then
         echo "Error: XSR profile ${SIGNAL_PROFILE} does not match LLMRouter adapter ${configured_method:-unknown}." >&2
         exit 1
     fi
+    if [ "$configured_method" = ngram ] || [ "$configured_method" = bm25 ]; then
+        configured_policy="$("$PYTHON_BIN" -c \
+            'import sys; from pathlib import Path; from benchmarks.llmrouter.xsr_router import configured_path; value = configured_path(Path(sys.argv[1]), "policy"); print(value or "")' \
+            "$LLMROUTER_CONFIG")"
+        if [ ! -f "$configured_policy" ] || \
+           [ "$(sha256sum "$configured_policy" | awk '{print $1}')" != "$(sha256sum "$KEYWORD_POLICY" | awk '{print $1}')" ]; then
+            echo "Error: LLMRouter policy does not match KEYWORD_POLICY=${KEYWORD_POLICY}." >&2
+            exit 1
+        fi
+    elif [ "$configured_method" = intent ]; then
+        configured_model="$("$PYTHON_BIN" -c \
+            'import sys; from pathlib import Path; from benchmarks.llmrouter.xsr_router import configured_path; value = configured_path(Path(sys.argv[1]), "model", "XSR_DISTILL_MODEL"); print(value or "")' \
+            "$LLMROUTER_CONFIG")"
+        if [ ! -f "$configured_model" ]; then
+            echo "Error: intent LLMRouter config requires a valid model artifact." >&2
+            exit 1
+        fi
+        if [ -n "$XSR_DISTILL_MODEL" ] && \
+           [ "$(sha256sum "$configured_model" | awk '{print $1}')" != "$(sha256sum "$XSR_DISTILL_MODEL" | awk '{print $1}')" ]; then
+            echo "Error: LLMRouter and XSR distill model artifacts do not match." >&2
+            exit 1
+        fi
+        XSR_DISTILL_MODEL="$configured_model"
+    fi
+fi
+
+if { [ "$SIGNAL_PROFILE" = intent ] || [ "$SIGNAL_PROFILE" = mixed ]; } && \
+   [ "$LOCAL_DISTILL_REQUIRED" = "1" ] && [ -z "$XSR_DISTILL_MODEL" ]; then
+    echo "Error: SIGNAL_PROFILE=${SIGNAL_PROFILE} requires XSR_DISTILL_MODEL." >&2; exit 1
+fi
+if [ "$SIGNAL_PROFILE" != intent ] && [ "$SIGNAL_PROFILE" != mixed ] && [ -n "$XSR_DISTILL_MODEL" ]; then
+    echo "Error: ${SIGNAL_PROFILE} profile contradicts XSR_DISTILL_MODEL; use SIGNAL_PROFILE=mixed explicitly." >&2; exit 1
 fi
 
 if [ "$BENCHMARK_DRY_RUN" = "1" ]; then
