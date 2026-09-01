@@ -90,6 +90,9 @@ def redacted_argv(values: list[str] | None) -> list[str]:
             continue
         name, separator, setting = value.partition("=")
         if SENSITIVE_NAME.search(name.lstrip("-")):
+            if re.search(r"\s", value.strip()):
+                result.append("<redacted-shell-command>")
+                continue
             result.append(f"{name}=<redacted>" if separator else name)
             redact_next = not separator
             continue
@@ -202,9 +205,78 @@ def runtime_evidence(config: dict[str, Any]) -> list[tuple[str, str]]:
     return result
 
 
+def container_networks(inspected: dict[str, Any]) -> dict[str, Any]:
+    return (inspected.get("NetworkSettings") or {}).get("Networks") or {}
+
+
+def envoy_configuration_text(inspected: dict[str, Any]) -> str:
+    config = inspected.get("Config") or {}
+    argv = [str(value) for value in (config.get("Entrypoint") or [])]
+    argv.extend(str(value) for value in (config.get("Cmd") or []))
+    values = list(argv)
+    values.extend(f"{key}={value}" for key, value in (config.get("Labels") or {}).items())
+    config_paths: set[str] = {"/etc/envoy/envoy.yaml"}
+    for index, value in enumerate(argv):
+        if value in {"-c", "--config-path"} and index + 1 < len(argv):
+            config_paths.add(argv[index + 1])
+        elif value.startswith("--config-path="):
+            config_paths.add(value.partition("=")[2])
+    for mount in inspected.get("Mounts") or []:
+        source = Path(str(mount.get("Source", "")))
+        candidates = [source]
+        destination = str(mount.get("Destination", ""))
+        if source.is_dir() and destination:
+            for config_path in config_paths:
+                try:
+                    relative = Path(config_path).relative_to(destination)
+                except ValueError:
+                    continue
+                candidates.append(source / relative)
+        for candidate in candidates:
+            if (candidate.is_file() and candidate.suffix.lower() in CONFIG_SUFFIXES
+                    and candidate.stat().st_size <= 10 * 1024 * 1024):
+                values.append(candidate.read_text(encoding="utf-8", errors="replace"))
+    return "\n".join(values)
+
+
+def verify_envoy_binding(
+    router_name: str, router: dict[str, Any], envoy_name: str,
+) -> dict[str, Any]:
+    if router_name == envoy_name:
+        return {"mode": "same-container", "envoy_container": envoy_name,
+                "envoy_image_id": router.get("Image")}
+    envoy = inspect_container(envoy_name)
+    router_networks = container_networks(router)
+    envoy_networks = container_networks(envoy)
+    shared_networks = sorted(set(router_networks) & set(envoy_networks))
+    if not shared_networks:
+        raise SystemExit(
+            f"VSR router {router_name!r} and measured Envoy {envoy_name!r} share no Docker network"
+        )
+    identities = {router_name, str((router.get("Config") or {}).get("Hostname") or "")}
+    for network in router_networks.values():
+        identities.add(str(network.get("IPAddress") or ""))
+        identities.update(str(alias) for alias in (network.get("Aliases") or []))
+    evidence = envoy_configuration_text(envoy)
+    matched = next((identity for identity in sorted(identities, key=len, reverse=True)
+                    if identity and re.search(rf"(?<![\w.-]){re.escape(identity)}(?![\w.-])", evidence)), None)
+    if not re.search(r"ext[_-]?proc", evidence, re.I) or not matched:
+        raise SystemExit(
+            f"could not prove measured Envoy {envoy_name!r} references VSR router {router_name!r}"
+        )
+    return {
+        "mode": "envoy-config-reference",
+        "envoy_container": envoy_name,
+        "envoy_image_id": envoy.get("Image"),
+        "shared_networks": shared_networks,
+        "matched_router_identity": matched,
+    }
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--container", required=True)
+    parser.add_argument("--envoy-container", required=True)
     parser.add_argument("--profile", required=True, choices=("ngram", "bm25", "intent"))
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--config", type=Path)
@@ -213,6 +285,7 @@ def main() -> None:
     args = parser.parse_args()
 
     inspected = inspect_container(args.container)
+    deployment_binding = verify_envoy_binding(args.container, inspected, args.envoy_container)
     mounted_sources = {
         str(Path(str(mount.get("Source", ""))).expanduser().resolve())
         for mount in inspected.get("Mounts", [])
@@ -296,6 +369,7 @@ def main() -> None:
         "active_classifier_selectors": classifier_selectors,
         "container": args.container,
         "container_image_id": inspected.get("Image"),
+        "measured_deployment_binding": deployment_binding,
         "configuration_artifacts": artifacts,
         "runtime_identity": json.loads(runtime_identity),
         "intent_identity_requirements": {

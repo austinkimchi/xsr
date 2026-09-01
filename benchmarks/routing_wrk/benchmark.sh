@@ -424,7 +424,8 @@ if system_selected vsr; then
         echo "Error: mixed signal profile is not a supported VSR paper baseline." >&2; exit 1
     fi
     VSR_VERIFICATION="${RUN_ROOT}/vsr-verification.json"
-    vsr_verify_args=(--container "$VSR_CONTAINER" --profile "$SIGNAL_PROFILE" --output "$VSR_VERIFICATION")
+    vsr_verify_args=(--container "$VSR_CONTAINER" --envoy-container "$VLLM_HOST" \
+        --profile "$SIGNAL_PROFILE" --output "$VSR_VERIFICATION")
     [ -n "$VSR_CONFIG_PATH" ] && vsr_verify_args+=(--config "$VSR_CONFIG_PATH")
     [ -n "$VSR_CONFIG_SHA256" ] && vsr_verify_args+=(--expected-sha256 "$VSR_CONFIG_SHA256")
     [ -n "$VSR_SIGNAL_PROFILE" ] && vsr_verify_args+=(--asserted-profile "$VSR_SIGNAL_PROFILE")
