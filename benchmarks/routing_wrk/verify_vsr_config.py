@@ -215,19 +215,21 @@ def envoy_configuration_text(container_name: str, inspected: dict[str, Any]) -> 
     config = inspected.get("Config") or {}
     argv = [str(value) for value in (config.get("Entrypoint") or [])]
     argv.extend(str(value) for value in (config.get("Cmd") or []))
-    values = list(argv)
-    for key, value in (config.get("Labels") or {}).items():
-        values.extend((f"{key}={value}", str(value)))
+    values: list[str] = []
     config_paths: set[str] = set()
     for index, value in enumerate(argv):
         if value in {"-c", "--config-path"} and index + 1 < len(argv):
             config_paths.add(argv[index + 1])
         elif value.startswith("--config-path="):
             config_paths.add(value.partition("=")[2])
+        elif value == "--config-yaml" and index + 1 < len(argv):
+            values.append(argv[index + 1])
+        elif value.startswith("--config-yaml="):
+            values.append(value.partition("=")[2])
     loaded_config_paths: set[str] = set()
     for mount in inspected.get("Mounts") or []:
         source = Path(str(mount.get("Source", "")))
-        candidates = [source]
+        candidates: list[Path] = []
         destination = str(mount.get("Destination", ""))
         if source.is_dir() and destination:
             for config_path in config_paths:
@@ -239,6 +241,7 @@ def envoy_configuration_text(container_name: str, inspected: dict[str, Any]) -> 
                 if (source / relative).is_file():
                     loaded_config_paths.add(config_path)
         if source.is_file() and destination in config_paths:
+            candidates.append(source)
             loaded_config_paths.add(destination)
         for candidate in candidates:
             if (candidate.is_file() and candidate.suffix.lower() in CONFIG_SUFFIXES

@@ -12,21 +12,31 @@ import verify_vsr_config
 
 
 class VSRConfigurationVerificationTest(unittest.TestCase):
-    def binding_labels(self) -> dict[str, str]:
-        return {"effective-config": (
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        self.binding_config = Path(self.temporary.name) / "envoy.yaml"
+        self.binding_config.write_text(
             "- name: envoy.filters.http.ext_proc\n"
             "  typed_config:\n"
             "    grpc_service:\n"
             "      google_grpc:\n"
-            "        target_uri: 127.0.0.1:50051\n"
-        )}
+            "        target_uri: 127.0.0.1:50051\n",
+            encoding="utf-8",
+        )
+
+    def tearDown(self) -> None:
+        self.temporary.cleanup()
+
+    def binding_cmd(self, *values: str) -> list[str]:
+        return ["-c", "/etc/envoy/envoy.yaml", *values]
 
     def inspect(self) -> dict[str, object]:
         return {
             "Image": "sha256:image",
-            "Config": {"Entrypoint": ["router"], "Cmd": [], "Env": [],
-                       "Labels": self.binding_labels()},
-            "Mounts": [],
+            "Config": {"Entrypoint": ["router"], "Cmd": self.binding_cmd(),
+                       "Env": [], "Labels": {}},
+            "Mounts": [{"Source": str(self.binding_config),
+                        "Destination": "/etc/envoy/envoy.yaml", "Type": "bind"}],
         }
 
     def test_automatic_bm25_configuration_records_identity_without_contents(self) -> None:
@@ -36,7 +46,9 @@ class VSRConfigurationVerificationTest(unittest.TestCase):
             config.write_text("classifier: bm25\n", encoding="utf-8")
             output = root / "run" / "vsr-verification.json"
             inspected = self.inspect()
-            inspected["Mounts"] = [{"Source": str(config), "Destination": "/config/router.yaml", "Type": "bind"}]
+            inspected["Mounts"].append(
+                {"Source": str(config), "Destination": "/config/router.yaml", "Type": "bind"}
+            )
             argv = ["verify_vsr_config.py", "--container", "router", "--envoy-container", "router", "--profile", "bm25",
                     "--config", str(config), "--output", str(output)]
             with patch.object(sys, "argv", argv), patch.object(
@@ -77,7 +89,9 @@ class VSRConfigurationVerificationTest(unittest.TestCase):
             config.write_text("classifier: proprietary\n", encoding="utf-8")
             output = root / "run" / "vsr-verification.json"
             inspected = self.inspect()
-            inspected["Mounts"] = [{"Source": str(config), "Destination": "/configs/bm25/router.yaml", "Type": "bind"}]
+            inspected["Mounts"].append(
+                {"Source": str(config), "Destination": "/configs/bm25/router.yaml", "Type": "bind"}
+            )
             argv = ["verify_vsr_config.py", "--container", "router", "--envoy-container", "router", "--profile", "bm25",
                     "--output", str(output)]
             with patch.object(sys, "argv", argv), patch.object(
@@ -96,7 +110,9 @@ class VSRConfigurationVerificationTest(unittest.TestCase):
             )
             output = root / "run" / "vsr-verification.json"
             inspected = self.inspect()
-            inspected["Mounts"] = [{"Source": str(config), "Destination": "/config/router.yaml", "Type": "bind"}]
+            inspected["Mounts"].append(
+                {"Source": str(config), "Destination": "/config/router.yaml", "Type": "bind"}
+            )
             argv = ["verify_vsr_config.py", "--container", "router", "--envoy-container", "router", "--profile", "bm25",
                     "--output", str(output)]
             with patch.object(sys, "argv", argv), patch.object(
@@ -108,9 +124,9 @@ class VSRConfigurationVerificationTest(unittest.TestCase):
         inspected = self.inspect()
         inspected["Config"] = {
             "Entrypoint": ["router"],
-            "Cmd": ["--classifier", "bm25", "--api-key", "top-secret",
-                    "--endpoint=https://user:pass@example.test/path?token=secret"],
-            "Env": [], "Labels": self.binding_labels(),
+            "Cmd": self.binding_cmd("--classifier", "bm25", "--api-key", "top-secret",
+                                    "--endpoint=https://user:pass@example.test/path?token=secret"),
+            "Env": [], "Labels": {},
         }
         with tempfile.TemporaryDirectory() as temporary:
             output = Path(temporary) / "run" / "vsr-verification.json"
@@ -130,9 +146,9 @@ class VSRConfigurationVerificationTest(unittest.TestCase):
         inspected = self.inspect()
         inspected["Config"] = {
             "Entrypoint": ["sh", "-c"],
-            "Cmd": ["router --classifier bm25 --token top-secret",
-                    "router --endpoint https://alice:password@example.test"],
-            "Env": ["CLASSIFIER=bm25"], "Labels": self.binding_labels(),
+            "Cmd": self.binding_cmd("router --classifier bm25 --token top-secret",
+                                    "router --endpoint https://alice:password@example.test"),
+            "Env": ["CLASSIFIER=bm25"], "Labels": {},
         }
         with tempfile.TemporaryDirectory() as temporary:
             output = Path(temporary) / "run" / "vsr-verification.json"
@@ -259,8 +275,9 @@ class VSRConfigurationVerificationTest(unittest.TestCase):
     def test_intent_auto_detection_requires_mmbert_32k_and_lora(self) -> None:
         inspected = self.inspect()
         inspected["Config"] = {
-            "Entrypoint": ["router"], "Cmd": ["--model", "mmBERT-32K", "--adapter", "intent-LoRA"],
-            "Env": [], "Labels": self.binding_labels(),
+            "Entrypoint": ["router"],
+            "Cmd": self.binding_cmd("--model", "mmBERT-32K", "--adapter", "intent-LoRA"),
+            "Env": [], "Labels": {},
         }
         with tempfile.TemporaryDirectory() as temporary:
             output = Path(temporary) / "run" / "vsr-verification.json"
@@ -278,9 +295,9 @@ class VSRConfigurationVerificationTest(unittest.TestCase):
         inspected = self.inspect()
         inspected["Config"] = {
             "Entrypoint": ["router"],
-            "Cmd": ["--classifier", "proprietary", "--model", "mmBERT-32K",
-                    "--adapter", "intent-LoRA"],
-            "Env": [], "Labels": self.binding_labels(),
+            "Cmd": self.binding_cmd("--classifier", "proprietary", "--model", "mmBERT-32K",
+                                    "--adapter", "intent-LoRA"),
+            "Env": [], "Labels": {},
         }
         with tempfile.TemporaryDirectory() as temporary:
             output = Path(temporary) / "run" / "vsr-verification.json"
