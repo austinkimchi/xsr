@@ -116,6 +116,7 @@ def main() -> None:
     parser.add_argument("--workload-descriptor", type=Path, required=True)
     parser.add_argument("--xsr-distill-model")
     parser.add_argument("--signal-profile", required=True, choices=("ngram", "bm25", "intent", "mixed"))
+    parser.add_argument("--requested-signal-profile", required=True, choices=("auto", "ngram", "bm25", "intent", "mixed"))
     parser.add_argument("--parity-debug", required=True, choices=("0", "1"))
     parser.add_argument("--effective-signal-profile", required=True)
     parser.add_argument("--effective-parity-debug", required=True)
@@ -147,7 +148,7 @@ def main() -> None:
                 "path": str(distill_model), "sha256": sha256(distill_model)
             } if distill_model else unavailable(),
             "signals": {
-                "requested_profile": args.signal_profile,
+                "requested_profile": args.requested_signal_profile,
                 "effective_compiled_profile": args.effective_signal_profile,
                 "parity_debug_requested": args.parity_debug == "1",
                 "parity_debug": ({"0": False, "1": True}.get(args.effective_parity_debug, "not-built")),

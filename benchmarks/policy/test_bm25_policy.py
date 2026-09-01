@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+import subprocess
+import sys
 from pathlib import Path
 
 from bm25_reference import fixed_scores, keyword_scores, rule_matches
@@ -153,6 +155,18 @@ class ModuleSelectionTests(unittest.TestCase):
         self.assertIn("XDP_SIGNAL_ENABLE_NGRAM 0", header)
         with self.assertRaisesRegex(ValueError, "contradicts"):
             resolve_profile(ngram, "bm25")
+
+    def test_auto_resolved_mixed_profile_enables_distill(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary)
+            subprocess.run(
+                [sys.executable, str(ROOT / "benchmarks/policy/generate_policy_modules.py"),
+                 str(ROOT / "config/policy_mixed.yaml"), str(output), "--signal-profile", "auto"],
+                check=True,
+            )
+            header = (output / "xdp_keyword_modules.generated.h").read_text(encoding="utf-8")
+        self.assertIn("XDP_SIGNAL_PROFILE_NAME \"mixed\"", header)
+        self.assertIn("XDP_SIGNAL_ENABLE_DISTILL 1", header)
 
     def test_parity_diagnostics_are_explicit(self) -> None:
         policy = ROOT / "config" / "policy_ngram.yaml"

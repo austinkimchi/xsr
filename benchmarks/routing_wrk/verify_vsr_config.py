@@ -48,6 +48,19 @@ def redacted_mapping(values: dict[str, Any] | None) -> dict[str, Any]:
     }
 
 
+def non_path_runtime_evidence(config: dict[str, Any]) -> list[str]:
+    values: list[str] = []
+    values.extend(str(value) for value in (config.get("Entrypoint") or []))
+    values.extend(str(value) for value in (config.get("Cmd") or []))
+    values.extend(str(value) for value in (config.get("Env") or []))
+    values.extend(f"{key}={value}" for key, value in (config.get("Labels") or {}).items())
+    return [
+        value for value in values
+        if "/" not in value and "\\" not in value
+        and not any(value.lower().endswith(suffix) for suffix in CONFIG_SUFFIXES)
+    ]
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--container", required=True)
@@ -92,9 +105,9 @@ def main() -> None:
         "mounts": [{"source": m.get("Source"), "destination": m.get("Destination"), "type": m.get("Type")}
                    for m in inspected.get("Mounts", [])],
     }, sort_keys=True)
-    searchable = json.dumps({
-        **json.loads(runtime_identity), "environment": config.get("Env"), "labels": config.get("Labels")
-    }, sort_keys=True)
+    # Mount/source paths are provenance only: profile-looking path components
+    # must never count as automatic classifier evidence.
+    searchable = "\n".join(non_path_runtime_evidence(config))
     searchable += "\n" + "\n".join(text for _, text, _ in candidates)
     detected = [name for name, pattern in PROFILE_PATTERNS.items() if pattern.search(searchable)]
     automatic = detected == [args.profile] and supplied_config_bound

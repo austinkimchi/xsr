@@ -330,6 +330,7 @@ case "$BENCHMARK_MODE" in
 esac
 
 case "$XSR_DISTILL_PARITY_DEBUG" in 0|1) ;; *) echo "Error: XSR_DISTILL_PARITY_DEBUG must be 0 or 1." >&2; exit 1 ;; esac
+REQUESTED_SIGNAL_PROFILE="$SIGNAL_PROFILE"
 if [ "$SIGNAL_PROFILE" = auto ] && [ -n "$XSR_DISTILL_MODEL" ]; then
     SIGNAL_PROFILE=intent
 fi
@@ -379,7 +380,7 @@ if [ "$BENCHMARK_DRY_RUN" = "1" ]; then
     fi
     printf 'profile=%s trials=%s duration=%s warmup_duration=%s build_profile=%s signal_profile_requested=%s effective_compiled_profile=%s parity_debug=%s keyword_policy=%s keyword_policy_sha256=%s distill_model=%s distill_model_sha256=%s vsr_container=%s vsr_asserted_profile=%s vsr_config_path=%s vsr_config_sha256=%s mode=%s tool=%s rates=%q random_seed=%s concurrencies=%q include_stress=%s systems=%s llmrouter_config=%s prompts_file=%s prompts_selection=%s workload_id=%s xsr_warmup_lifecycle=%s xsr_measured_instance_warmed=%s\n' \
         "$BENCHMARK_PROFILE" "$TRIALS" "$DURATION" "$WARMUP_DURATION" \
-        "$([ "$BENCHMARK_PROFILE" = paper ] && echo prod || echo dev)" "$SIGNAL_PROFILE" "$SIGNAL_PROFILE" "$XSR_DISTILL_PARITY_DEBUG" \
+        "$([ "$BENCHMARK_PROFILE" = paper ] && echo prod || echo dev)" "$REQUESTED_SIGNAL_PROFILE" "$SIGNAL_PROFILE" "$XSR_DISTILL_PARITY_DEBUG" \
         "$dry_policy_path" "$dry_policy_sha256" "$dry_model_path" "$dry_model_sha256" \
         "$VSR_CONTAINER" "${VSR_SIGNAL_PROFILE:-not-supplied}" "${VSR_CONFIG_PATH:-not-supplied}" "${VSR_CONFIG_SHA256:-not-supplied}" "$BENCHMARK_MODE" "$WRK_BIN" \
         "$([ "$BENCHMARK_MODE" = fixed-rate ] && echo "$RATES" || echo not-applicable)" "$RANDOM_SEED" \
@@ -451,6 +452,7 @@ manifest_vsr_args=()
     --xsr-warmup-lifecycle "$XSR_WARMUP_LIFECYCLE" --xsr-measured-instance-warmed "$XSR_MEASURED_INSTANCE_WARMED" \
     --workload-descriptor "$WORKLOAD_DESCRIPTOR" \
     --signal-profile "$SIGNAL_PROFILE" --parity-debug "$XSR_DISTILL_PARITY_DEBUG" \
+    --requested-signal-profile "$REQUESTED_SIGNAL_PROFILE" \
     --effective-signal-profile "$EFFECTIVE_COMPILED_PROFILE" --effective-parity-debug "$EFFECTIVE_PARITY_DEBUG" \
     --policy "$KEYWORD_POLICY" --distill-model "$XSR_DISTILL_MODEL" "${manifest_vsr_args[@]}"
 
@@ -465,6 +467,7 @@ metadata_vsr_args=()
     --llmrouter-python "$LLMROUTER_PYTHON" --llmrouter-bin "$LLMROUTER_BIN" --llmrouter-config "${LLMROUTER_CONFIG:-}" \
     --policy "$KEYWORD_POLICY" --workload-descriptor "$WORKLOAD_DESCRIPTOR" --xsr-distill-model "$XSR_DISTILL_MODEL" \
     --signal-profile "$SIGNAL_PROFILE" --parity-debug "$XSR_DISTILL_PARITY_DEBUG" \
+    --requested-signal-profile "$REQUESTED_SIGNAL_PROFILE" \
     --effective-signal-profile "$EFFECTIVE_COMPILED_PROFILE" --effective-parity-debug "$EFFECTIVE_PARITY_DEBUG" \
     --source-commit "$XSR_SOURCE_COMMIT" --source-working-tree "$XSR_SOURCE_WORKING_TREE" \
     "${metadata_vsr_args[@]}"

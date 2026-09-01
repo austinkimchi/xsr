@@ -29,6 +29,7 @@ def main() -> None:
     parser.add_argument("--xsr-measured-instance-warmed", choices=("true", "false", "not-applicable"))
     parser.add_argument("--workload-descriptor", type=Path)
     parser.add_argument("--signal-profile")
+    parser.add_argument("--requested-signal-profile")
     parser.add_argument("--parity-debug", choices=("0", "1"))
     parser.add_argument("--effective-signal-profile")
     parser.add_argument("--effective-parity-debug")
@@ -58,7 +59,7 @@ def main() -> None:
             }.get(args.xsr_measured_instance_warmed, "not-applicable"),
             "workload": workload,
             "signals": {
-                "requested_profile": args.signal_profile,
+                "requested_profile": args.requested_signal_profile,
                 "effective_compiled_profile": args.effective_signal_profile,
                 "parity_debug_requested": args.parity_debug == "1",
                 "parity_debug": ({"0": False, "1": True}.get(args.effective_parity_debug, "not-built")),

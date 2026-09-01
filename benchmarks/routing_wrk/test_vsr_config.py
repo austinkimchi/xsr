@@ -54,6 +54,23 @@ class VSRConfigurationVerificationTest(unittest.TestCase):
             ), self.assertRaisesRegex(SystemExit, "reviewed configuration contract"):
                 verify_vsr_config.main()
 
+    def test_profile_marker_in_mount_path_is_not_automatic_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            config_dir = root / "bm25"
+            config_dir.mkdir()
+            config = config_dir / "router.yaml"
+            config.write_text("classifier: proprietary\n", encoding="utf-8")
+            output = root / "run" / "vsr-verification.json"
+            inspected = self.inspect()
+            inspected["Mounts"] = [{"Source": str(config), "Destination": "/configs/bm25/router.yaml", "Type": "bind"}]
+            argv = ["verify_vsr_config.py", "--container", "router", "--profile", "bm25",
+                    "--output", str(output)]
+            with patch.object(sys, "argv", argv), patch.object(
+                verify_vsr_config, "inspect_container", return_value=inspected
+            ), self.assertRaisesRegex(SystemExit, "reviewed configuration contract"):
+                verify_vsr_config.main()
+
     def test_opaque_config_requires_exact_reviewed_contract(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

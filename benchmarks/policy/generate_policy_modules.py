@@ -114,7 +114,7 @@ def main() -> int:
     (args.output_dir / "xdp_keyword_modules.generated.h").write_text(
         selection_header(
             args.policy, profile, selected, args.parity_debug,
-            enable_distill=args.signal_profile in {"intent", "mixed"},
+            enable_distill=profile in {"intent", "mixed"},
         )
     )
     if "ngram" in selected:

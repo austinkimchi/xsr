@@ -82,6 +82,8 @@ class BenchmarkProfileTest(unittest.TestCase):
         self.assertIn(r"concurrencies=1\ 2\ 4\ 8\ 16\ 32\ 64\ 96\ 128\ 192 ", output)
         self.assertNotIn(r"\ 256", output)
         self.assertIn("systems=direct,envoy-only,xsr,vsr,llmrouter", output)
+        self.assertIn("signal_profile_requested=auto", output)
+        self.assertIn("effective_compiled_profile=ngram", output)
         self.assertIn("llmrouter_config=", output)
         self.assertIn("/benchmarks/llmrouter/configs/ngram.yaml", output)
 
