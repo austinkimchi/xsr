@@ -229,6 +229,31 @@ def container_networks(inspected: dict[str, Any]) -> dict[str, Any]:
     return (inspected.get("NetworkSettings") or {}).get("Networks") or {}
 
 
+def active_runtime_strings(inspected: dict[str, Any]) -> list[str]:
+    config = inspected.get("Config") or {}
+    values = [str(value) for value in (config.get("Entrypoint") or [])]
+    values.extend(str(value) for value in (config.get("Cmd") or []))
+    values.extend(str(value) for value in (config.get("Env") or []))
+    return values
+
+
+def mounted_container_paths(path: Path, mounts: list[dict[str, Any]]) -> list[str]:
+    result: list[str] = []
+    for mount in mounts:
+        source = Path(str(mount.get("Source", ""))).expanduser().resolve()
+        destination = Path(str(mount.get("Destination", "")))
+        if path == source:
+            result.append(str(destination))
+        elif source.is_dir() and path.is_relative_to(source):
+            result.append(str(destination / path.relative_to(source)))
+    return result
+
+
+def runtime_references_path(inspected: dict[str, Any], path: str) -> bool:
+    pattern = re.compile(rf"(?<![\w./-]){re.escape(path)}(?![\w./-])")
+    return any(pattern.search(value) for value in active_runtime_strings(inspected))
+
+
 def envoy_configuration_text(container_name: str, inspected: dict[str, Any]) -> str:
     config = inspected.get("Config") or {}
     argv = [str(value) for value in (config.get("Entrypoint") or [])]
@@ -358,7 +383,10 @@ def verify_envoy_binding(
     identities = {router_name, str((router.get("Config") or {}).get("Hostname") or "")}
     if same_container:
         identities.update({"localhost", "127.0.0.1", "::1"})
-    for network in router_networks.values():
+    identity_networks = router_networks if same_container else {
+        name: router_networks[name] for name in shared_networks
+    }
+    for network in identity_networks.values():
         identities.add(str(network.get("IPAddress") or ""))
         identities.update(str(alias) for alias in (network.get("Aliases") or []))
     active_endpoints = active_extproc_endpoints(envoy_configuration_text(envoy_name, envoy))
@@ -403,11 +431,7 @@ def main() -> None:
 
     inspected = inspect_container(args.container)
     deployment_binding = verify_envoy_binding(args.container, inspected, args.envoy_container)
-    mounted_sources = {
-        Path(str(mount.get("Source", ""))).expanduser().resolve()
-        for mount in inspected.get("Mounts", [])
-        if mount.get("Source")
-    }
+    mounts = inspected.get("Mounts", [])
     candidates: list[tuple[str, str, str | None]] = []
     supplied_config_bound = True
     if args.config:
@@ -421,14 +445,15 @@ def main() -> None:
             )
         candidates.append((str(path), path.read_text(encoding="utf-8", errors="replace"), actual_hash))
         supplied_config_bound = any(
-            path == source or (source.is_dir() and path.is_relative_to(source))
-            for source in mounted_sources
+            runtime_references_path(inspected, container_path)
+            for container_path in mounted_container_paths(path, mounts)
         )
     else:
-        for mount in inspected.get("Mounts", []):
+        for mount in mounts:
             source = Path(str(mount.get("Source", "")))
             if (source.is_file() and source.suffix.lower() in CONFIG_SUFFIXES
-                    and not SENSITIVE_NAME.search(source.name) and source.stat().st_size <= 10 * 1024 * 1024):
+                    and not SENSITIVE_NAME.search(source.name) and source.stat().st_size <= 10 * 1024 * 1024
+                    and runtime_references_path(inspected, str(mount.get("Destination", "")))):
                 candidates.append((str(source), source.read_text(encoding="utf-8", errors="replace"), sha256(source)))
 
     config = inspected.get("Config", {})

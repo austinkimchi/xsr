@@ -46,6 +46,7 @@ class VSRConfigurationVerificationTest(unittest.TestCase):
             config.write_text("classifier: bm25\n", encoding="utf-8")
             output = root / "run" / "vsr-verification.json"
             inspected = self.inspect()
+            inspected["Config"]["Cmd"].extend(["--router-config", "/config/router.yaml"])
             inspected["Mounts"].append(
                 {"Source": str(config), "Destination": "/config/router.yaml", "Type": "bind"}
             )
@@ -88,6 +89,7 @@ class VSRConfigurationVerificationTest(unittest.TestCase):
             config.write_text("classifier: bm25\n", encoding="utf-8")
             output = Path(temporary) / "run" / "vsr-verification.json"
             inspected = self.inspect()
+            inspected["Config"]["Cmd"].extend(["--router-config", "/etc/router/router.yaml"])
             inspected["Mounts"].append(
                 {"Source": str(config_dir), "Destination": "/etc/router", "Type": "bind"}
             )
@@ -121,6 +123,7 @@ class VSRConfigurationVerificationTest(unittest.TestCase):
             config.write_text("classifier: proprietary\n", encoding="utf-8")
             output = root / "run" / "vsr-verification.json"
             inspected = self.inspect()
+            inspected["Config"]["Cmd"].extend(["--router-config", "/configs/bm25/router.yaml"])
             inspected["Mounts"].append(
                 {"Source": str(config), "Destination": "/configs/bm25/router.yaml", "Type": "bind"}
             )
@@ -142,6 +145,7 @@ class VSRConfigurationVerificationTest(unittest.TestCase):
             )
             output = root / "run" / "vsr-verification.json"
             inspected = self.inspect()
+            inspected["Config"]["Cmd"].extend(["--router-config", "/config/router.yaml"])
             inspected["Mounts"].append(
                 {"Source": str(config), "Destination": "/config/router.yaml", "Type": "bind"}
             )
@@ -244,6 +248,19 @@ class VSRConfigurationVerificationTest(unittest.TestCase):
                 [{"target": "active_extproc", "endpoint": "router",
                   "matched_router_identity": "router"}],
             )
+
+            router["NetworkSettings"]["Networks"]["private"] = {
+                "IPAddress": "10.0.0.3", "Aliases": ["private-router-alias"]
+            }
+            original = config.read_text(encoding="utf-8")
+            config.write_text(
+                original.replace("address: router", "address: private-router-alias", 1),
+                encoding="utf-8",
+            )
+            with patch.object(verify_vsr_config, "inspect_container", return_value=envoy), \
+                 self.assertRaisesRegex(SystemExit, "active ExtProc endpoint"):
+                verify_vsr_config.verify_envoy_binding("router", router, "envoy")
+            config.write_text(original, encoding="utf-8")
 
             config.write_text(config.read_text(encoding="utf-8").replace(
                 "        address: router\n",
