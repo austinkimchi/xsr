@@ -12,10 +12,20 @@ import verify_vsr_config
 
 
 class VSRConfigurationVerificationTest(unittest.TestCase):
+    def binding_labels(self) -> dict[str, str]:
+        return {"effective-config": (
+            "- name: envoy.filters.http.ext_proc\n"
+            "  typed_config:\n"
+            "    grpc_service:\n"
+            "      google_grpc:\n"
+            "        target_uri: 127.0.0.1:50051\n"
+        )}
+
     def inspect(self) -> dict[str, object]:
         return {
             "Image": "sha256:image",
-            "Config": {"Entrypoint": ["router"], "Cmd": [], "Env": [], "Labels": {}},
+            "Config": {"Entrypoint": ["router"], "Cmd": [], "Env": [],
+                       "Labels": self.binding_labels()},
             "Mounts": [],
         }
 
@@ -35,6 +45,10 @@ class VSRConfigurationVerificationTest(unittest.TestCase):
                 verify_vsr_config.main()
             result = json.loads(output.read_text(encoding="utf-8"))
             self.assertEqual(result["verification_mode"], "automatic-inspection")
+            self.assertEqual(
+                result["measured_deployment_binding"]["mode"],
+                "same-container-active-extproc",
+            )
             artifact = result["configuration_artifacts"][0]
             self.assertEqual(artifact["source_path"], str(config))
             self.assertEqual(artifact["sha256"], hashlib.sha256(config.read_bytes()).hexdigest())
@@ -96,7 +110,7 @@ class VSRConfigurationVerificationTest(unittest.TestCase):
             "Entrypoint": ["router"],
             "Cmd": ["--classifier", "bm25", "--api-key", "top-secret",
                     "--endpoint=https://user:pass@example.test/path?token=secret"],
-            "Env": [], "Labels": {},
+            "Env": [], "Labels": self.binding_labels(),
         }
         with tempfile.TemporaryDirectory() as temporary:
             output = Path(temporary) / "run" / "vsr-verification.json"
@@ -118,7 +132,7 @@ class VSRConfigurationVerificationTest(unittest.TestCase):
             "Entrypoint": ["sh", "-c"],
             "Cmd": ["router --classifier bm25 --token top-secret",
                     "router --endpoint https://alice:password@example.test"],
-            "Env": ["CLASSIFIER=bm25"], "Labels": {},
+            "Env": ["CLASSIFIER=bm25"], "Labels": self.binding_labels(),
         }
         with tempfile.TemporaryDirectory() as temporary:
             output = Path(temporary) / "run" / "vsr-verification.json"
@@ -196,6 +210,34 @@ class VSRConfigurationVerificationTest(unittest.TestCase):
                  self.assertRaisesRegex(SystemExit, "active ExtProc endpoint"):
                 verify_vsr_config.verify_envoy_binding("router", router, "envoy")
 
+    def test_envoy_binding_reads_image_baked_active_config(self) -> None:
+        router = self.inspect()
+        router["NetworkSettings"] = {"Networks": {
+            "bench": {"IPAddress": "172.20.0.3", "Aliases": ["router"]}
+        }}
+        envoy = self.inspect()
+        envoy["NetworkSettings"] = {"Networks": {
+            "bench": {"IPAddress": "172.20.0.2", "Aliases": ["envoy"]}
+        }}
+        envoy["Config"] = {"Entrypoint": ["envoy"], "Cmd": ["--config-path=/etc/envoy/baked.yaml"],
+                           "Env": [], "Labels": {}}
+        envoy["Mounts"] = []
+        baked = (
+            "- name: envoy.filters.http.ext_proc\n"
+            "  typed_config:\n"
+            "    grpc_service:\n"
+            "      google_grpc:\n"
+            "        target_uri: router:50051\n"
+        )
+        with patch.object(verify_vsr_config, "inspect_container", return_value=envoy), \
+             patch.object(verify_vsr_config.subprocess, "check_output", return_value=baked) as read:
+            binding = verify_vsr_config.verify_envoy_binding("router", router, "envoy")
+        read.assert_called_once_with(
+            ["docker", "exec", "envoy", "cat", "/etc/envoy/baked.yaml"],
+            text=True, stderr=verify_vsr_config.subprocess.DEVNULL,
+        )
+        self.assertEqual(binding["active_extproc_endpoints"][0]["endpoint"], "router:50051")
+
     def test_opaque_config_requires_exact_reviewed_contract(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -218,7 +260,7 @@ class VSRConfigurationVerificationTest(unittest.TestCase):
         inspected = self.inspect()
         inspected["Config"] = {
             "Entrypoint": ["router"], "Cmd": ["--model", "mmBERT-32K", "--adapter", "intent-LoRA"],
-            "Env": [], "Labels": {},
+            "Env": [], "Labels": self.binding_labels(),
         }
         with tempfile.TemporaryDirectory() as temporary:
             output = Path(temporary) / "run" / "vsr-verification.json"
@@ -238,7 +280,7 @@ class VSRConfigurationVerificationTest(unittest.TestCase):
             "Entrypoint": ["router"],
             "Cmd": ["--classifier", "proprietary", "--model", "mmBERT-32K",
                     "--adapter", "intent-LoRA"],
-            "Env": [], "Labels": {},
+            "Env": [], "Labels": self.binding_labels(),
         }
         with tempfile.TemporaryDirectory() as temporary:
             output = Path(temporary) / "run" / "vsr-verification.json"

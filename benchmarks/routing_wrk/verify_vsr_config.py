@@ -211,18 +211,20 @@ def container_networks(inspected: dict[str, Any]) -> dict[str, Any]:
     return (inspected.get("NetworkSettings") or {}).get("Networks") or {}
 
 
-def envoy_configuration_text(inspected: dict[str, Any]) -> str:
+def envoy_configuration_text(container_name: str, inspected: dict[str, Any]) -> str:
     config = inspected.get("Config") or {}
     argv = [str(value) for value in (config.get("Entrypoint") or [])]
     argv.extend(str(value) for value in (config.get("Cmd") or []))
     values = list(argv)
-    values.extend(f"{key}={value}" for key, value in (config.get("Labels") or {}).items())
-    config_paths: set[str] = {"/etc/envoy/envoy.yaml"}
+    for key, value in (config.get("Labels") or {}).items():
+        values.extend((f"{key}={value}", str(value)))
+    config_paths: set[str] = set()
     for index, value in enumerate(argv):
         if value in {"-c", "--config-path"} and index + 1 < len(argv):
             config_paths.add(argv[index + 1])
         elif value.startswith("--config-path="):
             config_paths.add(value.partition("=")[2])
+    loaded_config_paths: set[str] = set()
     for mount in inspected.get("Mounts") or []:
         source = Path(str(mount.get("Source", "")))
         candidates = [source]
@@ -234,10 +236,22 @@ def envoy_configuration_text(inspected: dict[str, Any]) -> str:
                 except ValueError:
                     continue
                 candidates.append(source / relative)
+                if (source / relative).is_file():
+                    loaded_config_paths.add(config_path)
+        if source.is_file() and destination in config_paths:
+            loaded_config_paths.add(destination)
         for candidate in candidates:
             if (candidate.is_file() and candidate.suffix.lower() in CONFIG_SUFFIXES
                     and candidate.stat().st_size <= 10 * 1024 * 1024):
                 values.append(candidate.read_text(encoding="utf-8", errors="replace"))
+    for config_path in sorted(config_paths - loaded_config_paths):
+        try:
+            values.append(subprocess.check_output(
+                ["docker", "exec", container_name, "cat", config_path],
+                text=True, stderr=subprocess.DEVNULL,
+            ))
+        except (OSError, subprocess.CalledProcessError):
+            continue
     return "\n".join(values)
 
 
@@ -311,22 +325,22 @@ def active_extproc_endpoints(text: str) -> list[tuple[str, str]]:
 def verify_envoy_binding(
     router_name: str, router: dict[str, Any], envoy_name: str,
 ) -> dict[str, Any]:
-    if router_name == envoy_name:
-        return {"mode": "same-container", "envoy_container": envoy_name,
-                "envoy_image_id": router.get("Image")}
-    envoy = inspect_container(envoy_name)
+    same_container = router_name == envoy_name
+    envoy = router if same_container else inspect_container(envoy_name)
     router_networks = container_networks(router)
     envoy_networks = container_networks(envoy)
     shared_networks = sorted(set(router_networks) & set(envoy_networks))
-    if not shared_networks:
+    if not same_container and not shared_networks:
         raise SystemExit(
             f"VSR router {router_name!r} and measured Envoy {envoy_name!r} share no Docker network"
         )
     identities = {router_name, str((router.get("Config") or {}).get("Hostname") or "")}
+    if same_container:
+        identities.update({"localhost", "127.0.0.1", "::1"})
     for network in router_networks.values():
         identities.add(str(network.get("IPAddress") or ""))
         identities.update(str(alias) for alias in (network.get("Aliases") or []))
-    active_endpoints = active_extproc_endpoints(envoy_configuration_text(envoy))
+    active_endpoints = active_extproc_endpoints(envoy_configuration_text(envoy_name, envoy))
     matched_endpoints: list[tuple[str, str, str]] = []
     for target, endpoint in active_endpoints:
         matched = next(
@@ -344,7 +358,7 @@ def verify_envoy_binding(
             f"could not prove measured Envoy {envoy_name!r} references VSR router {router_name!r}"
         )
     return {
-        "mode": "envoy-config-reference",
+        "mode": "same-container-active-extproc" if same_container else "envoy-config-reference",
         "envoy_container": envoy_name,
         "envoy_image_id": envoy.get("Image"),
         "shared_networks": shared_networks,
