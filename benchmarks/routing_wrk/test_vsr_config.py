@@ -125,7 +125,8 @@ class VSRConfigurationVerificationTest(unittest.TestCase):
         inspected["Config"] = {
             "Entrypoint": ["router"],
             "Cmd": self.binding_cmd("--classifier", "bm25", "--api-key", "top-secret",
-                                    "--endpoint=https://user:pass@example.test/path?token=secret"),
+                                    "--endpoint=https://user:pass@example.test/path?token=secret"
+                                    "#access_token=fragment-secret"),
             "Env": [], "Labels": {},
         }
         with tempfile.TemporaryDirectory() as temporary:
@@ -140,6 +141,7 @@ class VSRConfigurationVerificationTest(unittest.TestCase):
             self.assertNotIn("top-secret", serialized)
             self.assertNotIn("user:pass", serialized)
             self.assertNotIn("token=secret", serialized)
+            self.assertNotIn("fragment-secret", serialized)
             self.assertIn("<redacted>", serialized)
 
     def test_runtime_identity_redacts_shell_form_command(self) -> None:
@@ -295,7 +297,7 @@ class VSRConfigurationVerificationTest(unittest.TestCase):
         inspected = self.inspect()
         inspected["Config"] = {
             "Entrypoint": ["router"],
-            "Cmd": self.binding_cmd("--classifier", "proprietary", "--model", "mmBERT-32K",
+            "Cmd": self.binding_cmd("--classifier", "not-intent", "--model", "mmBERT-32K",
                                     "--adapter", "intent-LoRA"),
             "Env": [], "Labels": {},
         }

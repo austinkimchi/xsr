@@ -19,6 +19,11 @@ PROFILE_PATTERNS = {
     "bm25": re.compile(r"\bbm25\b", re.I),
     "intent": re.compile(r"(?:intent|mmbert[-_ ]?32k)", re.I),
 }
+SELECTOR_PATTERNS = {
+    "ngram": re.compile(r"(?:n[-_ ]?gram|ngrammatic|jaccard)", re.I),
+    "bm25": re.compile(r"bm25", re.I),
+    "intent": re.compile(r"(?:intent|mmbert[-_ ]?32k)", re.I),
+}
 CONFIG_SUFFIXES = {".yaml", ".yml", ".json", ".toml", ".conf"}
 SENSITIVE_NAME = re.compile(r"(?:secret|password|passwd|token|private|credential|api[_-]?key|cert)", re.I)
 PROFILE_FIELD = re.compile(r"^(?:classifier|classifier_method|method|routing_method|signal_profile|router_profile)$", re.I)
@@ -76,7 +81,7 @@ def redact_url(value: str) -> str:
         (name, "<redacted>" if SENSITIVE_NAME.search(name) else setting)
         for name, setting in parse_qsl(parsed.query, keep_blank_values=True)
     ])
-    return urlunsplit((parsed.scheme, netloc, parsed.path, query, parsed.fragment))
+    return urlunsplit((parsed.scheme, netloc, parsed.path, query, ""))
 
 
 def redacted_argv(values: list[str] | None) -> list[str]:
@@ -113,6 +118,11 @@ def field_kind(name: str) -> str | None:
     if ADAPTER_FIELD.fullmatch(name):
         return "adapter"
     return None
+
+
+def selector_profile(value: str) -> str | None:
+    matches = [name for name, pattern in SELECTOR_PATTERNS.items() if pattern.fullmatch(value.strip())]
+    return matches[0] if len(matches) == 1 else None
 
 
 def active_values(value: Any, *, within_active_container: bool = True) -> list[tuple[str, str]]:
@@ -430,8 +440,7 @@ def main() -> None:
     model_identity = "\n".join(value for kind, value in evidence if kind == "model")
     adapter_identity = "\n".join(value for kind, value in evidence if kind == "adapter")
     selectors_match = all(
-        [name for name, pattern in PROFILE_PATTERNS.items() if pattern.search(value)] == [args.profile]
-        for value in classifier_selectors
+        selector_profile(value) == args.profile for value in classifier_selectors
     )
     selector_proof = selectors_match and (bool(classifier_selectors) or args.profile == "intent")
     automatic = detected == [args.profile] and supplied_config_bound and selector_proof
