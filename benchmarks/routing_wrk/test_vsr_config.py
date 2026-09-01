@@ -19,6 +19,10 @@ class VSRConfigurationVerificationTest(unittest.TestCase):
             "static_resources:\n"
             "  listeners:\n"
             "  - name: measured\n"
+            "    address:\n"
+            "      socket_address:\n"
+            "        address: 0.0.0.0\n"
+            "        port_value: 8899\n"
             "    http_filters:\n"
             "    - name: envoy.filters.http.ext_proc\n"
             "      typed_config:\n"
@@ -34,6 +38,53 @@ class VSRConfigurationVerificationTest(unittest.TestCase):
     def binding_cmd(self, *values: str) -> list[str]:
         return ["-c", "/etc/envoy/envoy.yaml", *values]
 
+    def listener_config(self, listeners: list[tuple[str, int, str | None]]) -> str:
+        lines = ["static_resources:", "  listeners:"]
+        for name, port, target in listeners:
+            lines.extend([
+                f"  - name: {name}",
+                "    address:",
+                "      socket_address:",
+                "        address: 0.0.0.0",
+                f"        port_value: {port}",
+            ])
+            if target is None:
+                lines.append("    http_filters: []")
+            else:
+                lines.extend([
+                    "    http_filters:",
+                    "    - name: envoy.filters.http.ext_proc",
+                    "      typed_config:",
+                    "        grpc_service:",
+                    "          google_grpc:",
+                    f"            target_uri: {target}",
+                ])
+        return "\n".join(lines) + "\n"
+
+    def run_listener_case(
+        self, listeners: list[tuple[str, int, str | None]], reviewed: bool = False,
+    ) -> dict[str, object]:
+        self.binding_config.write_text(self.listener_config(listeners), encoding="utf-8")
+        inspected = self.inspect()
+        inspected["Config"]["Cmd"].extend(["--classifier", "ngram"])
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            output = root / "run" / "vsr-verification.json"
+            argv = ["verify_vsr_config.py", "--container", "router",
+                    "--envoy-container", "router", "--envoy-port", "8899",
+                    "--profile", "ngram", "--output", str(output)]
+            if reviewed:
+                config = root / "reviewed.yaml"
+                config.write_text("classifier: proprietary\n", encoding="utf-8")
+                argv.extend(["--config", str(config),
+                             "--expected-sha256", hashlib.sha256(config.read_bytes()).hexdigest(),
+                             "--asserted-profile", "ngram"])
+            with patch.object(sys, "argv", argv), patch.object(
+                verify_vsr_config, "inspect_container", return_value=inspected
+            ):
+                verify_vsr_config.main()
+            return json.loads(output.read_text(encoding="utf-8"))
+
     def inspect(self) -> dict[str, object]:
         return {
             "Image": "sha256:image",
@@ -42,6 +93,49 @@ class VSRConfigurationVerificationTest(unittest.TestCase):
             "Mounts": [{"Source": str(self.binding_config),
                         "Destination": "/etc/envoy/envoy.yaml", "Type": "bind"}],
         }
+
+    def test_two_listeners_measured_listener_is_automatic(self) -> None:
+        result = self.run_listener_case([
+            ("measured", 8899, "127.0.0.1:50051"),
+            ("unrelated", 9999, "other-router:50051"),
+        ])
+        self.assertEqual(result["verification_mode"], "automatic-inspection")
+        self.assertTrue(result["automatic_detection"])
+        self.assertEqual(result["measured_deployment_binding"]["measured_listener_port"], 8899)
+        self.assertEqual(
+            result["measured_deployment_binding"]["active_extproc_endpoints"][0]["endpoint"],
+            "127.0.0.1:50051",
+        )
+
+    def test_unused_listener_cannot_certify_measured_listener(self) -> None:
+        result = self.run_listener_case([
+            ("measured", 8899, "other-router:50051"),
+            ("unused-correct", 9999, "127.0.0.1:50051"),
+        ], reviewed=True)
+        self.assertEqual(result["verification_mode"], "caller-reviewed-hash-contract")
+        self.assertFalse(result["automatic_detection"])
+
+    def test_no_listener_matches_measured_port_falls_back(self) -> None:
+        result = self.run_listener_case([
+            ("other", 9999, "127.0.0.1:50051"),
+        ], reviewed=True)
+        self.assertEqual(result["verification_mode"], "caller-reviewed-hash-contract")
+        self.assertFalse(result["automatic_detection"])
+
+    def test_duplicate_measured_port_falls_back(self) -> None:
+        result = self.run_listener_case([
+            ("first", 8899, "127.0.0.1:50051"),
+            ("second", 8899, "127.0.0.1:50051"),
+        ], reviewed=True)
+        self.assertEqual(result["verification_mode"], "caller-reviewed-hash-contract")
+        self.assertFalse(result["automatic_detection"])
+
+    def test_single_measured_listener_remains_automatic(self) -> None:
+        result = self.run_listener_case([
+            ("paper", 8899, "127.0.0.1:50051"),
+        ])
+        self.assertEqual(result["verification_mode"], "automatic-inspection")
+        self.assertTrue(result["automatic_detection"])
 
     def test_automatic_bm25_configuration_records_identity_without_contents(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -54,7 +148,8 @@ class VSRConfigurationVerificationTest(unittest.TestCase):
             inspected["Mounts"].append(
                 {"Source": str(config), "Destination": "/config/router.yaml", "Type": "bind"}
             )
-            argv = ["verify_vsr_config.py", "--container", "router", "--envoy-container", "router", "--profile", "bm25",
+            argv = ["verify_vsr_config.py", "--container", "router", "--envoy-container", "router",
+                    "--envoy-port", "8899", "--profile", "bm25",
                     "--config", str(config), "--output", str(output)]
             with patch.object(sys, "argv", argv), patch.object(
                 verify_vsr_config, "inspect_container", return_value=inspected
@@ -78,7 +173,8 @@ class VSRConfigurationVerificationTest(unittest.TestCase):
             config = root / "router.yaml"
             config.write_text("classifier: bm25\n", encoding="utf-8")
             output = root / "run" / "vsr-verification.json"
-            argv = ["verify_vsr_config.py", "--container", "router", "--envoy-container", "router", "--profile", "bm25",
+            argv = ["verify_vsr_config.py", "--container", "router", "--envoy-container", "router",
+                    "--envoy-port", "8899", "--profile", "bm25",
                     "--config", str(config), "--output", str(output)]
             with patch.object(sys, "argv", argv), patch.object(
                 verify_vsr_config, "inspect_container", return_value=self.inspect()
@@ -98,7 +194,8 @@ class VSRConfigurationVerificationTest(unittest.TestCase):
                 {"Source": str(config_dir), "Destination": "/etc/router", "Type": "bind"}
             )
             argv = ["verify_vsr_config.py", "--container", "router", "--envoy-container", "router",
-                    "--profile", "bm25", "--config", str(config), "--output", str(output)]
+                    "--envoy-port", "8899", "--profile", "bm25", "--config", str(config),
+                    "--output", str(output)]
             with patch.object(sys, "argv", argv), patch.object(
                 verify_vsr_config, "inspect_container", return_value=inspected
             ):
@@ -112,7 +209,7 @@ class VSRConfigurationVerificationTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             output = Path(temporary) / "run" / "vsr-verification.json"
             argv = ["verify_vsr_config.py", "--container", "router", "--envoy-container", "router",
-                    "--profile", "bm25", "--output", str(output)]
+                    "--envoy-port", "8899", "--profile", "bm25", "--output", str(output)]
             with patch.object(sys, "argv", argv), patch.object(
                 verify_vsr_config, "inspect_container", return_value=inspected
             ), self.assertRaisesRegex(SystemExit, "reviewed configuration contract"):
@@ -131,7 +228,8 @@ class VSRConfigurationVerificationTest(unittest.TestCase):
             inspected["Mounts"].append(
                 {"Source": str(config), "Destination": "/configs/bm25/router.yaml", "Type": "bind"}
             )
-            argv = ["verify_vsr_config.py", "--container", "router", "--envoy-container", "router", "--profile", "bm25",
+            argv = ["verify_vsr_config.py", "--container", "router", "--envoy-container", "router",
+                    "--envoy-port", "8899", "--profile", "bm25",
                     "--output", str(output)]
             with patch.object(sys, "argv", argv), patch.object(
                 verify_vsr_config, "inspect_container", return_value=inspected
@@ -153,7 +251,8 @@ class VSRConfigurationVerificationTest(unittest.TestCase):
             inspected["Mounts"].append(
                 {"Source": str(config), "Destination": "/config/router.yaml", "Type": "bind"}
             )
-            argv = ["verify_vsr_config.py", "--container", "router", "--envoy-container", "router", "--profile", "bm25",
+            argv = ["verify_vsr_config.py", "--container", "router", "--envoy-container", "router",
+                    "--envoy-port", "8899", "--profile", "bm25",
                     "--output", str(output)]
             with patch.object(sys, "argv", argv), patch.object(
                 verify_vsr_config, "inspect_container", return_value=inspected
@@ -172,7 +271,8 @@ class VSRConfigurationVerificationTest(unittest.TestCase):
         }
         with tempfile.TemporaryDirectory() as temporary:
             output = Path(temporary) / "run" / "vsr-verification.json"
-            argv = ["verify_vsr_config.py", "--container", "router", "--envoy-container", "router", "--profile", "bm25",
+            argv = ["verify_vsr_config.py", "--container", "router", "--envoy-container", "router",
+                    "--envoy-port", "8899", "--profile", "bm25",
                     "--output", str(output)]
             with patch.object(sys, "argv", argv), patch.object(
                 verify_vsr_config, "inspect_container", return_value=inspected
@@ -204,7 +304,7 @@ class VSRConfigurationVerificationTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             output = Path(temporary) / "run" / "vsr-verification.json"
             argv = ["verify_vsr_config.py", "--container", "router", "--envoy-container", "router",
-                    "--profile", "bm25", "--output", str(output)]
+                    "--envoy-port", "8899", "--profile", "bm25", "--output", str(output)]
             with patch.object(sys, "argv", argv), patch.object(
                 verify_vsr_config, "inspect_container", return_value=inspected
             ):
@@ -221,6 +321,10 @@ class VSRConfigurationVerificationTest(unittest.TestCase):
                 "static_resources:\n"
                 "  listeners:\n"
                 "  - name: measured\n"
+                "    address:\n"
+                "      socket_address:\n"
+                "        address: 0.0.0.0\n"
+                "        port_value: 8899\n"
                 "    http_filters:\n"
                 "    - name: envoy.filters.http.ext_proc\n"
                 "      typed_config:\n"
@@ -254,23 +358,13 @@ class VSRConfigurationVerificationTest(unittest.TestCase):
             envoy["Mounts"] = [{"Source": str(config), "Destination": "/etc/envoy/envoy.yaml",
                                  "Type": "bind"}]
             with patch.object(verify_vsr_config, "inspect_container", return_value=envoy):
-                binding = verify_vsr_config.verify_envoy_binding("router", router, "envoy")
+                binding = verify_vsr_config.verify_envoy_binding("router", router, "envoy", 8899)
             self.assertEqual(binding["mode"], "envoy-config-reference")
             self.assertEqual(
                 binding["active_extproc_endpoints"],
                 [{"target": "active_extproc", "endpoint": "router",
                   "matched_router_identity": "router"}],
             )
-
-            config.write_text(config.read_text(encoding="utf-8").replace(
-                "  clusters:\n", "  - name: unused-listener\n    http_filters: []\n  clusters:\n"
-            ), encoding="utf-8")
-            with patch.object(verify_vsr_config, "inspect_container", return_value=envoy), \
-                 self.assertRaisesRegex(SystemExit, "uniquely prove"):
-                verify_vsr_config.verify_envoy_binding("router", router, "envoy")
-            config.write_text(config.read_text(encoding="utf-8").replace(
-                "  - name: unused-listener\n    http_filters: []\n", ""
-            ), encoding="utf-8")
 
             router["NetworkSettings"]["Networks"]["private"] = {
                 "IPAddress": "10.0.0.3", "Aliases": ["private-router-alias"]
@@ -282,7 +376,7 @@ class VSRConfigurationVerificationTest(unittest.TestCase):
             )
             with patch.object(verify_vsr_config, "inspect_container", return_value=envoy), \
                  self.assertRaisesRegex(SystemExit, "active ExtProc endpoint"):
-                verify_vsr_config.verify_envoy_binding("router", router, "envoy")
+                verify_vsr_config.verify_envoy_binding("router", router, "envoy", 8899)
             config.write_text(original, encoding="utf-8")
 
             config.write_text(config.read_text(encoding="utf-8").replace(
@@ -294,14 +388,14 @@ class VSRConfigurationVerificationTest(unittest.TestCase):
             ), encoding="utf-8")
             with patch.object(verify_vsr_config, "inspect_container", return_value=envoy), \
                  self.assertRaisesRegex(SystemExit, "active ExtProc endpoint"):
-                verify_vsr_config.verify_envoy_binding("router", router, "envoy")
+                verify_vsr_config.verify_envoy_binding("router", router, "envoy", 8899)
 
             config.write_text(config.read_text(encoding="utf-8").replace(
                 "address: router", "address: unmeasured-router", 1
             ), encoding="utf-8")
             with patch.object(verify_vsr_config, "inspect_container", return_value=envoy), \
                  self.assertRaisesRegex(SystemExit, "active ExtProc endpoint"):
-                verify_vsr_config.verify_envoy_binding("router", router, "envoy")
+                verify_vsr_config.verify_envoy_binding("router", router, "envoy", 8899)
 
     def test_envoy_binding_reads_image_baked_active_config(self) -> None:
         router = self.inspect()
@@ -319,6 +413,10 @@ class VSRConfigurationVerificationTest(unittest.TestCase):
             "static_resources:\n"
             "  listeners:\n"
             "  - name: measured\n"
+            "    address:\n"
+            "      socket_address:\n"
+            "        address: 0.0.0.0\n"
+            "        port_value: 8899\n"
             "    http_filters:\n"
             "    - name: envoy.filters.http.ext_proc\n"
             "      typed_config:\n"
@@ -328,7 +426,7 @@ class VSRConfigurationVerificationTest(unittest.TestCase):
         )
         with patch.object(verify_vsr_config, "inspect_container", return_value=envoy), \
              patch.object(verify_vsr_config.subprocess, "check_output", return_value=baked) as read:
-            binding = verify_vsr_config.verify_envoy_binding("router", router, "envoy")
+            binding = verify_vsr_config.verify_envoy_binding("router", router, "envoy", 8899)
         read.assert_called_once_with(
             ["docker", "exec", "envoy", "cat", "/etc/envoy/baked.yaml"],
             text=True, stderr=verify_vsr_config.subprocess.DEVNULL,
@@ -342,7 +440,8 @@ class VSRConfigurationVerificationTest(unittest.TestCase):
             config.write_text("classifier: proprietary\n", encoding="utf-8")
             digest = hashlib.sha256(config.read_bytes()).hexdigest()
             output = root / "run" / "vsr-verification.json"
-            argv = ["verify_vsr_config.py", "--container", "router", "--envoy-container", "router", "--profile", "ngram",
+            argv = ["verify_vsr_config.py", "--container", "router", "--envoy-container", "router",
+                    "--envoy-port", "8899", "--profile", "ngram",
                     "--config", str(config), "--expected-sha256", digest,
                     "--asserted-profile", "ngram", "--output", str(output)]
             with patch.object(sys, "argv", argv), patch.object(
@@ -366,7 +465,7 @@ class VSRConfigurationVerificationTest(unittest.TestCase):
                 encoding="utf-8",
             )
             argv = ["verify_vsr_config.py", "--container", "router", "--envoy-container", "router",
-                    "--profile", "ngram", "--config", str(config),
+                    "--envoy-port", "8899", "--profile", "ngram", "--config", str(config),
                     "--expected-sha256", digest, "--asserted-profile", "ngram",
                     "--output", str(output)]
             with patch.object(sys, "argv", argv), patch.object(
@@ -386,7 +485,8 @@ class VSRConfigurationVerificationTest(unittest.TestCase):
         }
         with tempfile.TemporaryDirectory() as temporary:
             output = Path(temporary) / "run" / "vsr-verification.json"
-            argv = ["verify_vsr_config.py", "--container", "router", "--envoy-container", "router", "--profile", "intent",
+            argv = ["verify_vsr_config.py", "--container", "router", "--envoy-container", "router",
+                    "--envoy-port", "8899", "--profile", "intent",
                     "--output", str(output)]
             with patch.object(sys, "argv", argv), patch.object(
                 verify_vsr_config, "inspect_container", return_value=inspected
@@ -406,7 +506,8 @@ class VSRConfigurationVerificationTest(unittest.TestCase):
         }
         with tempfile.TemporaryDirectory() as temporary:
             output = Path(temporary) / "run" / "vsr-verification.json"
-            argv = ["verify_vsr_config.py", "--container", "router", "--envoy-container", "router", "--profile", "intent",
+            argv = ["verify_vsr_config.py", "--container", "router", "--envoy-container", "router",
+                    "--envoy-port", "8899", "--profile", "intent",
                     "--output", str(output)]
             with patch.object(sys, "argv", argv), patch.object(
                 verify_vsr_config, "inspect_container", return_value=inspected

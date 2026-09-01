@@ -71,8 +71,9 @@ by that command line, the corresponding model/config identity, and a simply
 provable active Envoy ExtProc binding. Environment-variable names, label names,
 mount destinations/types, and a hash of the active argv are recorded only as
 minimal provenance; their values do not certify a classifier. If the active
-configuration or binding is absent or ambiguous (including a multi-listener
-Envoy layout), supply a reviewed fail-closed contract:
+configuration or binding is absent or ambiguous, supply a reviewed fail-closed
+contract. Automatic Envoy proof is limited to exactly one static listener whose
+`socket_address.port_value` matches the benchmark's `VLLM_PORT`:
 
 ```text
 VSR_SIGNAL_PROFILE=bm25

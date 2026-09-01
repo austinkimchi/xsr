@@ -267,12 +267,84 @@ def direct_item_value(
     return None
 
 
-def active_extproc_endpoints(text: str) -> list[tuple[str, str]]:
-    """Return (active target, endpoint) pairs from Envoy's ExtProc configuration."""
-    records = envoy_yaml_records(text)
+def static_resource_items(
+    records: list[tuple[int, bool, str, str]], key: str,
+) -> list[list[tuple[int, bool, str, str]]]:
+    """Return list items for one direct static_resources sequence."""
+    static_index = next(
+        (index for index, (indent, is_item, item_key, _) in enumerate(records)
+         if indent == 0 and not is_item and item_key == "static_resources"),
+        None,
+    )
+    if static_index is None:
+        return []
+    static_end = static_index + 1
+    while static_end < len(records) and records[static_end][0] > 0:
+        static_end += 1
+    children = records[static_index + 1:static_end]
+    child_indents = [indent for indent, _, _, _ in children]
+    if not child_indents:
+        return []
+    child_indent = min(child_indents)
+    key_offset = next(
+        (offset for offset, (indent, is_item, item_key, _) in enumerate(children)
+         if indent == child_indent and not is_item and item_key == key),
+        None,
+    )
+    if key_offset is None:
+        return []
+    key_index = static_index + 1 + key_offset
+    items: list[list[tuple[int, bool, str, str]]] = []
+    index = key_index + 1
+    while index < static_end:
+        indent, is_item, _, _ = records[index]
+        if indent < child_indent or (indent == child_indent and not is_item):
+            break
+        if indent != child_indent or not is_item:
+            index += 1
+            continue
+        end = index + 1
+        while end < static_end and records[end][0] > child_indent:
+            end += 1
+        items.append(records[index:end])
+        index = end
+    return items
+
+
+def direct_child(
+    records: list[tuple[int, bool, str, str]], key: str,
+) -> list[tuple[int, bool, str, str]]:
+    """Return one direct mapping child and its subtree, or an empty list."""
+    if not records:
+        return []
+    base_indent = records[0][0]
+    child_indents = [indent for indent, _, _, _ in records[1:] if indent > base_indent]
+    if not child_indents:
+        return []
+    child_indent = min(child_indents)
+    for index, (indent, is_item, item_key, _) in enumerate(records[1:], start=1):
+        if indent == child_indent and not is_item and item_key == key:
+            return [records[index], *record_subtree(records, index)]
+    return []
+
+
+def listener_port(listener: list[tuple[int, bool, str, str]]) -> int | None:
+    address = direct_child(listener, "address")
+    socket_address = direct_child(address, "socket_address")
+    port = direct_child(socket_address, "port_value")
+    if not port or not port[0][3].isdigit():
+        return None
+    return int(port[0][3])
+
+
+def active_extproc_endpoints(
+    listener: list[tuple[int, bool, str, str]],
+    clusters: list[list[tuple[int, bool, str, str]]],
+) -> list[tuple[str, str]]:
+    """Return ExtProc endpoints referenced only by the measured listener."""
     cluster_names: set[str] = set()
     direct_targets: list[str] = []
-    items = yaml_list_items(records)
+    items = yaml_list_items(listener)
     for base_indent, item in items:
         if direct_item_value(base_indent, item, "name") == "envoy.filters.http.ext_proc":
             for _, _, child_key, child_value in item:
@@ -282,7 +354,8 @@ def active_extproc_endpoints(text: str) -> list[tuple[str, str]]:
                     direct_targets.append(child_value)
 
     endpoints = [("direct", target) for target in direct_targets]
-    for base_indent, item in items:
+    for item in clusters:
+        base_indent = item[0][0]
         cluster_name = direct_item_value(base_indent, item, "name")
         if cluster_name in cluster_names:
             for _, _, child_key, child_value in item:
@@ -291,24 +364,8 @@ def active_extproc_endpoints(text: str) -> list[tuple[str, str]]:
     return endpoints
 
 
-def static_listener_count(text: str) -> int:
-    """Count top-level static listeners; ambiguous/dynamic layouts are not automatic evidence."""
-    records = envoy_yaml_records(text)
-    for index, (base_indent, _, key, _) in enumerate(records):
-        if key != "listeners":
-            continue
-        count = 0
-        for indent, is_item, _, _ in records[index + 1:]:
-            if indent < base_indent or (indent == base_indent and not is_item):
-                break
-            if is_item and indent == base_indent:
-                count += 1
-        return count
-    return 0
-
-
 def verify_envoy_binding(
-    router_name: str, router: dict[str, Any], envoy_name: str,
+    router_name: str, router: dict[str, Any], envoy_name: str, envoy_port: int,
 ) -> dict[str, Any]:
     same_container = router_name == envoy_name
     envoy = router if same_container else inspect_container(envoy_name)
@@ -329,12 +386,19 @@ def verify_envoy_binding(
         identities.add(str(network.get("IPAddress") or ""))
         identities.update(str(alias) for alias in (network.get("Aliases") or []))
     envoy_text = envoy_configuration_text(envoy_name, envoy)
-    listener_count = static_listener_count(envoy_text)
-    if listener_count != 1:
+    records = envoy_yaml_records(envoy_text)
+    measured_listeners = [
+        listener for listener in static_resource_items(records, "listeners")
+        if listener_port(listener) == envoy_port
+    ]
+    if len(measured_listeners) != 1:
         raise SystemExit(
-            f"could not uniquely prove the measured Envoy listener (found {listener_count} static listeners)"
+            f"could not uniquely prove static Envoy listener on measured port {envoy_port} "
+            f"(found {len(measured_listeners)})"
         )
-    active_endpoints = active_extproc_endpoints(envoy_text)
+    active_endpoints = active_extproc_endpoints(
+        measured_listeners[0], static_resource_items(records, "clusters")
+    )
     matched_endpoints: list[tuple[str, str, str]] = []
     for target, endpoint in active_endpoints:
         matched = next(
@@ -355,6 +419,7 @@ def verify_envoy_binding(
         "mode": "same-container-active-extproc" if same_container else "envoy-config-reference",
         "envoy_container": envoy_name,
         "envoy_image_id": envoy.get("Image"),
+        "measured_listener_port": envoy_port,
         "shared_networks": shared_networks,
         "active_extproc_endpoints": [
             {"target": target, "endpoint": endpoint, "matched_router_identity": matched}
@@ -367,6 +432,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--container", required=True)
     parser.add_argument("--envoy-container", required=True)
+    parser.add_argument("--envoy-port", type=int, required=True)
     parser.add_argument("--profile", required=True, choices=("ngram", "bm25", "intent"))
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--config", type=Path)
@@ -376,7 +442,9 @@ def main() -> None:
 
     inspected = inspect_container(args.container)
     try:
-        deployment_binding = verify_envoy_binding(args.container, inspected, args.envoy_container)
+        deployment_binding = verify_envoy_binding(
+            args.container, inspected, args.envoy_container, args.envoy_port
+        )
         binding_proven = True
     except SystemExit:
         deployment_binding = {"mode": "automatic-unavailable",

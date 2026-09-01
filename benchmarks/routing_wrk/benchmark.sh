@@ -450,6 +450,7 @@ if system_selected vsr; then
     fi
     VSR_VERIFICATION="${RUN_ROOT}/vsr-verification.json"
     vsr_verify_args=(--container "$VSR_CONTAINER" --envoy-container "$VLLM_HOST" \
+        --envoy-port "$VLLM_PORT" \
         --profile "$SIGNAL_PROFILE" --output "$VSR_VERIFICATION")
     [ -n "$VSR_CONFIG_PATH" ] && vsr_verify_args+=(--config "$VSR_CONFIG_PATH")
     [ -n "$VSR_CONFIG_SHA256" ] && vsr_verify_args+=(--expected-sha256 "$VSR_CONFIG_SHA256")
