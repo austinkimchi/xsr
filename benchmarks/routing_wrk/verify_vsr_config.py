@@ -51,7 +51,7 @@ def redacted_environment(values: list[str] | None) -> list[str]:
         if separator and SENSITIVE_NAME.search(name):
             result.append(f"{name}=<redacted>")
         elif separator:
-            result.append(f"{name}={redact_url(setting)}")
+            result.append(f"{name}={redacted_setting(setting)}")
         else:
             result.append(value)
     return result
@@ -59,7 +59,7 @@ def redacted_environment(values: list[str] | None) -> list[str]:
 
 def redacted_mapping(values: dict[str, Any] | None) -> dict[str, Any]:
     return {
-        key: "<redacted>" if SENSITIVE_NAME.search(key) else redact_url(str(value))
+        key: "<redacted>" if SENSITIVE_NAME.search(key) else redacted_setting(str(value))
         for key, value in (values or {}).items()
     }
 
@@ -84,6 +84,15 @@ def redact_url(value: str) -> str:
     return urlunsplit((parsed.scheme, netloc, parsed.path, query, ""))
 
 
+def redacted_setting(value: str) -> str:
+    stripped = value.strip()
+    if SENSITIVE_NAME.search(stripped) or re.search(r"\b(?:bearer|basic)\s+\S+", stripped, re.I):
+        return "<redacted-composite>"
+    if "://" in stripped and not re.match(r"^[A-Za-z][A-Za-z0-9+.-]*://", stripped):
+        return "<redacted-composite>"
+    return redact_url(value)
+
+
 def redacted_argv(values: list[str] | None) -> list[str]:
     result: list[str] = []
     redact_next = False
@@ -104,9 +113,9 @@ def redacted_argv(values: list[str] | None) -> list[str]:
             redact_next = not separator
             continue
         if separator:
-            result.append(f"{name}={redact_url(setting)}")
+            result.append(f"{name}={redacted_setting(setting)}")
         else:
-            result.append(redact_url(value))
+            result.append(redacted_setting(value))
     return result
 
 

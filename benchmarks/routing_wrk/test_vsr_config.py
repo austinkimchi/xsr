@@ -127,7 +127,8 @@ class VSRConfigurationVerificationTest(unittest.TestCase):
             "Cmd": self.binding_cmd("--classifier", "bm25", "--api-key", "top-secret",
                                     "--endpoint=https://user:pass@example.test/path?token=secret"
                                     "#access_token=fragment-secret"),
-            "Env": [], "Labels": {},
+            "Env": ['ROUTER_CONFIG={"endpoint":"https://env-user:env-pass@example.test"}'],
+            "Labels": {"router.config": "endpoint=https://label-user:label-pass@example.test"},
         }
         with tempfile.TemporaryDirectory() as temporary:
             output = Path(temporary) / "run" / "vsr-verification.json"
@@ -142,6 +143,8 @@ class VSRConfigurationVerificationTest(unittest.TestCase):
             self.assertNotIn("user:pass", serialized)
             self.assertNotIn("token=secret", serialized)
             self.assertNotIn("fragment-secret", serialized)
+            self.assertNotIn("env-user:env-pass", serialized)
+            self.assertNotIn("label-user:label-pass", serialized)
             self.assertIn("<redacted>", serialized)
 
     def test_runtime_identity_redacts_shell_form_command(self) -> None:
