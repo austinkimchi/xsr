@@ -16,11 +16,15 @@ class VSRConfigurationVerificationTest(unittest.TestCase):
         self.temporary = tempfile.TemporaryDirectory()
         self.binding_config = Path(self.temporary.name) / "envoy.yaml"
         self.binding_config.write_text(
-            "- name: envoy.filters.http.ext_proc\n"
-            "  typed_config:\n"
-            "    grpc_service:\n"
-            "      google_grpc:\n"
-            "        target_uri: 127.0.0.1:50051\n",
+            "static_resources:\n"
+            "  listeners:\n"
+            "  - name: measured\n"
+            "    http_filters:\n"
+            "    - name: envoy.filters.http.ext_proc\n"
+            "      typed_config:\n"
+            "        grpc_service:\n"
+            "          google_grpc:\n"
+            "            target_uri: 127.0.0.1:50051\n",
             encoding="utf-8",
         )
 
@@ -214,24 +218,27 @@ class VSRConfigurationVerificationTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             config = Path(temporary) / "envoy.yaml"
             config.write_text(
-                "http_filters:\n"
-                "- name: envoy.filters.http.ext_proc\n"
-                "  typed_config:\n"
-                "    grpc_service:\n"
-                "      envoy_grpc:\n"
-                "        cluster_name: active_extproc\n"
-                "clusters:\n"
-                "- connect_timeout: 1s\n"
-                "  name: active_extproc\n"
-                "  load_assignment:\n"
-                "    endpoints:\n"
-                "    - socket_address:\n"
-                "        address: router\n"
-                "- name: unused\n"
-                "  load_assignment:\n"
-                "    endpoints:\n"
-                "    - socket_address:\n"
-                "        address: other-router\n",
+                "static_resources:\n"
+                "  listeners:\n"
+                "  - name: measured\n"
+                "    http_filters:\n"
+                "    - name: envoy.filters.http.ext_proc\n"
+                "      typed_config:\n"
+                "        grpc_service:\n"
+                "          envoy_grpc:\n"
+                "            cluster_name: active_extproc\n"
+                "  clusters:\n"
+                "  - connect_timeout: 1s\n"
+                "    name: active_extproc\n"
+                "    load_assignment:\n"
+                "      endpoints:\n"
+                "      - socket_address:\n"
+                "          address: router\n"
+                "  - name: unused\n"
+                "    load_assignment:\n"
+                "      endpoints:\n"
+                "      - socket_address:\n"
+                "          address: other-router\n",
                 encoding="utf-8",
             )
             router = self.inspect()
@@ -254,6 +261,16 @@ class VSRConfigurationVerificationTest(unittest.TestCase):
                 [{"target": "active_extproc", "endpoint": "router",
                   "matched_router_identity": "router"}],
             )
+
+            config.write_text(config.read_text(encoding="utf-8").replace(
+                "  clusters:\n", "  - name: unused-listener\n    http_filters: []\n  clusters:\n"
+            ), encoding="utf-8")
+            with patch.object(verify_vsr_config, "inspect_container", return_value=envoy), \
+                 self.assertRaisesRegex(SystemExit, "uniquely prove"):
+                verify_vsr_config.verify_envoy_binding("router", router, "envoy")
+            config.write_text(config.read_text(encoding="utf-8").replace(
+                "  - name: unused-listener\n    http_filters: []\n", ""
+            ), encoding="utf-8")
 
             router["NetworkSettings"]["Networks"]["private"] = {
                 "IPAddress": "10.0.0.3", "Aliases": ["private-router-alias"]
@@ -299,11 +316,15 @@ class VSRConfigurationVerificationTest(unittest.TestCase):
                            "Env": [], "Labels": {}}
         envoy["Mounts"] = []
         baked = (
-            "- name: envoy.filters.http.ext_proc\n"
-            "  typed_config:\n"
-            "    grpc_service:\n"
-            "      google_grpc:\n"
-            "        target_uri: router:50051\n"
+            "static_resources:\n"
+            "  listeners:\n"
+            "  - name: measured\n"
+            "    http_filters:\n"
+            "    - name: envoy.filters.http.ext_proc\n"
+            "      typed_config:\n"
+            "        grpc_service:\n"
+            "          google_grpc:\n"
+            "            target_uri: router:50051\n"
         )
         with patch.object(verify_vsr_config, "inspect_container", return_value=envoy), \
              patch.object(verify_vsr_config.subprocess, "check_output", return_value=baked) as read:

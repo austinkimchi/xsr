@@ -291,6 +291,22 @@ def active_extproc_endpoints(text: str) -> list[tuple[str, str]]:
     return endpoints
 
 
+def static_listener_count(text: str) -> int:
+    """Count top-level static listeners; ambiguous/dynamic layouts are not automatic evidence."""
+    records = envoy_yaml_records(text)
+    for index, (base_indent, _, key, _) in enumerate(records):
+        if key != "listeners":
+            continue
+        count = 0
+        for indent, is_item, _, _ in records[index + 1:]:
+            if indent < base_indent or (indent == base_indent and not is_item):
+                break
+            if is_item and indent == base_indent:
+                count += 1
+        return count
+    return 0
+
+
 def verify_envoy_binding(
     router_name: str, router: dict[str, Any], envoy_name: str,
 ) -> dict[str, Any]:
@@ -312,7 +328,13 @@ def verify_envoy_binding(
     for network in identity_networks.values():
         identities.add(str(network.get("IPAddress") or ""))
         identities.update(str(alias) for alias in (network.get("Aliases") or []))
-    active_endpoints = active_extproc_endpoints(envoy_configuration_text(envoy_name, envoy))
+    envoy_text = envoy_configuration_text(envoy_name, envoy)
+    listener_count = static_listener_count(envoy_text)
+    if listener_count != 1:
+        raise SystemExit(
+            f"could not uniquely prove the measured Envoy listener (found {listener_count} static listeners)"
+        )
+    active_endpoints = active_extproc_endpoints(envoy_text)
     matched_endpoints: list[tuple[str, str, str]] = []
     for target, endpoint in active_endpoints:
         matched = next(
