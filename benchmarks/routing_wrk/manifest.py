@@ -66,7 +66,7 @@ def main() -> None:
                 "keyword_policy": ({"path": str(args.policy), "sha256": sha256(args.policy)}
                                    if args.signal_profile in {"ngram", "bm25", "mixed"} else None),
                 "distill_model": ({"path": str(args.distill_model), "sha256": sha256(args.distill_model)}
-                                  if args.signal_profile in {"intent", "mixed"} else None),
+                                  if args.distill_model and args.distill_model.is_file() else None),
             },
             "vsr_configuration_verification": (
                 json.loads(args.vsr_verification.read_text(encoding="utf-8"))

@@ -15,6 +15,17 @@ SUPPORTED_METHODS = ("ngram", "bm25", "intent")
 INTENT_ROUTE_BY_ID = {3: "coding", 9: "math"}
 
 
+def configured_method(config_path: Path) -> str:
+    config = load_policy(config_path.resolve())
+    values = config.get("xsr")
+    if not isinstance(values, dict):
+        raise ValueError("adapter config requires an 'xsr' mapping")
+    method = str(values.get("method", "")).lower()
+    if method not in SUPPORTED_METHODS:
+        raise ValueError(f"method must be one of: {', '.join(SUPPORTED_METHODS)}")
+    return method
+
+
 def query_text(query_input: dict[str, Any]) -> str:
     """Extract text from LLMRouter's query dict or an OpenAI-style request."""
     query = query_input.get("query")
@@ -80,7 +91,7 @@ class XSRRoutingAdapter:
         if not isinstance(values, dict):
             raise ValueError("adapter config requires an 'xsr' mapping")
 
-        method = str(values.get("method", "")).lower()
+        method = configured_method(config_path)
 
         def configured_path(key: str, environment: str | None = None) -> Path | None:
             raw = values.get(key)

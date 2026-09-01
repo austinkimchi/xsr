@@ -339,7 +339,12 @@ SIGNAL_PROFILE="$("$PYTHON_BIN" "${ROOT_DIR}/benchmarks/policy/generate_policy_m
     echo "Error: signal profile does not match ${KEYWORD_POLICY}." >&2
     exit 1
 }
-if { [ "$SIGNAL_PROFILE" = intent ] || [ "$SIGNAL_PROFILE" = mixed ]; } && [ -z "$XSR_DISTILL_MODEL" ]; then
+LOCAL_DISTILL_REQUIRED=0
+if system_selected xsr || system_selected llmrouter || [ "$INCLUDE_XDP" = "1" ]; then
+    LOCAL_DISTILL_REQUIRED=1
+fi
+if { [ "$SIGNAL_PROFILE" = intent ] || [ "$SIGNAL_PROFILE" = mixed ]; } && \
+   [ "$LOCAL_DISTILL_REQUIRED" = "1" ] && [ -z "$XSR_DISTILL_MODEL" ]; then
     echo "Error: SIGNAL_PROFILE=${SIGNAL_PROFILE} requires XSR_DISTILL_MODEL." >&2; exit 1
 fi
 if [ "$SIGNAL_PROFILE" != intent ] && [ "$SIGNAL_PROFILE" != mixed ] && [ -n "$XSR_DISTILL_MODEL" ]; then
@@ -362,7 +367,12 @@ if system_selected llmrouter && [ -z "$LLMROUTER_CONFIG" ]; then
     fi
 fi
 if system_selected llmrouter; then
-    configured_method="$(sed -n 's/^[[:space:]]*method:[[:space:]]*\([^#[:space:]]*\).*/\1/p' "$LLMROUTER_CONFIG" | head -1)"
+    configured_method="$("$PYTHON_BIN" -c \
+        'import sys; from pathlib import Path; from benchmarks.llmrouter.xsr_router import configured_method; print(configured_method(Path(sys.argv[1])))' \
+        "$LLMROUTER_CONFIG")" || {
+        echo "Error: could not parse LLMRouter config ${LLMROUTER_CONFIG}." >&2
+        exit 1
+    }
     if [ "$configured_method" != "$SIGNAL_PROFILE" ]; then
         echo "Error: XSR profile ${SIGNAL_PROFILE} does not match LLMRouter adapter ${configured_method:-unknown}." >&2
         exit 1
@@ -375,7 +385,7 @@ if [ "$BENCHMARK_DRY_RUN" = "1" ]; then
     if [ "$SIGNAL_PROFILE" != intent ]; then
         dry_policy_path="$KEYWORD_POLICY"; dry_policy_sha256="$(sha256sum "$KEYWORD_POLICY" | awk '{print $1}')"
     fi
-    if [ "$SIGNAL_PROFILE" = intent ] || [ "$SIGNAL_PROFILE" = mixed ]; then
+    if [ -n "$XSR_DISTILL_MODEL" ]; then
         dry_model_path="$XSR_DISTILL_MODEL"; dry_model_sha256="$(sha256sum "$XSR_DISTILL_MODEL" | awk '{print $1}')"
     fi
     printf 'profile=%s trials=%s duration=%s warmup_duration=%s build_profile=%s signal_profile_requested=%s effective_compiled_profile=%s parity_debug=%s keyword_policy=%s keyword_policy_sha256=%s distill_model=%s distill_model_sha256=%s vsr_container=%s vsr_asserted_profile=%s vsr_config_path=%s vsr_config_sha256=%s mode=%s tool=%s rates=%q random_seed=%s concurrencies=%q include_stress=%s systems=%s llmrouter_config=%s prompts_file=%s prompts_selection=%s workload_id=%s xsr_warmup_lifecycle=%s xsr_measured_instance_warmed=%s\n' \
@@ -646,7 +656,7 @@ start_llmrouter() {
 }
 
 preflight_routing_cases() {
-    if [ "$SIGNAL_PROFILE" = intent ]; then
+    if [ "$SIGNAL_PROFILE" = intent ] || [ "$SIGNAL_PROFILE" = mixed ]; then
         cat <<'EOF'
 coding|write a python function
 math|calculate the derivative of x squared

@@ -49,12 +49,15 @@ class BenchmarkProfileTest(unittest.TestCase):
     def test_intent_preflight_maps_qa_and_writing_prompts_to_fallback(self) -> None:
         source = SCRIPT.read_text(encoding="utf-8")
         function = source.split("preflight_routing_cases() {", 1)[1].split("\n}", 1)[0]
-        intent_block = function.split('if [ "$SIGNAL_PROFILE" = intent ]; then', 1)[1].split("else", 1)[0]
+        intent_block = function.split(
+            'if [ "$SIGNAL_PROFILE" = intent ] || [ "$SIGNAL_PROFILE" = mixed ]; then', 1
+        )[1].split("else", 1)[0]
         self.assertIn("others|answer this question: what is the capital of France?", intent_block)
         self.assertIn("others|write a short poem about rain", intent_block)
         self.assertNotIn("qa|answer this question", intent_block)
         self.assertNotIn("writing|write a short poem", intent_block)
         self.assertEqual(source.count("done < <(preflight_routing_cases)"), 3)
+        self.assertIn('[ "$SIGNAL_PROFILE" = intent ] || [ "$SIGNAL_PROFILE" = mixed ]', function)
 
     def test_legacy_only_builds_generate_and_validate_the_requested_profile(self) -> None:
         source = SCRIPT.read_text(encoding="utf-8")
@@ -110,6 +113,22 @@ class BenchmarkProfileTest(unittest.TestCase):
             policy.write_text(source.replace("method: ngram", 'method: "ngram"'), encoding="utf-8")
             output = dry_run(BENCHMARK_SYSTEMS="xsr", KEYWORD_POLICY=str(policy))
         self.assertIn("effective_compiled_profile=ngram", output)
+
+    def test_quoted_llmrouter_method_uses_the_adapter_parser(self) -> None:
+        source = (SCRIPT.parents[1] / "llmrouter/configs/ngram.yaml").read_text(encoding="utf-8")
+        with tempfile.TemporaryDirectory() as temporary:
+            config = Path(temporary) / "quoted.yaml"
+            config.write_text(source.replace("method: ngram", 'method: "ngram"'), encoding="utf-8")
+            output = dry_run(
+                BENCHMARK_SYSTEMS="llmrouter", SIGNAL_PROFILE="ngram",
+                LLMROUTER_CONFIG=str(config),
+            )
+        self.assertIn("effective_compiled_profile=ngram", output)
+
+    def test_vsr_only_intent_does_not_require_local_distill_model(self) -> None:
+        output = dry_run(BENCHMARK_SYSTEMS="vsr", SIGNAL_PROFILE="intent")
+        self.assertIn("effective_compiled_profile=intent", output)
+        self.assertIn("distill_model=not-applicable", output)
 
     def test_intent_profile_selects_intent_adapter_and_reports_no_debug(self) -> None:
         output = dry_run(
