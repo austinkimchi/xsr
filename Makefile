@@ -143,9 +143,13 @@ test-sockmap-lifecycle: benchmark-build benchmarks/mock_backend_delayed
 
 GENERATED_SIGNAL_DIR := bpf/stages/signals/generated
 
-policy:
+policy: $(GENERATED_SIGNAL_DIR)/xdp_keyword_modules.generated.h
+
+$(GENERATED_SIGNAL_DIR)/xdp_keyword_modules.generated.h: FORCE
 	$(PYTHON) benchmarks/policy/generate_policy_modules.py $(KEYWORD_POLICY) $(GENERATED_SIGNAL_DIR) \
 		--signal-profile $(SIGNAL_PROFILE) $(if $(filter 1,$(XSR_DISTILL_PARITY_DEBUG)),--parity-debug,)
+
+FORCE:
 
 parity-build:
 	$(MAKE) clean
@@ -283,4 +287,4 @@ iproutes:
 	done
 	@echo "benchmark backend ports allowed: $(VSR_BACKEND_PORTS)"
 
-.PHONY: help all build legacy benchmark-build prod dev install benchmark benchmark-install policy parity-build correctness performance performance-fixed-rate wrk check-build check check-benchmark check-performance check-performance-fixed-rate install-wrk install-wrk2 llmrouter-install test-llmrouter clean clean-setup setup iproutes
+.PHONY: help all build legacy benchmark-build prod dev install benchmark benchmark-install policy parity-build correctness performance performance-fixed-rate wrk check-build check check-benchmark check-performance check-performance-fixed-rate install-wrk install-wrk2 llmrouter-install test-llmrouter clean clean-setup setup iproutes FORCE

@@ -8,8 +8,12 @@ import hashlib
 import json
 import re
 import subprocess
+import tomllib
 from pathlib import Path
 from typing import Any
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+
+import yaml
 
 
 PROFILE_PATTERNS = {
@@ -19,6 +23,10 @@ PROFILE_PATTERNS = {
 }
 CONFIG_SUFFIXES = {".yaml", ".yml", ".json", ".toml", ".conf"}
 SENSITIVE_NAME = re.compile(r"(?:secret|password|passwd|token|private|credential|api[_-]?key|cert)", re.I)
+PROFILE_FIELD = re.compile(r"^(?:classifier|classifier_method|method|routing_method|signal_profile|router_profile)$", re.I)
+MODEL_FIELD = re.compile(r"^(?:model|model_name|base_model|tokenizer)$", re.I)
+ADAPTER_FIELD = re.compile(r"^(?:adapter|adapter_name|lora|lora_adapter)$", re.I)
+ACTIVE_CONTAINER_FIELD = re.compile(r"^(?:router|routing|classifier_config|signal|settings|config)$", re.I)
 
 
 def sha256(path: Path) -> str:
@@ -37,28 +45,123 @@ def redacted_environment(values: list[str] | None) -> list[str]:
     result = []
     for value in values or []:
         name, separator, setting = value.partition("=")
-        result.append(f"{name}=<redacted>" if separator and SENSITIVE_NAME.search(name) else value)
+        if separator and SENSITIVE_NAME.search(name):
+            result.append(f"{name}=<redacted>")
+        elif separator:
+            result.append(f"{name}={redact_url(setting)}")
+        else:
+            result.append(value)
     return result
 
 
 def redacted_mapping(values: dict[str, Any] | None) -> dict[str, Any]:
     return {
-        key: "<redacted>" if SENSITIVE_NAME.search(key) else value
+        key: "<redacted>" if SENSITIVE_NAME.search(key) else redact_url(str(value))
         for key, value in (values or {}).items()
     }
 
 
-def non_path_runtime_evidence(config: dict[str, Any]) -> list[str]:
-    values: list[str] = []
-    values.extend(str(value) for value in (config.get("Entrypoint") or []))
-    values.extend(str(value) for value in (config.get("Cmd") or []))
-    values.extend(str(value) for value in (config.get("Env") or []))
-    values.extend(f"{key}={value}" for key, value in (config.get("Labels") or {}).items())
-    return [
-        value for value in values
-        if "/" not in value and "\\" not in value
-        and not any(value.lower().endswith(suffix) for suffix in CONFIG_SUFFIXES)
-    ]
+def redact_url(value: str) -> str:
+    try:
+        parsed = urlsplit(value)
+        if not parsed.scheme or not parsed.netloc:
+            return value
+        hostname = parsed.hostname or ""
+        netloc = hostname
+        if parsed.port:
+            netloc += f":{parsed.port}"
+    except ValueError:
+        return "<redacted-invalid-url>" if "://" in value else value
+    if parsed.username is not None or parsed.password is not None:
+        netloc = f"<redacted>@{netloc}"
+    query = urlencode([
+        (name, "<redacted>" if SENSITIVE_NAME.search(name) else setting)
+        for name, setting in parse_qsl(parsed.query, keep_blank_values=True)
+    ])
+    return urlunsplit((parsed.scheme, netloc, parsed.path, query, parsed.fragment))
+
+
+def redacted_argv(values: list[str] | None) -> list[str]:
+    result: list[str] = []
+    redact_next = False
+    for raw in values or []:
+        value = str(raw)
+        if redact_next:
+            result.append("<redacted>")
+            redact_next = False
+            continue
+        name, separator, setting = value.partition("=")
+        if SENSITIVE_NAME.search(name.lstrip("-")):
+            result.append(f"{name}=<redacted>" if separator else name)
+            redact_next = not separator
+            continue
+        if separator:
+            result.append(f"{name}={redact_url(setting)}")
+        else:
+            result.append(redact_url(value))
+    return result
+
+
+def active_values(value: Any, *, within_active_container: bool = True) -> list[str]:
+    """Return values of fields that actively select classifier/model identity."""
+    result: list[str] = []
+    if isinstance(value, dict):
+        for key, setting in value.items():
+            if PROFILE_FIELD.fullmatch(str(key)) or MODEL_FIELD.fullmatch(str(key)) or ADAPTER_FIELD.fullmatch(str(key)):
+                if isinstance(setting, (str, int, float, bool)):
+                    result.append(str(setting))
+                elif isinstance(setting, list):
+                    result.extend(str(item) for item in setting if isinstance(item, (str, int, float, bool)))
+            elif (within_active_container and ACTIVE_CONTAINER_FIELD.fullmatch(str(key))
+                  and isinstance(setting, (dict, list))):
+                result.extend(active_values(setting))
+    elif isinstance(value, list) and within_active_container:
+        for item in value:
+            result.extend(active_values(item))
+    return result
+
+
+def parsed_config_evidence(source: str, text: str) -> list[str]:
+    suffix = Path(source).suffix.lower()
+    try:
+        if suffix in {".yaml", ".yml"}:
+            parsed = yaml.safe_load(text)
+        elif suffix == ".json":
+            parsed = json.loads(text)
+        elif suffix == ".toml":
+            parsed = tomllib.loads(text)
+        elif suffix == ".conf":
+            parsed = {}
+            for line in text.splitlines():
+                stripped = line.split("#", 1)[0].strip()
+                if "=" in stripped:
+                    name, setting = stripped.split("=", 1)
+                    parsed[name.strip()] = setting.strip().strip("\"'")
+        else:
+            return []
+    except (ValueError, TypeError, yaml.YAMLError, tomllib.TOMLDecodeError):
+        return []
+    return active_values(parsed)
+
+
+def runtime_evidence(config: dict[str, Any]) -> list[str]:
+    result: list[str] = []
+    argv = [str(value) for value in (config.get("Entrypoint") or [])]
+    argv.extend(str(value) for value in (config.get("Cmd") or []))
+    for index, value in enumerate(argv):
+        name, separator, setting = value.partition("=")
+        field = name.lstrip("-")
+        if PROFILE_FIELD.fullmatch(field) or MODEL_FIELD.fullmatch(field) or ADAPTER_FIELD.fullmatch(field):
+            if separator:
+                result.append(setting)
+            elif index + 1 < len(argv):
+                result.append(argv[index + 1])
+    for value in config.get("Env") or []:
+        name, separator, setting = str(value).partition("=")
+        if separator and (PROFILE_FIELD.fullmatch(name) or MODEL_FIELD.fullmatch(name) or ADAPTER_FIELD.fullmatch(name)):
+            result.append(setting)
+    result.extend(active_values(config.get("Labels") or {}))
+    return result
 
 
 def main() -> None:
@@ -99,7 +202,8 @@ def main() -> None:
 
     config = inspected.get("Config", {})
     runtime_identity = json.dumps({
-        "entrypoint": config.get("Entrypoint"), "cmd": config.get("Cmd"),
+        "entrypoint": redacted_argv(config.get("Entrypoint")),
+        "cmd": redacted_argv(config.get("Cmd")),
         "environment": redacted_environment(config.get("Env")),
         "labels": redacted_mapping(config.get("Labels")),
         "mounts": [{"source": m.get("Source"), "destination": m.get("Destination"), "type": m.get("Type")}
@@ -107,8 +211,10 @@ def main() -> None:
     }, sort_keys=True)
     # Mount/source paths are provenance only: profile-looking path components
     # must never count as automatic classifier evidence.
-    searchable = "\n".join(non_path_runtime_evidence(config))
-    searchable += "\n" + "\n".join(text for _, text, _ in candidates)
+    evidence = runtime_evidence(config)
+    for source, candidate_text, _ in candidates:
+        evidence.extend(parsed_config_evidence(source, candidate_text))
+    searchable = "\n".join(evidence)
     detected = [name for name, pattern in PROFILE_PATTERNS.items() if pattern.search(searchable)]
     automatic = detected == [args.profile] and supplied_config_bound
     if args.profile == "intent" and automatic:

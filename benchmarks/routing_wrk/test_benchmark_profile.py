@@ -114,6 +114,15 @@ class BenchmarkProfileTest(unittest.TestCase):
             output = dry_run(BENCHMARK_SYSTEMS="xsr", KEYWORD_POLICY=str(policy))
         self.assertIn("effective_compiled_profile=ngram", output)
 
+    def test_auto_profile_resolves_mixed_policy_before_model_validation(self) -> None:
+        policy = SCRIPT.parents[2] / "config" / "policy_mixed.yaml"
+        output = dry_run(
+            BENCHMARK_SYSTEMS="xsr", KEYWORD_POLICY=str(policy),
+            XSR_DISTILL_MODEL="/bin/true",
+        )
+        self.assertIn("signal_profile_requested=auto", output)
+        self.assertIn("effective_compiled_profile=mixed", output)
+
     def test_quoted_llmrouter_method_uses_the_adapter_parser(self) -> None:
         source = (SCRIPT.parents[1] / "llmrouter/configs/ngram.yaml").read_text(encoding="utf-8")
         with tempfile.TemporaryDirectory() as temporary:

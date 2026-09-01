@@ -71,6 +71,47 @@ class VSRConfigurationVerificationTest(unittest.TestCase):
             ), self.assertRaisesRegex(SystemExit, "reviewed configuration contract"):
                 verify_vsr_config.main()
 
+    def test_comment_and_unused_fields_are_not_automatic_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            config = root / "router.yaml"
+            config.write_text(
+                "# classifier: bm25\nclassifier: proprietary\n"
+                "examples:\n  - classifier: bm25\n",
+                encoding="utf-8",
+            )
+            output = root / "run" / "vsr-verification.json"
+            inspected = self.inspect()
+            inspected["Mounts"] = [{"Source": str(config), "Destination": "/config/router.yaml", "Type": "bind"}]
+            argv = ["verify_vsr_config.py", "--container", "router", "--profile", "bm25",
+                    "--output", str(output)]
+            with patch.object(sys, "argv", argv), patch.object(
+                verify_vsr_config, "inspect_container", return_value=inspected
+            ), self.assertRaisesRegex(SystemExit, "reviewed configuration contract"):
+                verify_vsr_config.main()
+
+    def test_runtime_identity_redacts_sensitive_argv(self) -> None:
+        inspected = self.inspect()
+        inspected["Config"] = {
+            "Entrypoint": ["router"],
+            "Cmd": ["--classifier", "bm25", "--api-key", "top-secret",
+                    "--endpoint=https://user:pass@example.test/path?token=secret"],
+            "Env": [], "Labels": {},
+        }
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary) / "run" / "vsr-verification.json"
+            argv = ["verify_vsr_config.py", "--container", "router", "--profile", "bm25",
+                    "--output", str(output)]
+            with patch.object(sys, "argv", argv), patch.object(
+                verify_vsr_config, "inspect_container", return_value=inspected
+            ):
+                verify_vsr_config.main()
+            serialized = output.read_text(encoding="utf-8")
+            self.assertNotIn("top-secret", serialized)
+            self.assertNotIn("user:pass", serialized)
+            self.assertNotIn("token=secret", serialized)
+            self.assertIn("<redacted>", serialized)
+
     def test_opaque_config_requires_exact_reviewed_contract(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

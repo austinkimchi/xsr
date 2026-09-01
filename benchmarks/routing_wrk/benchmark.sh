@@ -331,9 +331,6 @@ esac
 
 case "$XSR_DISTILL_PARITY_DEBUG" in 0|1) ;; *) echo "Error: XSR_DISTILL_PARITY_DEBUG must be 0 or 1." >&2; exit 1 ;; esac
 REQUESTED_SIGNAL_PROFILE="$SIGNAL_PROFILE"
-if [ "$SIGNAL_PROFILE" = auto ] && [ -n "$XSR_DISTILL_MODEL" ]; then
-    SIGNAL_PROFILE=intent
-fi
 SIGNAL_PROFILE="$("$PYTHON_BIN" "${ROOT_DIR}/benchmarks/policy/generate_policy_modules.py" \
     "$KEYWORD_POLICY" --signal-profile "$SIGNAL_PROFILE" --resolve-only)" || {
     echo "Error: signal profile does not match ${KEYWORD_POLICY}." >&2
