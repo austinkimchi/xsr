@@ -88,11 +88,13 @@ def redacted_argv(values: list[str] | None) -> list[str]:
             result.append("<redacted>")
             redact_next = False
             continue
+        composite = bool(re.search(r"\s", value.strip()))
+        if composite and (SENSITIVE_NAME.search(value) or "://" in value
+                          or re.search(r"\b(?:bearer|basic)\s+\S+", value, re.I)):
+            result.append("<redacted-shell-command>")
+            continue
         name, separator, setting = value.partition("=")
         if SENSITIVE_NAME.search(name.lstrip("-")):
-            if re.search(r"\s", value.strip()):
-                result.append("<redacted-shell-command>")
-                continue
             result.append(f"{name}=<redacted>" if separator else name)
             redact_next = not separator
             continue

@@ -116,7 +116,8 @@ class VSRConfigurationVerificationTest(unittest.TestCase):
         inspected = self.inspect()
         inspected["Config"] = {
             "Entrypoint": ["sh", "-c"],
-            "Cmd": ["router --classifier bm25 --token top-secret"],
+            "Cmd": ["router --classifier bm25 --token top-secret",
+                    "router --endpoint https://alice:password@example.test"],
             "Env": ["CLASSIFIER=bm25"], "Labels": {},
         }
         with tempfile.TemporaryDirectory() as temporary:
@@ -129,6 +130,7 @@ class VSRConfigurationVerificationTest(unittest.TestCase):
                 verify_vsr_config.main()
             serialized = output.read_text(encoding="utf-8")
             self.assertNotIn("top-secret", serialized)
+            self.assertNotIn("alice:password", serialized)
             self.assertIn("<redacted-shell-command>", serialized)
 
     def test_envoy_binding_requires_shared_network_and_router_reference(self) -> None:
