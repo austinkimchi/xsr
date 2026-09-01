@@ -239,6 +239,51 @@ def envoy_configuration_text(inspected: dict[str, Any]) -> str:
     return "\n".join(values)
 
 
+def envoy_yaml_records(text: str) -> list[tuple[int, bool, str, str]]:
+    records: list[tuple[int, bool, str, str]] = []
+    for raw_line in text.splitlines():
+        line = re.sub(r"\s+#.*$", "", raw_line).rstrip()
+        if not line or line.lstrip().startswith("#"):
+            continue
+        match = re.match(r"^(\s*)(-\s*)?([@A-Za-z_][\w.@-]*)\s*:\s*(.*?)\s*$", line)
+        if match and "\t" not in match.group(1):
+            records.append((len(match.group(1)), bool(match.group(2)), match.group(3),
+                            match.group(4).strip().strip("\"'")))
+    return records
+
+
+def record_subtree(
+    records: list[tuple[int, bool, str, str]], start: int,
+) -> list[tuple[int, bool, str, str]]:
+    base_indent = records[start][0]
+    end = start + 1
+    while end < len(records) and records[end][0] > base_indent:
+        end += 1
+    return records[start + 1:end]
+
+
+def active_extproc_endpoints(text: str) -> list[tuple[str, str]]:
+    """Return (active target, endpoint) pairs from Envoy's ExtProc configuration."""
+    records = envoy_yaml_records(text)
+    cluster_names: set[str] = set()
+    direct_targets: list[str] = []
+    for index, (_, _, key, value) in enumerate(records):
+        if key == "name" and value == "envoy.filters.http.ext_proc":
+            for _, _, child_key, child_value in record_subtree(records, index):
+                if child_key == "cluster_name" and child_value:
+                    cluster_names.add(child_value)
+                elif child_key in {"target_uri", "uri"} and child_value:
+                    direct_targets.append(child_value)
+
+    endpoints = [("direct", target) for target in direct_targets]
+    for index, (_, is_list, key, value) in enumerate(records):
+        if is_list and key == "name" and value in cluster_names:
+            for _, _, child_key, child_value in record_subtree(records, index):
+                if child_key in {"address", "socket_address", "target_uri"} and child_value:
+                    endpoints.append((value, child_value))
+    return endpoints
+
+
 def verify_envoy_binding(
     router_name: str, router: dict[str, Any], envoy_name: str,
 ) -> dict[str, Any]:
@@ -257,18 +302,25 @@ def verify_envoy_binding(
     for network in router_networks.values():
         identities.add(str(network.get("IPAddress") or ""))
         identities.update(str(alias) for alias in (network.get("Aliases") or []))
-    evidence = envoy_configuration_text(envoy)
-    matched = next((identity for identity in sorted(identities, key=len, reverse=True)
-                    if identity and re.search(rf"(?<![\w.-]){re.escape(identity)}(?![\w.-])", evidence)), None)
-    if not re.search(r"ext[_-]?proc", evidence, re.I) or not matched:
+    active_endpoints = active_extproc_endpoints(envoy_configuration_text(envoy))
+    matched_pair = next(
+        ((target, endpoint, identity) for target, endpoint in active_endpoints
+         for identity in sorted(identities, key=len, reverse=True)
+         if identity and re.search(rf"(?<![\w.-]){re.escape(identity)}(?![\w.-])", endpoint)),
+        None,
+    )
+    if not matched_pair:
         raise SystemExit(
             f"could not prove measured Envoy {envoy_name!r} references VSR router {router_name!r}"
         )
+    target, endpoint, matched = matched_pair
     return {
         "mode": "envoy-config-reference",
         "envoy_container": envoy_name,
         "envoy_image_id": envoy.get("Image"),
         "shared_networks": shared_networks,
+        "active_extproc_target": target,
+        "active_extproc_endpoint": endpoint,
         "matched_router_identity": matched,
     }
 

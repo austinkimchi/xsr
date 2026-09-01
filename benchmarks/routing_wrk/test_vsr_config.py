@@ -132,25 +132,52 @@ class VSRConfigurationVerificationTest(unittest.TestCase):
             self.assertIn("<redacted-shell-command>", serialized)
 
     def test_envoy_binding_requires_shared_network_and_router_reference(self) -> None:
-        router = self.inspect()
-        router["NetworkSettings"] = {"Networks": {
-            "bench": {"IPAddress": "172.20.0.3", "Aliases": ["router"]}
-        }}
-        envoy = self.inspect()
-        envoy["NetworkSettings"] = {"Networks": {
-            "bench": {"IPAddress": "172.20.0.2", "Aliases": ["envoy"]}
-        }}
-        envoy["Config"] = {"Entrypoint": ["envoy"], "Cmd": [], "Env": [],
-                           "Labels": {"effective-config": "ext_proc endpoint router"}}
-        with patch.object(verify_vsr_config, "inspect_container", return_value=envoy):
-            binding = verify_vsr_config.verify_envoy_binding("router", router, "envoy")
-        self.assertEqual(binding["mode"], "envoy-config-reference")
-        self.assertEqual(binding["matched_router_identity"], "router")
+        with tempfile.TemporaryDirectory() as temporary:
+            config = Path(temporary) / "envoy.yaml"
+            config.write_text(
+                "http_filters:\n"
+                "- name: envoy.filters.http.ext_proc\n"
+                "  typed_config:\n"
+                "    grpc_service:\n"
+                "      envoy_grpc:\n"
+                "        cluster_name: active_extproc\n"
+                "clusters:\n"
+                "- name: active_extproc\n"
+                "  load_assignment:\n"
+                "    endpoints:\n"
+                "    - socket_address:\n"
+                "        address: router\n"
+                "- name: unused\n"
+                "  load_assignment:\n"
+                "    endpoints:\n"
+                "    - socket_address:\n"
+                "        address: other-router\n",
+                encoding="utf-8",
+            )
+            router = self.inspect()
+            router["NetworkSettings"] = {"Networks": {
+                "bench": {"IPAddress": "172.20.0.3", "Aliases": ["router"]}
+            }}
+            envoy = self.inspect()
+            envoy["NetworkSettings"] = {"Networks": {
+                "bench": {"IPAddress": "172.20.0.2", "Aliases": ["envoy"]}
+            }}
+            envoy["Config"] = {"Entrypoint": ["envoy"], "Cmd": ["-c", "/etc/envoy/envoy.yaml"],
+                               "Env": [], "Labels": {}}
+            envoy["Mounts"] = [{"Source": str(config), "Destination": "/etc/envoy/envoy.yaml",
+                                 "Type": "bind"}]
+            with patch.object(verify_vsr_config, "inspect_container", return_value=envoy):
+                binding = verify_vsr_config.verify_envoy_binding("router", router, "envoy")
+            self.assertEqual(binding["mode"], "envoy-config-reference")
+            self.assertEqual(binding["matched_router_identity"], "router")
+            self.assertEqual(binding["active_extproc_target"], "active_extproc")
 
-        envoy["Config"]["Labels"] = {"effective-config": "ext_proc endpoint other-router"}
-        with patch.object(verify_vsr_config, "inspect_container", return_value=envoy), \
-             self.assertRaisesRegex(SystemExit, "could not prove"):
-            verify_vsr_config.verify_envoy_binding("router", router, "envoy")
+            config.write_text(config.read_text(encoding="utf-8").replace(
+                "address: router", "address: unmeasured-router", 1
+            ), encoding="utf-8")
+            with patch.object(verify_vsr_config, "inspect_container", return_value=envoy), \
+                 self.assertRaisesRegex(SystemExit, "could not prove"):
+                verify_vsr_config.verify_envoy_binding("router", router, "envoy")
 
     def test_opaque_config_requires_exact_reviewed_contract(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
