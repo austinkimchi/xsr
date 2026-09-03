@@ -90,20 +90,17 @@ class FullPromptServingPathTest(unittest.TestCase):
 
     def assert_prompt_reaches_xsr_reference(self, method: str, prompt: str) -> None:
         captured: list[str] = []
+        upstream_adapter = self.routers.LLMRouterAdapter
 
-        class CapturingLLMRouterAdapter:
-            def __init__(self, router_name: str, **_: object) -> None:
-                self.router_name = router_name
-                self.assert_xsr_reference = router_name == "xsr_reference"
+        class CapturingLLMRouterAdapter(upstream_adapter):
+            def __init__(self, router_name: str, **kwargs: object) -> None:
+                if router_name != "xsr_reference":
+                    raise AssertionError("request did not use xsr_reference")
+                super().__init__(router_name, **kwargs)
 
             def route(self, query: str, available_models: list[str]) -> str:
-                self.assertTrue(self.assert_xsr_reference)
                 captured.append(query)
-                return "coding" if "implement" in query or "code" in query else "others"
-
-            def assertTrue(self, value: bool) -> None:
-                if not value:
-                    raise AssertionError("request did not use xsr_reference")
+                return super().route(query, available_models)
 
         class FakeBackend:
             def __init__(self, _: object) -> None:
@@ -120,6 +117,10 @@ class FullPromptServingPathTest(unittest.TestCase):
         config.router.llmrouter_config = str(INTEGRATION_DIR / "configs" / f"{method}.yaml")
 
         with (
+            mock.patch.dict(
+                "os.environ",
+                {"LLMROUTER_PLUGINS": str(INTEGRATION_DIR / "custom_routers")},
+            ),
             mock.patch.object(self.routers, "LLMRouterAdapter", CapturingLLMRouterAdapter),
             mock.patch.object(self.server, "LLMBackend", FakeBackend),
         ):
@@ -130,12 +131,18 @@ class FullPromptServingPathTest(unittest.TestCase):
             )
 
         self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["model"], "coding")
         self.assertEqual(captured, [prompt])
 
     def test_ngram_match_after_character_500_reaches_router_intact(self) -> None:
         prompt = "neutral filler " * 40 + "implement"
         self.assertGreater(prompt.index("implement"), 500)
         self.assert_prompt_reaches_xsr_reference("ngram", prompt)
+
+    def test_bm25_term_after_character_500_reaches_router_intact(self) -> None:
+        prompt = "neutral filler " * 40 + "code"
+        self.assertGreater(prompt.index("code"), 500)
+        self.assert_prompt_reaches_xsr_reference("bm25", prompt)
 
     def test_short_prompt_reaches_router_unchanged(self) -> None:
         self.assert_prompt_reaches_xsr_reference("ngram", "please implement this")

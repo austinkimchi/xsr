@@ -1,0 +1,33 @@
+{
+  "artifact_schema": "llmrouter-full-prompt-correctness-ledger-v1",
+  "base_master_commit": "acbb59a62d3ef1aa00f4500e4fd0beec1950dbee",
+  "branch": "fix/LLMRouter-correctness",
+  "corpus": {
+    "routerarena": {
+      "dataset": "RouteWorks/RouterArena",
+      "fingerprint": "7d1d3349ee1be655",
+      "revision": "a4a062ce3313b56bb09c042e1bc37b61d34e3bd8",
+      "rows": 8400
+    },
+    "speed_bench": {
+      "config": "qualitative",
+      "dataset": "nvidia/SPEED-Bench",
+      "fingerprint": "sha256:56ceec4e0634e958caa71daac8d73c46fc1abc937ad80dfbacebe82264b16338",
+      "rows": 880,
+      "split": "test"
+    }
+  },
+  "correctness_commands": [
+    "sudo -n .venv/bin/python benchmarks/llmrouter/validate_full_prompt_correctness.py --method ngram --output-dir results/llmrouter-full-prompt-correctness",
+    "sudo -n .venv/bin/python benchmarks/llmrouter/validate_full_prompt_correctness.py --method bm25 --output-dir results/llmrouter-full-prompt-correctness"
+  ],
+  "intent_modified": false,
+  "intent_rerun": false,
+  "llmrouter_revision": "da3430baaea672743c3957457b0c76faba19876e",
+  "ngram_checkpoint_commit": "a6a3d25fd8754aab71fd7559223c0ba107891574",
+  "original_correctness_artifacts_modified": false,
+  "performance_benchmarks_run": false,
+  "upstream_llmrouter_source_modified": false,
+  "validation_concurrency": 1,
+  "xsr_source": "46864cac7479552735f564dc49880d00d8b54b14"
+}

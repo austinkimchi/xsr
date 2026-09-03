@@ -208,7 +208,7 @@ def write_report(path: Path, report: dict[str, Any]) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--method", choices=("ngram",), required=True)
+    parser.add_argument("--method", choices=("ngram", "bm25"), required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--llmrouter-port", type=int, default=18083)
     args = parser.parse_args()

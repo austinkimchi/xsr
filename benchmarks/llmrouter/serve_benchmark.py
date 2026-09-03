@@ -20,7 +20,7 @@ if str(ROOT) not in sys.path:
 from benchmarks.llmrouter.xsr_router import configured_method
 
 
-FULL_PROMPT_METHODS = {"ngram"}
+FULL_PROMPT_METHODS = {"ngram", "bm25"}
 UPSTREAM_TRUNCATION = "normalize_content(raw_content)[:500]"
 
 
@@ -45,8 +45,10 @@ def create_benchmark_app(
     request forwarded to the selected backend otherwise untouched.
     """
     router = config.router
+    if router.llmrouter_name != "xsr_reference":
+        return app_factory(config=config)
     method = configured_method(Path(router.llmrouter_config))
-    if router.llmrouter_name != "xsr_reference" or method not in FULL_PROMPT_METHODS:
+    if method not in FULL_PROMPT_METHODS:
         return app_factory(config=config)
 
     import openclaw_router.server as server
