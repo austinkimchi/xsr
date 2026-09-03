@@ -108,10 +108,10 @@
       }
     ]
   },
-  "generated_at_utc": "2026-09-03T00:12:14Z",
+  "generated_at_utc": "2026-09-03T01:03:33Z",
   "method": "bm25",
   "provenance": {
-    "git_commit": "acbb59a62d3ef1aa00f4500e4fd0beec1950dbee",
+    "git_commit": "f3ebf318be7f98c360c80fffac3f85fca906e98f",
     "kernel": "6.8.0-138-generic",
     "llmrouter_revision": "da3430baaea672743c3957457b0c76faba19876e",
     "platform": "Linux-6.8.0-138-generic-x86_64-with-glibc2.39",

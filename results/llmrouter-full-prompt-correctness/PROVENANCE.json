@@ -27,6 +27,7 @@
   "ngram_checkpoint_commit": "a6a3d25fd8754aab71fd7559223c0ba107891574",
   "original_correctness_artifacts_modified": false,
   "performance_benchmarks_run": false,
+  "regenerated_from_clean_commit": "f3ebf318be7f98c360c80fffac3f85fca906e98f",
   "upstream_llmrouter_source_modified": false,
   "validation_concurrency": 1,
   "xsr_source": "46864cac7479552735f564dc49880d00d8b54b14"
