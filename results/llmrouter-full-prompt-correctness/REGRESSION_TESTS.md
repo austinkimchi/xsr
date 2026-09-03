@@ -6,7 +6,7 @@ Command:
 make test-llmrouter
 ```
 
-Result: 11 tests passed.
+Result after the provenance guard fix: 14 tests passed.
 
 Focused HTTP serving-path cases capture the exact query received at the pinned
 `LLMRouterAdapter.route` boundary after selection of `xsr_reference`:
@@ -18,3 +18,7 @@ Focused HTTP serving-path cases capture the exact query received at the pinned
 Each assertion compares the captured router input with the complete original
 prompt; it does not infer correctness from the final route alone. The existing
 adapter/plugin/config integration tests ran in the same suite.
+
+Three additional tests cover the provenance guard: tracked implementation
+changes are rejected, output-directory updates are allowed, and unrelated
+untracked paths do not affect the recorded source commit.

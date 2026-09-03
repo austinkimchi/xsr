@@ -25,3 +25,8 @@ is absent, so a future upstream change cannot be silently patched.
 Intent and every non-`xsr_reference` or non-N-Gram/BM25 configuration continue
 through the unmodified upstream factory. Policies, thresholds, keywords,
 reference routing semantics, XSR, and the corpus are unchanged.
+
+The correctness validator rejects uncommitted tracked inputs outside its
+designated output directory before recording the producing commit. This keeps
+the JSON provenance commit reproducible while permitting sequential N-Gram and
+BM25 artifact regeneration in the same output directory.

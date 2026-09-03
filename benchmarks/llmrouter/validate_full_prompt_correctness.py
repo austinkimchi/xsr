@@ -56,6 +56,36 @@ def installed_llmrouter_revision() -> str:
     return subprocess.check_output(command, cwd=ROOT, text=True).strip()
 
 
+def disallowed_tracked_changes(output_dir: Path, status: str) -> list[str]:
+    """Return tracked changes outside the validator's designated output tree."""
+    output_dir = output_dir.resolve()
+    changes: list[str] = []
+    for line in status.splitlines():
+        if len(line) < 4:
+            continue
+        raw_path = line[3:].split(" -> ")[-1]
+        path = (ROOT / raw_path).resolve()
+        if path != output_dir and output_dir not in path.parents:
+            changes.append(raw_path)
+    return changes
+
+
+def require_reproducible_source_tree(output_dir: Path) -> str:
+    """Reject uncommitted tracked inputs and return the producing commit."""
+    status = subprocess.check_output(
+        ["git", "status", "--porcelain=v1", "--untracked-files=no"],
+        cwd=ROOT,
+        text=True,
+    )
+    changes = disallowed_tracked_changes(output_dir, status)
+    if changes:
+        raise RuntimeError(
+            "correctness validation requires committed tracked inputs; dirty paths: "
+            + ", ".join(changes)
+        )
+    return subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
+
+
 def routing_args(config: Path) -> argparse.Namespace:
     return argparse.Namespace(
         config=config,
@@ -216,6 +246,8 @@ def main() -> int:
     if os.geteuid() != 0:
         os.execvp("sudo", ["sudo", sys.executable, str(Path(__file__).resolve()), *sys.argv[1:]])
 
+    output_dir = args.output_dir.resolve()
+    source_commit = require_reproducible_source_tree(output_dir)
     config = (ROOT / "config" / f"policy_{args.method}.yaml").resolve()
     router_config = (ROOT / "benchmarks" / "llmrouter" / "configs" / f"{args.method}.yaml").resolve()
     if configured_method(router_config) != args.method:
@@ -224,8 +256,9 @@ def main() -> int:
     if revision != LLMROUTER_REVISION:
         raise RuntimeError(f"installed LLMRouter revision {revision} != pinned {LLMROUTER_REVISION}")
 
-    subprocess.run(["make", f"KEYWORD_POLICY={config}", "policy"], cwd=ROOT, check=True)
-    subprocess.run(["make", f"KEYWORD_POLICY={config}", "dev"], cwd=ROOT, check=True)
+    policy_argument = config.relative_to(ROOT)
+    subprocess.run(["make", f"KEYWORD_POLICY={policy_argument}", "policy"], cwd=ROOT, check=True)
+    subprocess.run(["make", f"KEYWORD_POLICY={policy_argument}", "dev"], cwd=ROOT, check=True)
 
     run_args = routing_args(config)
     cases, dataset, _ = benchmark.load_cases(run_args)
@@ -301,7 +334,6 @@ def main() -> int:
         values["agreement_percent"] = 100.0 * int(values["agreement_count"]) / int(values["total"])
 
     agreement = len(rows) - len(mismatches)
-    output_dir = args.output_dir.resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
     report = {
         "schema": "xsr-llmrouter-full-prompt-correctness-v1",
@@ -309,7 +341,7 @@ def main() -> int:
         "concurrency": 1,
         "generated_at_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "provenance": {
-            "git_commit": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip(),
+            "git_commit": source_commit,
             "xsr_source": XSR_SOURCE,
             "llmrouter_revision": revision,
             "policy_path": str(config.relative_to(ROOT)),
