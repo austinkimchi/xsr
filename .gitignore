@@ -1,0 +1,75 @@
+# Local configuration and credentials
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+.secrets/
+secrets/
+credentials.json
+service-account*.json
+
+# Editors and operating systems
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*~
+
+# Python environments and caches
+.venv*/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.cache/
+
+# Native build and tooling output
+build/
+compile_commands.json
+.tools/
+reports/
+tests/
+analysis/
+figures/
+benchmark-dashboard/
+profiling/*.tar.gz
+config/vllm_sr_keyword_config.yaml
+sk_router
+sk_router_forwarding
+mock_backend
+*.bpf.o
+
+# Generated policy headers: ignore by default, then retain reviewed snapshots
+*.generated.h
+!bpf/stages/signals/generated/xdp_jaccard_policy.generated.h
+!bpf/stages/signals/generated/xdp_bm25_policy.generated.h
+!bpf/stages/signals/generated/xdp_keyword_modules.generated.h
+!bpf/stages/signals/generated/xdp_unicode_word.generated.h
+
+# Models, datasets, and intermediate experiment artifacts
+**/.vllm-sr/
+**/models/
+benchmarks/lora_distill/artifacts/
+*.jsonl
+*.jsonl.metadata.json
+*.npz
+*.xsrf
+*.safetensors
+*.pt
+*.pth
+
+# Retain only reviewed result summaries.
+results/*
+!results/README.md
+!results/bm25_ablation.csv
+!results/correctness.csv
+!results/intent_quality.csv
+!results/latency_100rps.csv
+!results/latency_100rps_trials.csv
+!results/throughput.csv
+!results/throughput_trials.csv
+!results/workload_prompt_lengths.csv

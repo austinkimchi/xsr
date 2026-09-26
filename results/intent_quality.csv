@@ -1,0 +1,4 @@
+model,domain_accuracy_pct,route_accuracy_pct,route_macro_f1_pct,samples
+mmBERT-32K teacher,62.142857142857,91.857142857143,64.391671060626,1400
+Distilled 8K student,19.642857142857,85.857142857143,40.331101190476,1400
+Always predict others,,85.714285714286,30.769230769231,1400

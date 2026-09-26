@@ -1,0 +1,15 @@
+result_group,system,component,statistic,value_ms,qualifier
+forwarding_control_delta,XSR,routing path over direct forwarding,mean,0.164,reported_rounded
+forwarding_control_delta,XSR,routing path over direct forwarding,p99,0.850,reported_rounded
+forwarding_control_delta,VSR,semantic routing over Envoy only,mean,1.961,reported_rounded
+forwarding_control_delta,VSR,semantic routing over Envoy only,p99,4.295,reported_rounded
+path_decomposition,VSR,total,mean,2.77,reported_rounded_only
+path_decomposition,VSR,Envoy processing,mean,0.76,reported_rounded_only
+path_decomposition,VSR,Envoy-ExtProc communication,mean,0.20,reported_rounded_only
+path_decomposition,VSR,additional external-router processing,mean,0.52,reported_rounded_only
+path_decomposition,VSR,BM25 evaluation,mean,0.20,reported_rounded_only
+path_decomposition,VSR,remaining path,mean,1.09,reported_rounded_only
+path_decomposition,XSR,total,mean,0.57,reported_rounded_only
+path_decomposition,XSR,request parsing and BM25 evaluation,mean,0.08,reported_rounded_only
+path_decomposition,XSR,"policy, backend selection, and SOCKMAP",mean,<0.01,reported_upper_bound_only
+path_decomposition,XSR,remaining path,mean,0.48,reported_rounded_only

@@ -1,0 +1,9 @@
+signal,comparison,agreements,total,agreement_pct,evidence_status
+ngram,XSR-VSR,9280,9280,100,archive_supported
+ngram,XSR-LLMR,9280,9280,100,archive_supported
+bm25,XSR-VSR,9276,9280,99.95689655172414,archive_supported
+bm25,XSR-LLMR,9280,9280,100,archive_supported
+intent_domain,Student-Teacher,417,1400,29.785714285714285,archive_supported
+intent_route,Student-Teacher,1240,1400,88.57142857142857,archive_supported
+intent_route,XSR-VSR*,1400,1400,100,archive_supported
+intent_route,XSR-LLMR,1400,1400,100,archive_supported

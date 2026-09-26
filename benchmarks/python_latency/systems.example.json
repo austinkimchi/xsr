@@ -1,0 +1,7 @@
+{
+  "direct": "http://10.10.0.1:18391/v1/chat/completions",
+  "envoy-only": "http://REPLACE_ENVOY_IP:8898/v1/chat/completions",
+  "xsr": "http://10.10.0.1:18081/v1/chat/completions",
+  "vsr": "http://REPLACE_VSR_IP:8899/v1/chat/completions",
+  "llmrouter": "http://10.10.0.1:18083/v1/chat/completions"
+}

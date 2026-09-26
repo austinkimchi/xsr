@@ -1,0 +1,5 @@
+corpus,samples,mean_bytes,p50_bytes,p95_bytes,p99_bytes,max_bytes,evidence_status
+SPEED-Bench,880,664.66,121,3232.05,8366.16,14166,source_reproduced
+RouterArena,8400,726.81,286,2591.20,4809.22,10008,source_reproduced
+Combined keyword,9280,720.91,269,2776.10,4945.78,14166,source_reproduced
+Intent evaluation,1400,59.44,60,70,73,78,archive_supported

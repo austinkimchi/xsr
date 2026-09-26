@@ -1,0 +1,1324 @@
+#!/usr/bin/env bash
+set -e
+
+# `make performance args="VLLM_IP=..."` forwards these as positional
+# arguments. Accept the benchmark configuration assignments that users
+# commonly pass through that target without evaluating arbitrary shell text.
+for benchmark_arg in "$@"; do
+    case "$benchmark_arg" in
+        VLLM_IP=*) VLLM_IP="${benchmark_arg#VLLM_IP=}" ;;
+        VLLM_HOST=*) VLLM_HOST="${benchmark_arg#VLLM_HOST=}" ;;
+        VLLM_PORT=*) VLLM_PORT="${benchmark_arg#VLLM_PORT=}" ;;
+        CONCURRENCY=*) CONCURRENCY="${benchmark_arg#CONCURRENCY=}" ;;
+        DURATION=*) DURATION="${benchmark_arg#DURATION=}" ;;
+        WARMUP_DURATION=*) WARMUP_DURATION="${benchmark_arg#WARMUP_DURATION=}" ;;
+        TRIALS=*) TRIALS="${benchmark_arg#TRIALS=}" ;;
+        BENCHMARK_PROFILE=*) BENCHMARK_PROFILE="${benchmark_arg#BENCHMARK_PROFILE=}" ;;
+        RANDOM_SEED=*) RANDOM_SEED="${benchmark_arg#RANDOM_SEED=}" ;;
+        BENCHMARK_DRY_RUN=*) BENCHMARK_DRY_RUN="${benchmark_arg#BENCHMARK_DRY_RUN=}" ;;
+        WRK_BIN=*) WRK_BIN="${benchmark_arg#WRK_BIN=}" ;;
+        BENCHMARK_MODE=*) BENCHMARK_MODE="${benchmark_arg#BENCHMARK_MODE=}" ;;
+        RATE=*) RATE="${benchmark_arg#RATE=}" ;;
+        RATES=*) RATES="${benchmark_arg#RATES=}" ;;
+        VALIDATE_LOAD=*) VALIDATE_LOAD="${benchmark_arg#VALIDATE_LOAD=}" ;;
+        KEYWORD_POLICY=*) KEYWORD_POLICY="${benchmark_arg#KEYWORD_POLICY=}" ;;
+        PROMPTS_FILE=*) PROMPTS_FILE="${benchmark_arg#PROMPTS_FILE=}" ;;
+        WORKLOAD_ID=*) WORKLOAD_ID="${benchmark_arg#WORKLOAD_ID=}" ;;
+        INCLUDE_STRESS=*) INCLUDE_STRESS="${benchmark_arg#INCLUDE_STRESS=}" ;;
+        BENCHMARK_SYSTEMS=*) BENCHMARK_SYSTEMS="${benchmark_arg#BENCHMARK_SYSTEMS=}" ;;
+        LLMROUTER_CONFIG=*) LLMROUTER_CONFIG="${benchmark_arg#LLMROUTER_CONFIG=}" ;;
+        LLMROUTER_PORT=*) LLMROUTER_PORT="${benchmark_arg#LLMROUTER_PORT=}" ;;
+        XSR_DISTILL_MODEL=*) XSR_DISTILL_MODEL="${benchmark_arg#XSR_DISTILL_MODEL=}" ;;
+        SIGNAL_PROFILE=*) SIGNAL_PROFILE="${benchmark_arg#SIGNAL_PROFILE=}" ;;
+        XSR_DISTILL_PARITY_DEBUG=*) XSR_DISTILL_PARITY_DEBUG="${benchmark_arg#XSR_DISTILL_PARITY_DEBUG=}" ;;
+        XSR_COMPONENT_PROFILE=*) XSR_COMPONENT_PROFILE="${benchmark_arg#XSR_COMPONENT_PROFILE=}" ;;
+        XSR_FORWARDING_ONLY=*) XSR_FORWARDING_ONLY="${benchmark_arg#XSR_FORWARDING_ONLY=}" ;;
+        VSR_SIGNAL_PROFILE=*) VSR_SIGNAL_PROFILE="${benchmark_arg#VSR_SIGNAL_PROFILE=}" ;;
+        VSR_CONFIG_PATH=*) VSR_CONFIG_PATH="${benchmark_arg#VSR_CONFIG_PATH=}" ;;
+        VSR_CONFIG_SHA256=*) VSR_CONFIG_SHA256="${benchmark_arg#VSR_CONFIG_SHA256=}" ;;
+        VSR_CONTAINER=*) VSR_CONTAINER="${benchmark_arg#VSR_CONTAINER=}" ;;
+    esac
+done
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+PYTHON_BIN="${PYTHON:-${ROOT_DIR}/.venv/bin/python}"
+if [ ! -x "$PYTHON_BIN" ] && ! command -v "$PYTHON_BIN" >/dev/null 2>&1; then
+    echo "Error: benchmark Python is unavailable; run 'make benchmark-install' first." >&2
+    exit 1
+fi
+
+BENCHMARK_MODE="${BENCHMARK_MODE:-saturation}"
+WRK_LOCAL_BIN="${ROOT_DIR}/.tools/wrk/wrk"
+WRK_BIN="${WRK_BIN:-}"
+BENCHMARK_PROFILE="${BENCHMARK_PROFILE:-quick}"
+case "$BENCHMARK_PROFILE" in
+    quick) PROFILE_TRIALS=1; PROFILE_DURATION=5s; PROFILE_WARMUP=1s ;;
+    paper) PROFILE_TRIALS=5; PROFILE_DURATION=40s; PROFILE_WARMUP=3s ;;
+    ablation) PROFILE_TRIALS=5; PROFILE_DURATION=20s; PROFILE_WARMUP=2s ;;
+    *) echo "Error: BENCHMARK_PROFILE must be 'quick', 'paper', or 'ablation'." >&2; exit 1 ;;
+esac
+TRIALS="${TRIALS:-$PROFILE_TRIALS}"
+DURATION="${DURATION:-$PROFILE_DURATION}"
+WARMUP_DURATION="${WARMUP_DURATION:-$PROFILE_WARMUP}"
+RANDOM_SEED="${RANDOM_SEED:-20260826}"
+BENCHMARK_DRY_RUN="${BENCHMARK_DRY_RUN:-0}"
+BASE_THREADS="${THREADS:-4}"
+DEFAULT_CONCURRENCIES=(1 2 4 8 16 32 64 96 128 192)
+STRESS_CONCURRENCIES=(256 512)
+RATE="${RATE:-10000}"
+RATES="${RATES:-100}"
+VALIDATE_LOAD="${VALIDATE_LOAD:-0}"
+TOPOLOGY_MODE="${TOPOLOGY_MODE:-host}"
+INCLUDE_STRESS="${INCLUDE_STRESS:-0}"
+XSR_COMPONENT_PROFILE="${XSR_COMPONENT_PROFILE:-0}"
+BENCHMARK_SYSTEMS="${BENCHMARK_SYSTEMS:-}"
+XDP_PORT="${XDP_PORT:-18081}"
+CODING_BACKEND_PORT="${CODING_BACKEND_PORT:-18391}"
+MATH_BACKEND_PORT="${MATH_BACKEND_PORT:-18392}"
+OTHERS_BACKEND_PORT="${OTHERS_BACKEND_PORT:-18393}"
+QA_BACKEND_PORT="${QA_BACKEND_PORT:-18394}"
+WRITING_BACKEND_PORT="${WRITING_BACKEND_PORT:-18395}"
+VLLM_BACKEND_PORT="${VLLM_BACKEND_PORT:-18396}"
+START_VLLM_MOCK="${START_VLLM_MOCK:-0}"
+VLLM_HOST="${VLLM_HOST:-vllm-sr-envoy-container}"
+VSR_CONTAINER="${VSR_CONTAINER:-${VLLM_HOST/envoy/router}}"
+VLLM_PORT="${VLLM_PORT:-8899}"
+LLMROUTER_PYTHON="${LLMROUTER_PYTHON:-${ROOT_DIR}/.venv-llmrouter/bin/python}"
+LLMROUTER_BIN="${LLMROUTER_BIN:-${ROOT_DIR}/.venv-llmrouter/bin/llmrouter}"
+LLMROUTER_PORT="${LLMROUTER_PORT:-18083}"
+LLMROUTER_URL="${LLMROUTER_URL:-http://10.10.0.1:${LLMROUTER_PORT}/v1/chat/completions}"
+LLMROUTER_START_TIMEOUT="${LLMROUTER_START_TIMEOUT:-60}"
+LLMROUTER_PLUGIN_DIR="${LLMROUTER_PLUGIN_DIR:-${ROOT_DIR}/benchmarks/llmrouter/custom_routers}"
+LLMROUTER_SERVE_CONFIG="${LLMROUTER_SERVE_CONFIG:-${ROOT_DIR}/benchmarks/llmrouter/configs/serve-local.yaml}"
+LLMROUTER_SERVE_SCRIPT="${LLMROUTER_SERVE_SCRIPT:-${ROOT_DIR}/benchmarks/llmrouter/serve_benchmark.py}"
+LLMROUTER_CONFIG="${LLMROUTER_CONFIG:-}"
+# Set this explicitly when Docker DNS and the Docker CLI are both unavailable.
+VLLM_IP="${VLLM_IP:-}"
+IFNAME="${IFNAME:-veth0}"
+NETNS="${NETNS:-ns1}"
+XDP_PEER_IF="${XDP_PEER_IF:-veth1}"
+XDP_URL="${XDP_URL:-http://10.10.0.1:${XDP_PORT}/v1/chat/completions}"
+# Use a marker backend directly over the same ns1/veth path as the routers.
+DIRECT_BACKEND_URL="${DIRECT_BACKEND_URL:-http://10.10.0.1:${CODING_BACKEND_PORT}/v1/chat/completions}"
+# VLLM_URL is assigned after resolving VLLM_HOST from the root namespace. ns1
+# reaches that address through veth0 with destination-scoped NAT below.
+VLLM_URL="${VLLM_URL:-}"
+ENVOY_ONLY_PORT="${ENVOY_ONLY_PORT:-8898}"
+ENVOY_ONLY_CONTAINER="${ENVOY_ONLY_CONTAINER:-xsr-benchmark-envoy-only-${RUN_ID:-$$}}"
+ENVOY_ONLY_URL="${ENVOY_ONLY_URL:-}"
+REPORT_DIR="${REPORT_DIR:-${ROOT_DIR}/results/routing-performance}"
+KEYWORD_POLICY="${KEYWORD_POLICY:-${ROOT_DIR}/config/policy_ngram.yaml}"
+BUILD_KEYWORD_POLICY="$KEYWORD_POLICY"
+case "$BUILD_KEYWORD_POLICY" in
+    "$ROOT_DIR"/*) BUILD_KEYWORD_POLICY="${BUILD_KEYWORD_POLICY#"$ROOT_DIR"/}" ;;
+esac
+DEFAULT_PROMPTS_FILE="${ROOT_DIR}/benchmarks/dataset_prompts.jsonl"
+if [ "${PROMPTS_EXPLICIT+x}" != "x" ]; then
+    if [ "${PROMPTS_FILE+x}" = "x" ]; then
+        PROMPTS_EXPLICIT=1
+    else
+        PROMPTS_EXPLICIT=0
+        PROMPTS_FILE="$DEFAULT_PROMPTS_FILE"
+    fi
+fi
+WORKLOAD_ID="${WORKLOAD_ID:-}"
+XSR_DISTILL_MODEL="${XSR_DISTILL_MODEL:-}"
+SIGNAL_PROFILE="${SIGNAL_PROFILE:-auto}"
+XSR_DISTILL_PARITY_DEBUG="${XSR_DISTILL_PARITY_DEBUG:-0}"
+XSR_FORWARDING_ONLY="${XSR_FORWARDING_ONLY:-0}"
+VSR_SIGNAL_PROFILE="${VSR_SIGNAL_PROFILE:-}"
+VSR_CONFIG_PATH="${VSR_CONFIG_PATH:-}"
+VSR_CONFIG_SHA256="${VSR_CONFIG_SHA256:-}"
+XSR_SOURCE_COMMIT="${XSR_SOURCE_COMMIT:-}"
+if [ -z "$XSR_SOURCE_COMMIT" ]; then
+    XSR_SOURCE_COMMIT="$(git -C "$ROOT_DIR" rev-parse HEAD 2>/dev/null || echo unavailable)"
+fi
+if [ -z "${XSR_SOURCE_WORKING_TREE:-}" ]; then
+    if ! source_status="$(git -C "$ROOT_DIR" status --porcelain 2>/dev/null)"; then
+        XSR_SOURCE_WORKING_TREE=unavailable
+    elif [ -z "$source_status" ]; then
+        XSR_SOURCE_WORKING_TREE=clean
+    else
+        XSR_SOURCE_WORKING_TREE=dirty
+    fi
+fi
+export XSR_DISTILL_MODEL
+
+if [ "$EUID" -ne 0 ] && [ "$BENCHMARK_DRY_RUN" != "1" ]; then
+    echo "Routing benchmark uses sudo for cleanup and firewall setup. Elevating..."
+    sudo_env=(
+        PYTHON="$PYTHON_BIN"
+        WRK_BIN="$WRK_BIN"
+        BENCHMARK_MODE="$BENCHMARK_MODE"
+        BENCHMARK_PROFILE="$BENCHMARK_PROFILE"
+        TRIALS="$TRIALS"
+        DURATION="$DURATION"
+        WARMUP_DURATION="$WARMUP_DURATION"
+        RANDOM_SEED="$RANDOM_SEED"
+        BENCHMARK_DRY_RUN="$BENCHMARK_DRY_RUN"
+        THREADS="$BASE_THREADS"
+        RATE="$RATE"
+        RATES="$RATES"
+        VALIDATE_LOAD="$VALIDATE_LOAD"
+        TOPOLOGY_MODE="$TOPOLOGY_MODE"
+        KEYWORD_POLICY="$KEYWORD_POLICY"
+        PROMPTS_FILE="$PROMPTS_FILE"
+        PROMPTS_EXPLICIT="$PROMPTS_EXPLICIT"
+        WORKLOAD_ID="$WORKLOAD_ID"
+        INCLUDE_STRESS="$INCLUDE_STRESS"
+        BENCHMARK_SYSTEMS="$BENCHMARK_SYSTEMS"
+        BENCHMARK_PYTHON="$PYTHON_BIN"
+        LLMROUTER_PYTHON="$LLMROUTER_PYTHON"
+        LLMROUTER_BIN="$LLMROUTER_BIN"
+        LLMROUTER_PORT="$LLMROUTER_PORT"
+        LLMROUTER_URL="$LLMROUTER_URL"
+        LLMROUTER_START_TIMEOUT="$LLMROUTER_START_TIMEOUT"
+        LLMROUTER_PLUGIN_DIR="$LLMROUTER_PLUGIN_DIR"
+        LLMROUTER_SERVE_CONFIG="$LLMROUTER_SERVE_CONFIG"
+        LLMROUTER_SERVE_SCRIPT="$LLMROUTER_SERVE_SCRIPT"
+        LLMROUTER_CONFIG="$LLMROUTER_CONFIG"
+        XSR_DISTILL_MODEL="${XSR_DISTILL_MODEL:-}"
+        SIGNAL_PROFILE="$SIGNAL_PROFILE"
+        XSR_DISTILL_PARITY_DEBUG="$XSR_DISTILL_PARITY_DEBUG"
+        XSR_COMPONENT_PROFILE="$XSR_COMPONENT_PROFILE"
+        XSR_FORWARDING_ONLY="$XSR_FORWARDING_ONLY"
+        VSR_SIGNAL_PROFILE="$VSR_SIGNAL_PROFILE"
+        VSR_CONFIG_PATH="$VSR_CONFIG_PATH"
+        VSR_CONFIG_SHA256="$VSR_CONFIG_SHA256"
+        XSR_SOURCE_COMMIT="$XSR_SOURCE_COMMIT"
+        XSR_SOURCE_WORKING_TREE="$XSR_SOURCE_WORKING_TREE"
+        XDP_PORT="$XDP_PORT"
+        CODING_BACKEND_PORT="$CODING_BACKEND_PORT"
+        MATH_BACKEND_PORT="$MATH_BACKEND_PORT"
+        OTHERS_BACKEND_PORT="$OTHERS_BACKEND_PORT"
+        QA_BACKEND_PORT="$QA_BACKEND_PORT"
+        WRITING_BACKEND_PORT="$WRITING_BACKEND_PORT"
+        VLLM_BACKEND_PORT="$VLLM_BACKEND_PORT"
+        START_VLLM_MOCK="$START_VLLM_MOCK"
+        VLLM_HOST="$VLLM_HOST"
+        VSR_CONTAINER="$VSR_CONTAINER"
+        VLLM_PORT="$VLLM_PORT"
+        VLLM_IP="$VLLM_IP"
+        IFNAME="$IFNAME"
+        NETNS="$NETNS"
+        XDP_PEER_IF="$XDP_PEER_IF"
+        XDP_URL="$XDP_URL"
+        DIRECT_BACKEND_URL="$DIRECT_BACKEND_URL"
+        VLLM_URL="$VLLM_URL"
+        ENVOY_ONLY_PORT="$ENVOY_ONLY_PORT"
+        ENVOY_ONLY_CONTAINER="$ENVOY_ONLY_CONTAINER"
+        ENVOY_ONLY_URL="$ENVOY_ONLY_URL"
+    )
+    # Only propagate CONCURRENCY when the caller supplied it. Otherwise the
+    # elevated invocation must retain the default full sweep.
+    if [ "${CONCURRENCY+x}" = "x" ]; then
+        sudo_env+=(CONCURRENCY="$CONCURRENCY")
+    fi
+    exec sudo env "${sudo_env[@]}" "$0" "$@"
+fi
+
+cd "$ROOT_DIR"
+
+if [ "$INCLUDE_STRESS" != "0" ] && [ "$INCLUDE_STRESS" != "1" ]; then
+    echo "Error: INCLUDE_STRESS must be 0 or 1." >&2
+    exit 1
+fi
+if [ "$VALIDATE_LOAD" != "0" ] && [ "$VALIDATE_LOAD" != "1" ]; then
+    echo "Error: VALIDATE_LOAD must be 0 or 1." >&2
+    exit 1
+fi
+if [ "$XSR_COMPONENT_PROFILE" != "0" ] && [ "$XSR_COMPONENT_PROFILE" != "1" ]; then
+    echo "Error: XSR_COMPONENT_PROFILE must be 0 or 1." >&2
+    exit 1
+fi
+if ! [[ "$TRIALS" =~ ^[1-9][0-9]*$ ]]; then
+    echo "Error: TRIALS must be a positive integer." >&2
+    exit 1
+fi
+if [ "$TOPOLOGY_MODE" = "docker-parity" ]; then
+    echo "Error: TOPOLOGY_MODE=docker-parity is not supported; use TOPOLOGY_MODE=host." >&2
+    exit 1
+fi
+if [ "$TOPOLOGY_MODE" != "host" ]; then
+    echo "Error: TOPOLOGY_MODE must be 'host' (docker-parity is intentionally rejected)." >&2
+    exit 1
+fi
+
+DEFAULT_SYSTEMS=(direct envoy-only xsr vsr llmrouter)
+if [ -n "$BENCHMARK_SYSTEMS" ]; then
+    IFS=',' read -r -a SELECTED_SYSTEMS <<< "$BENCHMARK_SYSTEMS"
+else
+    SELECTED_SYSTEMS=("${DEFAULT_SYSTEMS[@]}")
+fi
+declare -A SEEN_SYSTEMS=()
+for system in "${SELECTED_SYSTEMS[@]}"; do
+    case "$system" in
+        direct|envoy-only|xsr|vsr|llmrouter) ;;
+        *)
+            echo "Error: unsupported BENCHMARK_SYSTEMS entry '${system}'; use direct,envoy-only,xsr,vsr,llmrouter." >&2
+            exit 1
+            ;;
+    esac
+    if [ "${SEEN_SYSTEMS[$system]+x}" = "x" ]; then
+        echo "Error: duplicate BENCHMARK_SYSTEMS entry '${system}'." >&2
+        exit 1
+    fi
+    SEEN_SYSTEMS[$system]=1
+done
+SELECTED_SYSTEMS_CSV="$(IFS=,; echo "${SELECTED_SYSTEMS[*]}")"
+if [ "$XSR_FORWARDING_ONLY" = "1" ]; then
+    [ "$SELECTED_SYSTEMS_CSV" = "direct,envoy-only,xsr" ] || \
+    [ "$SELECTED_SYSTEMS_CSV" = "direct,xsr,envoy-only" ] || {
+        echo "Error: forwarding-only mode is restricted to direct, envoy-only, and xsr." >&2
+        exit 1
+    }
+elif [ "$XSR_FORWARDING_ONLY" != "0" ]; then
+    echo "Error: XSR_FORWARDING_ONLY must be 0 or 1." >&2
+    exit 1
+fi
+
+system_selected() {
+    [ "${SEEN_SYSTEMS[$1]+x}" = "x" ]
+}
+
+if ! [ "${SEEN_SYSTEMS[xsr]+x}" = "x" ]; then
+    XSR_WARMUP_LIFECYCLE="not-selected"
+    XSR_MEASURED_INSTANCE_WARMED="not-applicable"
+elif [ "$WARMUP_DURATION" = "0" ] || [ "$WARMUP_DURATION" = "0s" ]; then
+    XSR_WARMUP_LIFECYCLE="disabled"
+    XSR_MEASURED_INSTANCE_WARMED="false"
+elif [ "$BENCHMARK_MODE" = "fixed-rate" ]; then
+    XSR_WARMUP_LIFECYCLE="same-process-persistent-connection-warmup"
+    XSR_MEASURED_INSTANCE_WARMED="true"
+else
+    XSR_WARMUP_LIFECYCLE="same-process-load-warmup"
+    XSR_MEASURED_INSTANCE_WARMED="true"
+fi
+
+if [ "$INCLUDE_STRESS" = "1" ]; then
+    DEFAULT_CONCURRENCIES+=("${STRESS_CONCURRENCIES[@]}")
+fi
+
+case "$BENCHMARK_MODE" in
+    saturation)
+        if [ -z "$WRK_BIN" ]; then
+            WRK_BIN="$([ -x "$WRK_LOCAL_BIN" ] && printf '%s' "$WRK_LOCAL_BIN" || printf 'wrk')"
+        fi
+        if ! command -v "$WRK_BIN" >/dev/null 2>&1; then
+            echo "Error: saturation mode requires standard wrk; '${WRK_BIN}' is not available." >&2
+            echo "Install wrk with your package manager, then retry 'sudo make performance'." >&2
+            exit 1
+        fi
+        RATE_ARG=""
+        ;;
+    fixed-rate)
+        WRK_BIN="${ROOT_DIR}/benchmarks/python_latency/client.py"
+        CONCURRENCY="${CONCURRENCY:-4}"
+        ;;
+    *)
+        echo "Error: BENCHMARK_MODE must be 'saturation' or 'fixed-rate' (got '${BENCHMARK_MODE}')." >&2
+        exit 1
+        ;;
+esac
+
+case "$XSR_DISTILL_PARITY_DEBUG" in 0|1) ;; *) echo "Error: XSR_DISTILL_PARITY_DEBUG must be 0 or 1." >&2; exit 1 ;; esac
+REQUESTED_SIGNAL_PROFILE="$SIGNAL_PROFILE"
+SIGNAL_PROFILE="$("$PYTHON_BIN" "${ROOT_DIR}/benchmarks/policy/generate_policy_modules.py" \
+    "$KEYWORD_POLICY" --signal-profile "$SIGNAL_PROFILE" --resolve-only)" || {
+    echo "Error: signal profile does not match ${KEYWORD_POLICY}." >&2
+    exit 1
+}
+if [ "$XSR_DISTILL_PARITY_DEBUG" = 1 ] && \
+   [ "$SIGNAL_PROFILE" != intent ] && [ "$SIGNAL_PROFILE" != mixed ]; then
+    echo "Error: distill parity diagnostics require SIGNAL_PROFILE=intent or mixed." >&2; exit 1
+fi
+if [ "$BENCHMARK_MODE" = fixed-rate ] && [ "$XSR_COMPONENT_PROFILE" = 1 ]; then
+    echo "Error: component profiling is supported only by the throughput driver." >&2
+    exit 1
+fi
+LOCAL_DISTILL_REQUIRED=0
+if system_selected xsr; then
+    LOCAL_DISTILL_REQUIRED=1
+fi
+if [ "$BENCHMARK_PROFILE" = paper ] && [ "$XSR_DISTILL_PARITY_DEBUG" != 0 ]; then
+    echo "Error: paper performance builds require XSR_DISTILL_PARITY_DEBUG=0." >&2; exit 1
+fi
+
+if system_selected llmrouter && [ -z "$LLMROUTER_CONFIG" ]; then
+    if [ "$SIGNAL_PROFILE" = bm25 ]; then
+        LLMROUTER_CONFIG="${ROOT_DIR}/benchmarks/llmrouter/configs/bm25.yaml"
+    elif [ "$SIGNAL_PROFILE" = ngram ]; then
+        LLMROUTER_CONFIG="${ROOT_DIR}/benchmarks/llmrouter/configs/ngram.yaml"
+    elif [ "$SIGNAL_PROFILE" = intent ]; then
+        LLMROUTER_CONFIG="${ROOT_DIR}/benchmarks/llmrouter/configs/intent.yaml"
+    else
+        echo "Error: cannot infer an LLMRouter adapter config from ${KEYWORD_POLICY}; set LLMROUTER_CONFIG explicitly." >&2
+        exit 1
+    fi
+fi
+if system_selected llmrouter; then
+    configured_method="$("$PYTHON_BIN" -c \
+        'import sys; from pathlib import Path; from benchmarks.llmrouter.xsr_router import configured_method; print(configured_method(Path(sys.argv[1])))' \
+        "$LLMROUTER_CONFIG")" || {
+        echo "Error: could not parse LLMRouter config ${LLMROUTER_CONFIG}." >&2
+        exit 1
+    }
+    if [ "$configured_method" != "$SIGNAL_PROFILE" ]; then
+        echo "Error: XSR profile ${SIGNAL_PROFILE} does not match LLMRouter adapter ${configured_method:-unknown}." >&2
+        exit 1
+    fi
+    if [ "$configured_method" = ngram ] || [ "$configured_method" = bm25 ]; then
+        configured_policy="$("$PYTHON_BIN" -c \
+            'import sys; from pathlib import Path; from benchmarks.llmrouter.xsr_router import configured_path; value = configured_path(Path(sys.argv[1]), "policy"); print(value or "")' \
+            "$LLMROUTER_CONFIG")"
+        if [ ! -f "$configured_policy" ] || \
+           [ "$(sha256sum "$configured_policy" | awk '{print $1}')" != "$(sha256sum "$KEYWORD_POLICY" | awk '{print $1}')" ]; then
+            echo "Error: LLMRouter policy does not match KEYWORD_POLICY=${KEYWORD_POLICY}." >&2
+            exit 1
+        fi
+    elif [ "$configured_method" = intent ]; then
+        configured_model="$("$PYTHON_BIN" -c \
+            'import sys; from pathlib import Path; from benchmarks.llmrouter.xsr_router import configured_path; value = configured_path(Path(sys.argv[1]), "model", "XSR_DISTILL_MODEL"); print(value or "")' \
+            "$LLMROUTER_CONFIG")"
+        if [ ! -f "$configured_model" ]; then
+            echo "Error: intent LLMRouter config requires a valid model artifact." >&2
+            exit 1
+        fi
+        if [ -n "$XSR_DISTILL_MODEL" ] && \
+           [ "$(sha256sum "$configured_model" | awk '{print $1}')" != "$(sha256sum "$XSR_DISTILL_MODEL" | awk '{print $1}')" ]; then
+            echo "Error: LLMRouter and XSR distill model artifacts do not match." >&2
+            exit 1
+        fi
+        XSR_DISTILL_MODEL="$configured_model"
+    fi
+fi
+
+if { [ "$SIGNAL_PROFILE" = intent ] || [ "$SIGNAL_PROFILE" = mixed ]; } && \
+   [ "$LOCAL_DISTILL_REQUIRED" = "1" ] && [ -z "$XSR_DISTILL_MODEL" ]; then
+    echo "Error: SIGNAL_PROFILE=${SIGNAL_PROFILE} requires XSR_DISTILL_MODEL." >&2; exit 1
+fi
+if [ "$SIGNAL_PROFILE" != intent ] && [ "$SIGNAL_PROFILE" != mixed ] && [ -n "$XSR_DISTILL_MODEL" ]; then
+    echo "Error: ${SIGNAL_PROFILE} profile contradicts XSR_DISTILL_MODEL; use SIGNAL_PROFILE=mixed explicitly." >&2; exit 1
+fi
+
+if [ "$BENCHMARK_DRY_RUN" = "1" ]; then
+    dry_policy_path=not-applicable; dry_policy_sha256=not-applicable
+    dry_model_path=not-applicable; dry_model_sha256=not-applicable
+    if [ "$SIGNAL_PROFILE" != intent ]; then
+        dry_policy_path="$KEYWORD_POLICY"; dry_policy_sha256="$(sha256sum "$KEYWORD_POLICY" | awk '{print $1}')"
+    fi
+    if [ -n "$XSR_DISTILL_MODEL" ]; then
+        dry_model_path="$XSR_DISTILL_MODEL"; dry_model_sha256="$(sha256sum "$XSR_DISTILL_MODEL" | awk '{print $1}')"
+    fi
+    printf 'profile=%s trials=%s duration=%s warmup_duration=%s build_profile=%s signal_profile_requested=%s effective_compiled_profile=%s parity_debug=%s keyword_policy=%s keyword_policy_sha256=%s distill_model=%s distill_model_sha256=%s vsr_container=%s vsr_asserted_profile=%s vsr_config_path=%s vsr_config_sha256=%s mode=%s tool=%s rates=%q random_seed=%s concurrencies=%q include_stress=%s systems=%s llmrouter_config=%s prompts_file=%s prompts_selection=%s workload_id=%s xsr_warmup_lifecycle=%s xsr_measured_instance_warmed=%s\n' \
+        "$BENCHMARK_PROFILE" "$TRIALS" "$DURATION" "$WARMUP_DURATION" \
+        "$(if [ "$BENCHMARK_PROFILE" = paper ] || [ "$BENCHMARK_PROFILE" = ablation ]; then echo prod; else echo dev; fi)" "$REQUESTED_SIGNAL_PROFILE" "$SIGNAL_PROFILE" "$XSR_DISTILL_PARITY_DEBUG" \
+        "$dry_policy_path" "$dry_policy_sha256" "$dry_model_path" "$dry_model_sha256" \
+        "$VSR_CONTAINER" "${VSR_SIGNAL_PROFILE:-not-supplied}" "${VSR_CONFIG_PATH:-not-supplied}" "${VSR_CONFIG_SHA256:-not-supplied}" "$BENCHMARK_MODE" "$WRK_BIN" \
+        "$([ "$BENCHMARK_MODE" = fixed-rate ] && echo "$RATES" || echo not-applicable)" "$RANDOM_SEED" \
+        "${CONCURRENCY:-${DEFAULT_CONCURRENCIES[*]}}" "$INCLUDE_STRESS" "$SELECTED_SYSTEMS_CSV" "${LLMROUTER_CONFIG:-not-selected}" \
+        "$PROMPTS_FILE" "$([ "$PROMPTS_EXPLICIT" = 1 ] && echo explicit || echo default)" "${WORKLOAD_ID:-auto}" "$XSR_WARMUP_LIFECYCLE" "$XSR_MEASURED_INSTANCE_WARMED"
+    exit 0
+fi
+
+if [ -n "$XSR_DISTILL_MODEL" ] && [ ! -f "$XSR_DISTILL_MODEL" ]; then
+    echo "Error: XSR_DISTILL_MODEL does not exist: ${XSR_DISTILL_MODEL}" >&2
+    exit 1
+fi
+
+BENCHMARK_SYSTEMS="$SELECTED_SYSTEMS_CSV" BENCHMARK_PYTHON="$PYTHON_BIN" \
+    CC="${CC:-cc}" \
+    BENCHMARK_MODE="$BENCHMARK_MODE" WRK_BIN="$WRK_BIN" \
+    NETNS="$NETNS" IFNAME="$IFNAME" XDP_PEER_IF="$XDP_PEER_IF" REQUIRE_BENCHMARK_NETWORK=1 \
+    LLMROUTER_PYTHON="$LLMROUTER_PYTHON" LLMROUTER_BIN="$LLMROUTER_BIN" \
+    VLLM_HOST="$VLLM_HOST" "${SCRIPT_DIR}/check_environments.sh"
+
+mkdir -p "$REPORT_DIR"
+RUN_ID="${RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)-$$}"
+RUN_ROOT="${REPORT_DIR}/${RUN_ID}"
+RAW_DIR="${RUN_ROOT}/raw"
+mkdir -p "$RAW_DIR"
+
+VSR_VERIFICATION=""
+if system_selected vsr; then
+    if [ "$SIGNAL_PROFILE" = mixed ]; then
+        echo "Error: mixed signal profile is not a supported VSR paper baseline." >&2; exit 1
+    fi
+    VSR_VERIFICATION="${RUN_ROOT}/vsr-verification.json"
+    vsr_verify_args=(--container "$VSR_CONTAINER" --envoy-container "$VLLM_HOST" \
+        --envoy-port "$VLLM_PORT" \
+        --profile "$SIGNAL_PROFILE" --output "$VSR_VERIFICATION")
+    [ -n "$VSR_CONFIG_PATH" ] && vsr_verify_args+=(--config "$VSR_CONFIG_PATH")
+    [ -n "$VSR_CONFIG_SHA256" ] && vsr_verify_args+=(--expected-sha256 "$VSR_CONFIG_SHA256")
+    [ -n "$VSR_SIGNAL_PROFILE" ] && vsr_verify_args+=(--asserted-profile "$VSR_SIGNAL_PROFILE")
+    "$PYTHON_BIN" "${SCRIPT_DIR}/verify_vsr_config.py" "${vsr_verify_args[@]}"
+fi
+
+if system_selected xsr; then
+    make -s KEYWORD_POLICY="$BUILD_KEYWORD_POLICY" SIGNAL_PROFILE="$SIGNAL_PROFILE" \
+        XSR_DISTILL_PARITY_DEBUG="$XSR_DISTILL_PARITY_DEBUG" policy
+    EFFECTIVE_COMPILED_PROFILE="$(sed -n 's/^#define XDP_SIGNAL_PROFILE_NAME "\([^"]*\)"/\1/p' "${ROOT_DIR}/bpf/stages/signals/generated/xdp_keyword_modules.generated.h")"
+    EFFECTIVE_PARITY_DEBUG="$(sed -n 's/^#define XSR_DISTILL_PARITY_DEBUG \([01]\)$/\1/p' "${ROOT_DIR}/bpf/stages/signals/generated/xdp_keyword_modules.generated.h")"
+    if [ "$EFFECTIVE_COMPILED_PROFILE" != "$SIGNAL_PROFILE" ] || [ "$EFFECTIVE_PARITY_DEBUG" != "$XSR_DISTILL_PARITY_DEBUG" ]; then
+        echo "Error: generated signal build does not match the requested profile." >&2; exit 1
+    fi
+else
+    EFFECTIVE_COMPILED_PROFILE="not-built"
+    EFFECTIVE_PARITY_DEBUG="not-built"
+fi
+
+WORKLOAD_DESCRIPTOR="${RUN_ROOT}/workload.json"
+prepare_workload_args=(
+    --output "$WORKLOAD_DESCRIPTOR"
+    --prompts "$PROMPTS_FILE"
+    --policy "$KEYWORD_POLICY"
+)
+[ "$PROMPTS_EXPLICIT" = "1" ] && prepare_workload_args+=(--explicit)
+[ -n "$WORKLOAD_ID" ] && prepare_workload_args+=(--workload-id "$WORKLOAD_ID")
+"$PYTHON_BIN" "${SCRIPT_DIR}/prepare_workload.py" "${prepare_workload_args[@]}"
+PROMPTS_FILE=$("$PYTHON_BIN" -c 'import json, sys; print(json.load(open(sys.argv[1]))["prompts"]["path"])' "$WORKLOAD_DESCRIPTOR")
+
+manifest_vsr_args=()
+[ -n "$VSR_VERIFICATION" ] && manifest_vsr_args=(--vsr-verification "$VSR_VERIFICATION")
+"$PYTHON_BIN" "${SCRIPT_DIR}/manifest.py" --path "${RUN_ROOT}/manifest.json" --run-id "$RUN_ID" --profile "$BENCHMARK_PROFILE" \
+    --mode "$BENCHMARK_MODE" --trials "$TRIALS" --duration "$DURATION" --warmup-duration "$WARMUP_DURATION" --seed "$RANDOM_SEED" \
+    --systems "$SELECTED_SYSTEMS_CSV" --include-stress "$INCLUDE_STRESS" \
+    --xsr-warmup-lifecycle "$XSR_WARMUP_LIFECYCLE" --xsr-measured-instance-warmed "$XSR_MEASURED_INSTANCE_WARMED" \
+    --workload-descriptor "$WORKLOAD_DESCRIPTOR" \
+    --signal-profile "$SIGNAL_PROFILE" --parity-debug "$XSR_DISTILL_PARITY_DEBUG" \
+    --requested-signal-profile "$REQUESTED_SIGNAL_PROFILE" \
+    --effective-signal-profile "$EFFECTIVE_COMPILED_PROFILE" --effective-parity-debug "$EFFECTIVE_PARITY_DEBUG" \
+    --policy "$KEYWORD_POLICY" --distill-model "$XSR_DISTILL_MODEL" "${manifest_vsr_args[@]}"
+
+metadata_vsr_args=()
+[ -n "$VSR_VERIFICATION" ] && metadata_vsr_args=(--vsr-verification "$VSR_VERIFICATION")
+"$PYTHON_BIN" "${SCRIPT_DIR}/collect_metadata.py" --output "${RUN_ROOT}/metadata.json" --mode "$BENCHMARK_MODE" \
+    --profile "$BENCHMARK_PROFILE" --trials "$TRIALS" --duration "$DURATION" --warmup-duration "$WARMUP_DURATION" \
+    --concurrency "${CONCURRENCY:-${DEFAULT_CONCURRENCIES[*]}}" --rates "$RATES" --wrk-bin "$WRK_BIN" \
+    --systems "$SELECTED_SYSTEMS_CSV" --include-stress "$INCLUDE_STRESS" \
+    --xsr-warmup-lifecycle "$XSR_WARMUP_LIFECYCLE" --xsr-measured-instance-warmed "$XSR_MEASURED_INSTANCE_WARMED" \
+    --vllm-container "$VLLM_HOST" --vsr-container "$VSR_CONTAINER" \
+    --llmrouter-python "$LLMROUTER_PYTHON" --llmrouter-bin "$LLMROUTER_BIN" --llmrouter-config "${LLMROUTER_CONFIG:-}" \
+    --policy "$KEYWORD_POLICY" --workload-descriptor "$WORKLOAD_DESCRIPTOR" --xsr-distill-model "$XSR_DISTILL_MODEL" \
+    --signal-profile "$SIGNAL_PROFILE" --parity-debug "$XSR_DISTILL_PARITY_DEBUG" \
+    --requested-signal-profile "$REQUESTED_SIGNAL_PROFILE" \
+    --effective-signal-profile "$EFFECTIVE_COMPILED_PROFILE" --effective-parity-debug "$EFFECTIVE_PARITY_DEBUG" \
+    --source-commit "$XSR_SOURCE_COMMIT" --source-working-tree "$XSR_SOURCE_WORKING_TREE" \
+    "${metadata_vsr_args[@]}"
+
+if ! ip netns exec "$NETNS" ip link show dev "$XDP_PEER_IF" >/dev/null 2>&1; then
+    echo "Error: ${NETNS}/${XDP_PEER_IF} is missing. Run 'make setup' first." >&2
+    exit 1
+fi
+if ! command -v curl &> /dev/null; then
+    echo "Error: curl is required to verify vLLM-SR backend routing." >&2
+    exit 1
+fi
+
+# Kill any stale mock_backend or router processes
+pkill -9 mock_backend >/dev/null 2>&1 || true
+pkill -9 sk_router >/dev/null 2>&1 || true
+pkill -9 -f '(^|/)sk_router_forwarding([[:space:]]|$)' >/dev/null 2>&1 || true
+
+echo "Building routing proxy..."
+if system_selected xsr; then
+    if [ "$XSR_FORWARDING_ONLY" = "1" ]; then
+        make clean
+        make KEYWORD_POLICY="$BUILD_KEYWORD_POLICY" SIGNAL_PROFILE="$SIGNAL_PROFILE" policy
+        make ablation-forwarding-build
+    elif [ "$BENCHMARK_PROFILE" = "paper" ] || [ "$BENCHMARK_PROFILE" = "ablation" ]; then
+        make KEYWORD_POLICY="$BUILD_KEYWORD_POLICY" SIGNAL_PROFILE="$SIGNAL_PROFILE" XSR_DISTILL_PARITY_DEBUG="$XSR_DISTILL_PARITY_DEBUG" SK_PROFILE_COMPONENTS="$XSR_COMPONENT_PROFILE" prod
+    else
+        make KEYWORD_POLICY="$BUILD_KEYWORD_POLICY" SIGNAL_PROFILE="$SIGNAL_PROFILE" XSR_DISTILL_PARITY_DEBUG="$XSR_DISTILL_PARITY_DEBUG" SK_PROFILE_COMPONENTS="$XSR_COMPONENT_PROFILE" dev
+    fi
+fi
+if system_selected xsr; then
+    compiled_profile="$(sed -n 's/^#define XDP_SIGNAL_PROFILE_NAME "\([^"]*\)"/\1/p' "${ROOT_DIR}/bpf/stages/signals/generated/xdp_keyword_modules.generated.h")"
+    compiled_parity="$(sed -n 's/^#define XSR_DISTILL_PARITY_DEBUG \([01]\)$/\1/p' "${ROOT_DIR}/bpf/stages/signals/generated/xdp_keyword_modules.generated.h")"
+    if [ "$compiled_profile" != "$SIGNAL_PROFILE" ] || [ "$compiled_parity" != "$XSR_DISTILL_PARITY_DEBUG" ]; then
+        echo "Error: requested signal build ${SIGNAL_PROFILE}/parity=${XSR_DISTILL_PARITY_DEBUG}, generated ${compiled_profile:-unknown}/parity=${compiled_parity:-unknown}." >&2
+        exit 1
+    fi
+fi
+echo "Building marker backends..."
+make benchmarks/mock_backend
+if [ ! -x ./benchmarks/mock_backend ]; then
+    echo "Error: mock backend executable is unavailable after benchmark preparation." >&2
+    exit 1
+fi
+
+# Flush old iptables rules for these ports
+iptables -D INPUT -p tcp --dport "${XDP_PORT}" -j ACCEPT >/dev/null 2>&1 || true
+iptables -D INPUT -p tcp --dport "${CODING_BACKEND_PORT}" -j ACCEPT >/dev/null 2>&1 || true
+iptables -D INPUT -p tcp --dport "${MATH_BACKEND_PORT}" -j ACCEPT >/dev/null 2>&1 || true
+iptables -D INPUT -p tcp --dport "${OTHERS_BACKEND_PORT}" -j ACCEPT >/dev/null 2>&1 || true
+iptables -D INPUT -p tcp --dport "${QA_BACKEND_PORT}" -j ACCEPT >/dev/null 2>&1 || true
+iptables -D INPUT -p tcp --dport "${WRITING_BACKEND_PORT}" -j ACCEPT >/dev/null 2>&1 || true
+iptables -D INPUT -p tcp --dport "${VLLM_BACKEND_PORT}" -j ACCEPT >/dev/null 2>&1 || true
+if system_selected llmrouter; then
+    iptables -D INPUT -p tcp --dport "${LLMROUTER_PORT}" -j ACCEPT >/dev/null 2>&1 || true
+fi
+
+# Add iptables rules
+iptables -I INPUT 1 -p tcp --dport "${XDP_PORT}" -j ACCEPT >/dev/null 2>&1 || true
+iptables -I INPUT 1 -p tcp --dport "${CODING_BACKEND_PORT}" -j ACCEPT >/dev/null 2>&1 || true
+iptables -I INPUT 1 -p tcp --dport "${MATH_BACKEND_PORT}" -j ACCEPT >/dev/null 2>&1 || true
+iptables -I INPUT 1 -p tcp --dport "${OTHERS_BACKEND_PORT}" -j ACCEPT >/dev/null 2>&1 || true
+iptables -I INPUT 1 -p tcp --dport "${QA_BACKEND_PORT}" -j ACCEPT >/dev/null 2>&1 || true
+iptables -I INPUT 1 -p tcp --dport "${WRITING_BACKEND_PORT}" -j ACCEPT >/dev/null 2>&1 || true
+iptables -I INPUT 1 -p tcp --dport "${VLLM_BACKEND_PORT}" -j ACCEPT >/dev/null 2>&1 || true
+if system_selected llmrouter; then
+    iptables -I INPUT 1 -p tcp --dport "${LLMROUTER_PORT}" -j ACCEPT >/dev/null 2>&1 || true
+fi
+
+# Keep XDP exposed to ordinary MTU-sized TCP segments during benchmark runs.
+ip link set dev "$IFNAME" mtu 1500
+ip netns exec "$NETNS" ip link set dev "$XDP_PEER_IF" mtu 1500
+ethtool -K "$IFNAME" gro off gso off tso off lro off 2>/dev/null || true
+ip netns exec "$NETNS" ethtool -K "$XDP_PEER_IF" gro off gso off tso off lro off 2>/dev/null || true
+
+# Start marker backends for routing.
+echo "Starting coding backend on port ${CODING_BACKEND_PORT}..."
+./benchmarks/mock_backend "${CODING_BACKEND_PORT}" coding > /dev/null 2>&1 &
+CODING_MOCK_PID=$!
+
+MATH_MOCK_PID=""
+OTHERS_MOCK_PID=""
+QA_MOCK_PID=""
+WRITING_MOCK_PID=""
+if [ "$XSR_FORWARDING_ONLY" != "1" ]; then
+    echo "Starting math backend on port ${MATH_BACKEND_PORT}..."
+    ./benchmarks/mock_backend "${MATH_BACKEND_PORT}" math > /dev/null 2>&1 &
+    MATH_MOCK_PID=$!
+
+    echo "Starting others backend on port ${OTHERS_BACKEND_PORT}..."
+    ./benchmarks/mock_backend "${OTHERS_BACKEND_PORT}" others > /dev/null 2>&1 &
+    OTHERS_MOCK_PID=$!
+
+    echo "Starting QA backend on port ${QA_BACKEND_PORT}..."
+    ./benchmarks/mock_backend "${QA_BACKEND_PORT}" qa > /dev/null 2>&1 &
+    QA_MOCK_PID=$!
+
+    echo "Starting writing backend on port ${WRITING_BACKEND_PORT}..."
+    ./benchmarks/mock_backend "${WRITING_BACKEND_PORT}" writing > /dev/null 2>&1 &
+    WRITING_MOCK_PID=$!
+fi
+
+VLLM_MOCK_PID=""
+if [ "$START_VLLM_MOCK" = "1" ]; then
+    echo "Starting auxiliary mock HTTP backend for vLLM-SR on port ${VLLM_BACKEND_PORT}..."
+    ./benchmarks/mock_backend "${VLLM_BACKEND_PORT}" others > /dev/null 2>&1 &
+    VLLM_MOCK_PID=$!
+fi
+
+ROUTER_PID=""
+ROUTER_LOG="/tmp/sk_router_wrk.log"
+ROUTER_STATUS_SOCKET=""
+LLMROUTER_PID=""
+LLMROUTER_LOG="${RUN_ROOT}/raw/llmrouter-server.log"
+VLLM_IF=""
+ENVOY_ONLY_IP=""
+ENVOY_ONLY_IF=""
+ENVOY_ONLY_ROUTE_ADDED=0
+ENVOY_ONLY_NAT_ADDED=0
+ENVOY_ONLY_RAW_ACCEPT_ADDED=0
+ENVOY_ONLY_FORWARD_OUT_ADDED=0
+ENVOY_ONLY_FORWARD_RETURN_ADDED=0
+VLLM_ROUTE_ADDED=0
+VLLM_NAT_ADDED=0
+VLLM_RAW_ACCEPT_ADDED=0
+VLLM_FORWARD_OUT_ADDED=0
+VLLM_FORWARD_RETURN_ADDED=0
+IP_FORWARD_CHANGED=0
+ORIGINAL_IP_FORWARD=""
+
+wait_for_ns_port() {
+    local host="$1"
+    local port="$2"
+    local name="$3"
+    local timeout_seconds="${4:-10}"
+    local deadline=$((SECONDS + timeout_seconds))
+
+    while [ "$SECONDS" -lt "$deadline" ]; do
+        if timeout 1 ip netns exec "$NETNS" bash -c ":</dev/tcp/${host}/${port}" >/dev/null 2>&1; then
+            return 0
+        fi
+        sleep 0.1
+    done
+
+    echo "Error: ${name} is not reachable from ${NETNS} at ${host}:${port} after ${timeout_seconds} seconds." >&2
+    return 1
+}
+
+wait_for_router_ready() {
+    local name="$1"
+    local deadline=$((SECONDS + 10))
+
+    while [ "$SECONDS" -lt "$deadline" ]; do
+        if ! kill -0 "$ROUTER_PID" >/dev/null 2>&1; then
+            echo "Error: sk_router exited before ${name} opened:"
+            cat "$ROUTER_LOG"
+            exit 1
+        fi
+        # A TCP readiness connection allocates a six-socket SOCKMAP set which
+        # this router cannot yet reap. Use the startup log so readiness itself
+        # does not contaminate the measured instance with stale sockets.
+        if grep -Eq '(SK_SKB router|XDP-classified routing proxy) listening' "$ROUTER_LOG" 2>/dev/null; then
+            return 0
+        fi
+        sleep 0.1
+    done
+
+    echo "Error: ${name} did not report ready; router log:"
+    cat "$ROUTER_LOG"
+    exit 1
+}
+
+start_llmrouter() {
+    echo "Starting LLMRouter baseline..."
+    mkdir -p "$(dirname "$LLMROUTER_LOG")"
+    LLMROUTER_PLUGINS="$LLMROUTER_PLUGIN_DIR" \
+        "$LLMROUTER_PYTHON" "$LLMROUTER_SERVE_SCRIPT" \
+        --config "$LLMROUTER_SERVE_CONFIG" \
+        --router xsr_reference \
+        --router-config "$LLMROUTER_CONFIG" \
+        --host 0.0.0.0 \
+        --port "$LLMROUTER_PORT" > "$LLMROUTER_LOG" 2>&1 &
+    LLMROUTER_PID=$!
+    if ! wait_for_ns_port "10.10.0.1" "$LLMROUTER_PORT" "LLMRouter baseline" "$LLMROUTER_START_TIMEOUT"; then
+        cat "$LLMROUTER_LOG" >&2 || true
+        return 1
+    fi
+}
+
+preflight_routing_cases() {
+    if [ "$SIGNAL_PROFILE" = intent ] || [ "$SIGNAL_PROFILE" = mixed ]; then
+        cat <<'EOF'
+coding|write a python function
+math|calculate the derivative of x squared
+others|answer this question: what is the capital of France?
+others|write a short poem about rain
+others|tell me a short story
+EOF
+    else
+        cat <<'EOF'
+coding|write a python function
+math|calculate the derivative of x squared
+qa|answer this question: what is the capital of France?
+writing|write a short poem about rain
+others|tell me a short story
+EOF
+    fi
+}
+
+verify_llmrouter_backend_routing() {
+    local expected prompt response
+
+    echo "Verifying LLMRouter routes reach distinct marker backends..."
+    while IFS='|' read -r expected prompt; do
+        response=$(ip netns exec "$NETNS" curl --silent --show-error --fail \
+            --max-time 10 -H 'Content-Type: application/json' \
+            --data "{\"model\":\"auto\",\"messages\":[{\"role\":\"user\",\"content\":\"${prompt}\"}]}" \
+            "$LLMROUTER_URL") || {
+            echo "Error: LLMRouter preflight request for ${expected} failed." >&2
+            return 1
+        }
+        # Upstream normalizes backend responses into its OpenAI response model,
+        # dropping the mock backend's custom `backend` property. It sets the
+        # selected backend name in the standard `model` field after forwarding.
+        if ! grep -Fq "\"model\":\"${expected}\"" <<<"$response"; then
+            echo "Error: LLMRouter preflight expected model=${expected}, got: ${response}" >&2
+            return 1
+        fi
+    done < <(preflight_routing_cases)
+}
+
+setup_vllm_route() {
+    if [ -z "$VLLM_IP" ]; then
+        VLLM_IP="$(getent ahostsv4 "$VLLM_HOST" | awk 'NR == 1 { print $1 }')"
+    fi
+    # Docker DNS is only available to containers attached to the same Docker
+    # network. When the benchmark is launched on the Docker host, query the
+    # already-running Envoy's address as a metadata fallback; this neither
+    # starts containers nor uses Docker-in-Docker.
+    if [ -z "$VLLM_IP" ] && command -v docker >/dev/null 2>&1; then
+        VLLM_IP="$(docker inspect -f '{{range .NetworkSettings.Networks}}{{if .IPAddress}}{{.IPAddress}}{{end}}{{end}}' "$VLLM_HOST" 2>/dev/null || true)"
+    fi
+    if [ -z "$VLLM_IP" ]; then
+        echo "Error: could not resolve ${VLLM_HOST} to an IPv4 address. Set VLLM_IP explicitly if Docker DNS/CLI is unavailable." >&2
+        return 1
+    fi
+
+    VLLM_IF="$(ip route get "$VLLM_IP" | awk '/ dev / { for (i = 1; i <= NF; i++) if ($i == "dev") { print $(i + 1); exit } }')"
+    if [ -z "$VLLM_IF" ]; then
+        echo "Error: could not determine the interface used to reach ${VLLM_HOST} (${VLLM_IP})." >&2
+        return 1
+    fi
+
+    ORIGINAL_IP_FORWARD="$(sysctl -n net.ipv4.ip_forward)"
+    if [ "$ORIGINAL_IP_FORWARD" != "1" ]; then
+        sysctl -w net.ipv4.ip_forward=1 >/dev/null
+        IP_FORWARD_CHANGED=1
+    fi
+
+    if ! ip netns exec "$NETNS" ip route show exact "${VLLM_IP}/32" | grep -q .; then
+        ip netns exec "$NETNS" ip route add "${VLLM_IP}/32" via 10.10.0.1 dev "$XDP_PEER_IF"
+        VLLM_ROUTE_ADDED=1
+    fi
+
+    # Docker protects container IPs with raw/PREROUTING DROP rules before the
+    # FORWARD chain. Permit only ns1's TCP traffic to this Envoy endpoint so
+    # the scoped FORWARD and NAT rules below can process it.
+    if ! iptables -t raw -C PREROUTING -i "$IFNAME" -s 10.10.0.0/24 -d "$VLLM_IP" -p tcp --dport "$VLLM_PORT" -j ACCEPT 2>/dev/null; then
+        iptables -t raw -I PREROUTING 1 -i "$IFNAME" -s 10.10.0.0/24 -d "$VLLM_IP" -p tcp --dport "$VLLM_PORT" -j ACCEPT
+        VLLM_RAW_ACCEPT_ADDED=1
+    fi
+    if ! iptables -t nat -C POSTROUTING -s 10.10.0.0/24 -d "$VLLM_IP" -o "$VLLM_IF" -j MASQUERADE 2>/dev/null; then
+        iptables -t nat -A POSTROUTING -s 10.10.0.0/24 -d "$VLLM_IP" -o "$VLLM_IF" -j MASQUERADE
+        VLLM_NAT_ADDED=1
+    fi
+    if ! iptables -C FORWARD -s 10.10.0.0/24 -d "$VLLM_IP" -o "$VLLM_IF" -p tcp --dport "$VLLM_PORT" -j ACCEPT 2>/dev/null; then
+        iptables -I FORWARD 1 -s 10.10.0.0/24 -d "$VLLM_IP" -o "$VLLM_IF" -p tcp --dport "$VLLM_PORT" -j ACCEPT
+        VLLM_FORWARD_OUT_ADDED=1
+    fi
+    if ! iptables -C FORWARD -s "$VLLM_IP" -d 10.10.0.0/24 -i "$VLLM_IF" -p tcp --sport "$VLLM_PORT" -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT 2>/dev/null; then
+        iptables -I FORWARD 1 -s "$VLLM_IP" -d 10.10.0.0/24 -i "$VLLM_IF" -p tcp --sport "$VLLM_PORT" -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+        VLLM_FORWARD_RETURN_ADDED=1
+    fi
+
+    if [ -z "$VLLM_URL" ]; then
+        VLLM_URL="http://${VLLM_IP}:${VLLM_PORT}/v1/chat/completions"
+    fi
+    wait_for_ns_port "$VLLM_IP" "$VLLM_PORT" "vLLM-SR Envoy (${VLLM_HOST})"
+}
+
+start_envoy_only() {
+    local network gateway image config
+    local -a envoy_config_args
+    command -v docker >/dev/null 2>&1 || { echo "Error: Docker is required for the Envoy-only benchmark baseline." >&2; return 1; }
+    network="$(docker inspect -f '{{range $name, $_ := .NetworkSettings.Networks}}{{println $name}}{{end}}' "$VLLM_HOST" 2>/dev/null | head -n1 || true)"
+    network="${network:-${ENVOY_ONLY_NETWORK:-bridge}}"
+    [ -n "$network" ] || { echo "Error: could not determine Docker network for ${VLLM_HOST}." >&2; return 1; }
+    gateway="$(docker network inspect -f '{{(index .IPAM.Config 0).Gateway}}' "$network" 2>/dev/null)"
+    [ -n "$gateway" ] || { echo "Error: could not determine Docker gateway for ${network}." >&2; return 1; }
+    image="${VLLM_ENVOY_IMAGE:-$(docker inspect -f '{{.Config.Image}}' "$VLLM_HOST" 2>/dev/null || true)}"
+    image="${image:-${ENVOY_ONLY_IMAGE:-envoyproxy/envoy:v1.34-latest}}"
+    [ -n "$image" ] || { echo "Error: could not determine Envoy image for ${VLLM_HOST}." >&2; return 1; }
+    config="${RAW_DIR}/envoy-only.json"
+    envoy_config_args=(--gateway "$gateway" --port "$ENVOY_ONLY_PORT" \
+        --coding-port "$CODING_BACKEND_PORT" --math-port "$MATH_BACKEND_PORT" --qa-port "$QA_BACKEND_PORT" \
+        --writing-port "$WRITING_BACKEND_PORT" --others-port "$OTHERS_BACKEND_PORT" --output "$config")
+    [ "$XSR_FORWARDING_ONLY" = "1" ] && envoy_config_args+=(--fixed-backend coding)
+    "$PYTHON_BIN" "${SCRIPT_DIR}/generate_envoy_only_config.py" "${envoy_config_args[@]}"
+    if grep -q 'ext_proc' "$config"; then
+        echo "Error: generated Envoy-only configuration unexpectedly contains ExtProc." >&2
+        return 1
+    fi
+    docker rm -f "$ENVOY_ONLY_CONTAINER" >/dev/null 2>&1 || true
+    docker run -d --name "$ENVOY_ONLY_CONTAINER" --network "$network" \
+        -v "${config}:/etc/envoy/envoy.yaml:ro" "$image" \
+        envoy --config-path /etc/envoy/envoy.yaml >/dev/null
+    if ! docker exec "$ENVOY_ONLY_CONTAINER" envoy --mode validate --config-path /etc/envoy/envoy.yaml >/dev/null 2>&1; then
+        docker logs "$ENVOY_ONLY_CONTAINER" >&2 || true
+        echo "Error: Envoy-only configuration validation failed." >&2
+        return 1
+    fi
+    ENVOY_ONLY_IP="$(docker inspect -f '{{range .NetworkSettings.Networks}}{{if .IPAddress}}{{.IPAddress}}{{end}}{{end}}' "$ENVOY_ONLY_CONTAINER")"
+    [ -n "$ENVOY_ONLY_IP" ] || { echo "Error: Envoy-only container has no bridge IP." >&2; return 1; }
+}
+
+setup_envoy_only_route() {
+    ENVOY_ONLY_IF="$(ip route get "$ENVOY_ONLY_IP" | awk '/ dev / { for (i = 1; i <= NF; i++) if ($i == "dev") { print $(i + 1); exit } }')"
+    [ -n "$ENVOY_ONLY_IF" ] || { echo "Error: could not determine interface to Envoy-only container." >&2; return 1; }
+    if ! ip netns exec "$NETNS" ip route show exact "${ENVOY_ONLY_IP}/32" | grep -q .; then
+        ip netns exec "$NETNS" ip route add "${ENVOY_ONLY_IP}/32" via 10.10.0.1 dev "$XDP_PEER_IF"
+        ENVOY_ONLY_ROUTE_ADDED=1
+    fi
+    iptables -t raw -C PREROUTING -i "$IFNAME" -s 10.10.0.0/24 -d "$ENVOY_ONLY_IP" -p tcp --dport "$ENVOY_ONLY_PORT" -j ACCEPT 2>/dev/null || { iptables -t raw -I PREROUTING 1 -i "$IFNAME" -s 10.10.0.0/24 -d "$ENVOY_ONLY_IP" -p tcp --dport "$ENVOY_ONLY_PORT" -j ACCEPT; ENVOY_ONLY_RAW_ACCEPT_ADDED=1; }
+    iptables -t nat -C POSTROUTING -s 10.10.0.0/24 -d "$ENVOY_ONLY_IP" -o "$ENVOY_ONLY_IF" -j MASQUERADE 2>/dev/null || { iptables -t nat -A POSTROUTING -s 10.10.0.0/24 -d "$ENVOY_ONLY_IP" -o "$ENVOY_ONLY_IF" -j MASQUERADE; ENVOY_ONLY_NAT_ADDED=1; }
+    iptables -C FORWARD -s 10.10.0.0/24 -d "$ENVOY_ONLY_IP" -o "$ENVOY_ONLY_IF" -p tcp --dport "$ENVOY_ONLY_PORT" -j ACCEPT 2>/dev/null || { iptables -I FORWARD 1 -s 10.10.0.0/24 -d "$ENVOY_ONLY_IP" -o "$ENVOY_ONLY_IF" -p tcp --dport "$ENVOY_ONLY_PORT" -j ACCEPT; ENVOY_ONLY_FORWARD_OUT_ADDED=1; }
+    iptables -C FORWARD -s "$ENVOY_ONLY_IP" -d 10.10.0.0/24 -i "$ENVOY_ONLY_IF" -p tcp --sport "$ENVOY_ONLY_PORT" -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT 2>/dev/null || { iptables -I FORWARD 1 -s "$ENVOY_ONLY_IP" -d 10.10.0.0/24 -i "$ENVOY_ONLY_IF" -p tcp --sport "$ENVOY_ONLY_PORT" -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT; ENVOY_ONLY_FORWARD_RETURN_ADDED=1; }
+    ENVOY_ONLY_URL="http://${ENVOY_ONLY_IP}:${ENVOY_ONLY_PORT}/v1/chat/completions"
+    wait_for_ns_port "$ENVOY_ONLY_IP" "$ENVOY_ONLY_PORT" "Envoy-only baseline"
+}
+
+verify_envoy_only_backend_routing() {
+    local expected response
+    echo "Verifying Envoy-only forwarding reaches every marker backend..."
+    for expected in coding math qa writing others; do
+        response=$(ip netns exec "$NETNS" curl --silent --show-error --fail --max-time 10 \
+            -H 'Content-Type: application/json' -H "x-benchmark-backend: ${expected}" \
+            --data '{"model":"MoM","messages":[{"role":"user","content":"benchmark"}]}' "$ENVOY_ONLY_URL") || return 1
+        grep -Fq "\"backend\":\"${expected}\"" <<<"$response" || { echo "Error: Envoy-only expected backend=${expected}, got: ${response}" >&2; return 1; }
+    done
+}
+
+verify_envoy_only_fixed_backend() {
+    local response
+    echo "Verifying Envoy-only fixed coding backend..."
+    response=$(ip netns exec "$NETNS" curl --silent --show-error --fail --max-time 10 \
+        -H 'Content-Type: application/json' \
+        --data '{"model":"MoM","messages":[{"role":"user","content":"benchmark"}]}' "$ENVOY_ONLY_URL") || return 1
+    grep -Fq '"backend":"coding"' <<<"$response" || {
+        echo "Error: Envoy-only fixed backend expected coding, got: $response" >&2
+        return 1
+    }
+}
+
+verify_vllm_backend_routing() {
+    local expected prompt response
+
+    echo "Verifying vLLM-SR routes reach distinct marker backends..."
+    while IFS='|' read -r expected prompt; do
+        response=$(ip netns exec "$NETNS" curl --silent --show-error --fail \
+            --max-time 10 -H 'Content-Type: application/json' \
+            --data "{\"model\":\"MoM\",\"messages\":[{\"role\":\"user\",\"content\":\"${prompt}\"}]}" \
+            "$VLLM_URL") || {
+            echo "Error: vLLM-SR preflight request for ${expected} failed." >&2
+            return 1
+        }
+        if ! grep -Fq "\"backend\":\"${expected}\"" <<<"$response"; then
+            echo "Error: vLLM-SR preflight expected backend=${expected}, got: ${response}" >&2
+            return 1
+        fi
+    done < <(preflight_routing_cases)
+}
+
+check_marker_backend_processes() {
+    local pid
+    for pid in "$CODING_MOCK_PID" "$MATH_MOCK_PID" "$OTHERS_MOCK_PID" "$QA_MOCK_PID" "$WRITING_MOCK_PID"; do
+        [ -z "$pid" ] && continue
+        if ! kill -0 "$pid" >/dev/null 2>&1; then
+            echo "Error: a marker backend exited after the invocation-level reachability check." >&2
+            return 1
+        fi
+    done
+}
+
+cleanup() {
+    echo ""
+    echo "Cleaning up processes and network rules..."
+    for pid in "$ROUTER_PID" "$LLMROUTER_PID" "$CODING_MOCK_PID" "$MATH_MOCK_PID" "$OTHERS_MOCK_PID" "$QA_MOCK_PID" "$WRITING_MOCK_PID" "$VLLM_MOCK_PID"; do
+        if [ -n "$pid" ]; then
+            kill -9 "$pid" >/dev/null 2>&1 || true
+            wait "$pid" 2>/dev/null || true
+        fi
+    done
+    [ -n "$ROUTER_STATUS_SOCKET" ] && rm -f "$ROUTER_STATUS_SOCKET"
+    iptables -D INPUT -p tcp --dport "${XDP_PORT}" -j ACCEPT >/dev/null 2>&1 || true
+    iptables -D INPUT -p tcp --dport "${CODING_BACKEND_PORT}" -j ACCEPT >/dev/null 2>&1 || true
+    iptables -D INPUT -p tcp --dport "${MATH_BACKEND_PORT}" -j ACCEPT >/dev/null 2>&1 || true
+    iptables -D INPUT -p tcp --dport "${OTHERS_BACKEND_PORT}" -j ACCEPT >/dev/null 2>&1 || true
+    iptables -D INPUT -p tcp --dport "${QA_BACKEND_PORT}" -j ACCEPT >/dev/null 2>&1 || true
+    iptables -D INPUT -p tcp --dport "${WRITING_BACKEND_PORT}" -j ACCEPT >/dev/null 2>&1 || true
+    iptables -D INPUT -p tcp --dport "${VLLM_BACKEND_PORT}" -j ACCEPT >/dev/null 2>&1 || true
+    if system_selected llmrouter; then
+        iptables -D INPUT -p tcp --dport "${LLMROUTER_PORT}" -j ACCEPT >/dev/null 2>&1 || true
+    fi
+    if [ "$VLLM_NAT_ADDED" = "1" ]; then
+        iptables -t nat -D POSTROUTING -s 10.10.0.0/24 -d "$VLLM_IP" -o "$VLLM_IF" -j MASQUERADE >/dev/null 2>&1 || true
+    fi
+    if [ "$VLLM_RAW_ACCEPT_ADDED" = "1" ]; then
+        iptables -t raw -D PREROUTING -i "$IFNAME" -s 10.10.0.0/24 -d "$VLLM_IP" -p tcp --dport "$VLLM_PORT" -j ACCEPT >/dev/null 2>&1 || true
+    fi
+    if [ "$VLLM_FORWARD_OUT_ADDED" = "1" ]; then
+        iptables -D FORWARD -s 10.10.0.0/24 -d "$VLLM_IP" -o "$VLLM_IF" -p tcp --dport "$VLLM_PORT" -j ACCEPT >/dev/null 2>&1 || true
+    fi
+    if [ "$VLLM_FORWARD_RETURN_ADDED" = "1" ]; then
+        iptables -D FORWARD -s "$VLLM_IP" -d 10.10.0.0/24 -i "$VLLM_IF" -p tcp --sport "$VLLM_PORT" -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT >/dev/null 2>&1 || true
+    fi
+    if [ "$VLLM_ROUTE_ADDED" = "1" ]; then
+        ip netns exec "$NETNS" ip route del "${VLLM_IP}/32" via 10.10.0.1 dev "$XDP_PEER_IF" >/dev/null 2>&1 || true
+    fi
+    docker rm -f "$ENVOY_ONLY_CONTAINER" >/dev/null 2>&1 || true
+    [ "$ENVOY_ONLY_NAT_ADDED" = "1" ] && iptables -t nat -D POSTROUTING -s 10.10.0.0/24 -d "$ENVOY_ONLY_IP" -o "$ENVOY_ONLY_IF" -j MASQUERADE >/dev/null 2>&1 || true
+    [ "$ENVOY_ONLY_RAW_ACCEPT_ADDED" = "1" ] && iptables -t raw -D PREROUTING -i "$IFNAME" -s 10.10.0.0/24 -d "$ENVOY_ONLY_IP" -p tcp --dport "$ENVOY_ONLY_PORT" -j ACCEPT >/dev/null 2>&1 || true
+    [ "$ENVOY_ONLY_FORWARD_OUT_ADDED" = "1" ] && iptables -D FORWARD -s 10.10.0.0/24 -d "$ENVOY_ONLY_IP" -o "$ENVOY_ONLY_IF" -p tcp --dport "$ENVOY_ONLY_PORT" -j ACCEPT >/dev/null 2>&1 || true
+    [ "$ENVOY_ONLY_FORWARD_RETURN_ADDED" = "1" ] && iptables -D FORWARD -s "$ENVOY_ONLY_IP" -d 10.10.0.0/24 -i "$ENVOY_ONLY_IF" -p tcp --sport "$ENVOY_ONLY_PORT" -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT >/dev/null 2>&1 || true
+    [ "$ENVOY_ONLY_ROUTE_ADDED" = "1" ] && ip netns exec "$NETNS" ip route del "${ENVOY_ONLY_IP}/32" via 10.10.0.1 dev "$XDP_PEER_IF" >/dev/null 2>&1 || true
+    if [ "$IP_FORWARD_CHANGED" = "1" ]; then
+        sysctl -w "net.ipv4.ip_forward=${ORIGINAL_IP_FORWARD}" >/dev/null 2>&1 || true
+    fi
+    if [ -n "$SUDO_USER" ]; then
+        chown -R "$SUDO_USER:" "$REPORT_DIR" 2>/dev/null || true
+    fi
+}
+trap cleanup EXIT
+
+detach_xdp() {
+    # A prior benchmark may have left an XDP program attached after its
+    # userspace router exited. The direct control must not traverse it.
+    if ! ip link set dev "$IFNAME" xdp off; then
+        echo "Error: could not detach XDP from ${IFNAME}; refusing to run a non-control baseline."
+        return 1
+    fi
+    if ip -details link show dev "$IFNAME" | grep -q 'prog/xdp'; then
+        echo "Error: XDP remains attached to ${IFNAME}; refusing to run a non-control baseline."
+        return 1
+    fi
+}
+
+start_routing_proxy() {
+    local mode="${1:-proxy}"
+    local log_path="${2:-/tmp/sk_router_wrk.log}"
+    local router_binary
+
+    echo "Starting routing proxy (${mode})..."
+    ROUTER_LOG="$log_path"
+    mkdir -p "$(dirname "$ROUTER_LOG")"
+    if [ "$mode" = "sockmap" ]; then
+        ROUTER_STATUS_SOCKET="/tmp/xsr-status-${BASHPID}-${RANDOM}.sock"
+        rm -f "$ROUTER_STATUS_SOCKET"
+        router_binary=./sk_router
+        [ "$XSR_FORWARDING_ONLY" = "1" ] && router_binary=./sk_router_forwarding
+        SK_ROUTER_MODE=sockmap XSR_STATUS_SOCKET="$ROUTER_STATUS_SOCKET" "$router_binary" > "$ROUTER_LOG" 2>&1 &
+    else
+        ROUTER_STATUS_SOCKET=""
+        ./sk_router > "$ROUTER_LOG" 2>&1 &
+    fi
+    ROUTER_PID=$!
+    wait_for_router_ready "routing frontend"
+}
+
+verify_router_backend_routing() {
+    local name="$1"
+    local expected prompt response
+
+    echo "Verifying ${name} reaches distinct marker backends..."
+    while IFS='|' read -r expected prompt; do
+        response=$(ip netns exec "$NETNS" curl --silent --show-error --fail \
+            --max-time 10 -H 'Content-Type: application/json' \
+            --data "{\"model\":\"MoM\",\"messages\":[{\"role\":\"user\",\"content\":\"${prompt}\"}]}" \
+            "$XDP_URL") || {
+            echo "Error: ${name} preflight request for ${expected} failed." >&2
+            return 1
+        }
+        if ! grep -Fq "\"backend\":\"${expected}\"" <<<"$response"; then
+            echo "Error: ${name} preflight expected backend=${expected}, got: ${response}" >&2
+            return 1
+        fi
+    done < <(preflight_routing_cases)
+}
+
+verify_forwarding_only_backend() {
+    local response
+    response=$(ip netns exec "$NETNS" curl --silent --show-error --fail \
+        --max-time 10 -H 'Content-Type: application/json' \
+        --data '{"model":"MoM","messages":[{"role":"user","content":"this text must not be classified"}]}' \
+        "$XDP_URL") || return 1
+    grep -Fq '"backend":"coding"' <<<"$response" || {
+        echo "Error: forwarding-only XSR did not select the fixed coding backend: $response" >&2
+        return 1
+    }
+    grep -Fq 'semantic routing disabled' "$ROUTER_LOG" || {
+        echo "Error: forwarding-only build marker missing from XSR log." >&2
+        return 1
+    }
+}
+
+validate_untimed_load() {
+    local name="$1"
+    local url="$2"
+    if [ "$VALIDATE_LOAD" = "1" ]; then
+        echo "Running untimed concurrent load validation for ${name}..."
+        "$PYTHON_BIN" "${SCRIPT_DIR}/validate_load.py" --url "$url" > "${RAW_DIR}/${name//[^a-zA-Z0-9]/_}.load-validation.txt"
+    fi
+}
+
+stop_routing_proxy() {
+    if [ -n "$ROUTER_PID" ]; then
+        kill -9 "$ROUTER_PID" >/dev/null 2>&1 || true
+        wait "$ROUTER_PID" 2>/dev/null || true
+        ROUTER_PID=""
+    fi
+    [ -n "$ROUTER_STATUS_SOCKET" ] && rm -f "$ROUTER_STATUS_SOCKET"
+    ROUTER_STATUS_SOCKET=""
+}
+
+run_wrk() {
+    local output status raw_file reason_file reason
+    raw_file="${RAW_DIR}/${3}/wrk.txt"
+    reason_file="${RAW_DIR}/${3}/invalid.txt"
+    mkdir -p "${RAW_DIR}/${3}"
+    if [ "$BENCHMARK_MODE" = "fixed-rate" ]; then
+        local duration_seconds="${DURATION%s}"
+        local warmup_seconds="${WARMUP_DURATION%s}"
+        raw_file="${RAW_DIR}/${3}/stdout.txt"
+        set +e
+        ip netns exec "$NETNS" "$PYTHON_BIN" \
+            "${ROOT_DIR}/benchmarks/python_latency/client.py" \
+            --url "$1" --rate "$RATE" --connections "$CONCURRENCY" \
+            --duration "$duration_seconds" --warmup "$warmup_seconds" \
+            --prompts "$PROMPTS_FILE" --system "$2" --trial "$CURRENT_TRIAL" \
+            --output-dir "${RAW_DIR}/${3}" --connection-audit \
+            > "$raw_file" 2>&1
+        status=$?
+        set -e
+        cat "$raw_file"
+        if [ "$status" -ne 0 ]; then
+            printf 'fixed-rate client exit status=%s\n' "$status" > "$reason_file"
+            return "$status"
+        fi
+        if ! "$PYTHON_BIN" - "${RAW_DIR}/${3}/summary.json" <<'PY'
+import json
+import sys
+
+summary = json.load(open(sys.argv[1], encoding="utf-8"))
+errors = sum(summary[key] for key in (
+    "http_errors", "connection_errors", "timeout_errors", "other_errors"
+))
+if errors or summary["completed_requests"] != summary["scheduled_requests"]:
+    raise SystemExit(1)
+PY
+        then
+            printf 'fixed-rate summary reports errors or incomplete requests\n' > "$reason_file"
+            return 1
+        fi
+        return 0
+    fi
+    if [ "$WARMUP_DURATION" != "0" ] && [ "$WARMUP_DURATION" != "0s" ]; then
+        PROMPTS_FILE="$PROMPTS_FILE" ip netns exec "$NETNS" "$WRK_BIN" -t"$THREADS" -c"$CONCURRENCY" -d"$WARMUP_DURATION" $RATE_ARG -s "${SCRIPT_DIR}/prompts.lua" "$1" \
+            > "${RAW_DIR}/${3}/warmup.txt" 2>&1 || { echo "Error: warm-up failed for $2." >&2; return 1; }
+        if [ "$3" = "xsr" ]; then
+            # The measured process must be the warmed process. Wait on XSR's
+            # lifecycle counter so every warm-up connection and six-slot block
+            # is reclaimed before the timed client begins.
+            "$PYTHON_BIN" "${SCRIPT_DIR}/wait_for_xsr_quiescence.py" \
+                --socket "$ROUTER_STATUS_SOCKET" --pid "$ROUTER_PID" --timeout 30 \
+                > "${RAW_DIR}/${3}/warmup-quiescence.txt" || {
+                    echo "Error: XSR did not reclaim warm-up connections." >&2
+                    return 1
+                }
+            printf 'warmup_router_pid=%s\nmeasurement_router_pid=%s\n' \
+                "$ROUTER_PID" "$ROUTER_PID" > "${RAW_DIR}/${3}/router-pid.txt"
+        fi
+    fi
+    if [ "$3" = "xsr" ]; then
+        printf 'instrumentation=%s\n' "$([ "$XSR_COMPONENT_PROFILE" = 1 ] && echo on || echo off)" \
+            > "${RAW_DIR}/${3}/component-profile-mode.txt"
+        if [ "$XSR_COMPONENT_PROFILE" = "1" ]; then
+            "$PYTHON_BIN" "${ROOT_DIR}/scripts/sk_profile_components.py" reset \
+                --socket "$ROUTER_STATUS_SOCKET" \
+                > "${RAW_DIR}/${3}/component-profile-reset.txt" || {
+                    echo "Error: could not reset XSR component counters." >&2
+                    return 1
+                }
+        fi
+    fi
+    set +e
+    output=$(PROMPTS_FILE="$PROMPTS_FILE" ip netns exec "$NETNS" "$WRK_BIN" -t"$THREADS" -c"$CONCURRENCY" -d"$DURATION" $RATE_ARG -s "${SCRIPT_DIR}/prompts.lua" "$1" 2>&1)
+    status=$?
+    set -e
+    printf '%s\n' "$output" > "$raw_file"
+    printf '%s\n' "$output"
+    if [ "$3" = "xsr" ] && [ "$XSR_COMPONENT_PROFILE" = "1" ]; then
+        "$PYTHON_BIN" "${SCRIPT_DIR}/wait_for_xsr_quiescence.py" \
+            --socket "$ROUTER_STATUS_SOCKET" --pid "$ROUTER_PID" --timeout 30 \
+            > "${RAW_DIR}/${3}/measurement-quiescence.txt" || {
+                echo "Error: XSR did not become quiescent before profile read." >&2
+                return 1
+            }
+        "$PYTHON_BIN" "${ROOT_DIR}/scripts/sk_profile_components.py" read \
+            --socket "$ROUTER_STATUS_SOCKET" --format json \
+            > "${RAW_DIR}/${3}/component-profile.json" || {
+                echo "Error: could not read XSR component counters." >&2
+                return 1
+            }
+        "$PYTHON_BIN" "${ROOT_DIR}/scripts/sk_profile_components.py" read \
+            --socket "$ROUTER_STATUS_SOCKET" --format human \
+            > "${RAW_DIR}/${3}/component-profile.txt" || return 1
+    fi
+    if [ "$status" -ne 0 ]; then
+        printf 'tool exit status=%s\n' "$status" > "$reason_file"
+        "$PYTHON_BIN" "${SCRIPT_DIR}/record_result.py" --raw "$raw_file" --output "${RAW_DIR}/${3}/result.json" \
+            --system "$2" --topology "$(system_topology "$3")" --mode "$BENCHMARK_MODE" --configuration "$CURRENT_CONFIGURATION" \
+            --trial "$CURRENT_TRIAL" --tool "$WRK_BIN" --exit-status "$status"
+        echo "Error: ${WRK_BIN} failed for $2 (exit ${status})." >&2
+        return "$status"
+    fi
+    "$PYTHON_BIN" "${SCRIPT_DIR}/record_result.py" --raw "$raw_file" --output "${RAW_DIR}/${3}/result.json" \
+        --system "$2" --topology "$(system_topology "$3")" --mode "$BENCHMARK_MODE" --configuration "$CURRENT_CONFIGURATION" \
+        --trial "$CURRENT_TRIAL" --tool "$WRK_BIN" --exit-status "$status"
+    if ! reason=$("$PYTHON_BIN" "${SCRIPT_DIR}/validate_output.py" --input "$raw_file"); then
+        printf '%s\n' "$reason" > "$reason_file"
+        echo "Error: invalid ${WRK_BIN} run for $2: ${reason}. Raw output: ${raw_file}" >&2
+        return 1
+    fi
+}
+
+system_topology() {
+    case "$1" in
+        direct|xsr|llmrouter) echo host-veth ;;
+        envoy-only|vsr) echo docker-bridge ;;
+        *) echo unavailable ;;
+    esac
+}
+
+run_benchmark() {
+    local route_count="${#SYSTEM_ORDER[@]}"
+    local step=1 system heading
+
+    echo "# Routing Performance Benchmark Results"
+    echo ""
+    echo "- Timestamp: \`$(date)\`"
+    echo "- Tool: \`${WRK_BIN}\`"
+    echo "- Mode: \`${BENCHMARK_MODE}\`"
+    echo "- Topology: XSR (SK_SKB/SOCKMAP)=\`host-veth\`, direct=\`host-veth\`, LLMRouter=\`host-veth\`, Envoy-only=\`docker-bridge\`, VSR (Envoy ExtProc)=\`docker-bridge\`"
+    echo "- Timed response-body validation: \`disabled\` (routing correctness is measured separately)"
+    echo "- Threads: \`${THREADS}\`"
+    echo "- Connections: \`${CONCURRENCY}\`"
+    echo "- Duration: \`${DURATION}\`"
+    echo "- XSR component instrumentation: \`$([ "$XSR_COMPONENT_PROFILE" = 1 ] && echo on || echo off)\`"
+    if [ "$BENCHMARK_MODE" = "fixed-rate" ]; then
+        echo "- Target Rate: \`${RATE} RPS\`"
+    fi
+    RATE_ARG=""
+    echo ""
+    if [ "$XSR_FORWARDING_ONLY" = "1" ]; then
+        echo "- Fixed backend: coding=\`${CODING_BACKEND_PORT}\`; semantic routing=\`disabled\`"
+    else
+        echo "- Routing backend ports: coding=\`${CODING_BACKEND_PORT}\`, math=\`${MATH_BACKEND_PORT}\`, qa=\`${QA_BACKEND_PORT}\`, writing=\`${WRITING_BACKEND_PORT}\`, others=\`${OTHERS_BACKEND_PORT}\`"
+    fi
+    echo ""
+    for system in "${SYSTEM_ORDER[@]}"; do
+        case "$system" in
+            direct)
+                heading="Direct backend"
+                detach_xdp || return 1
+                ;;
+            envoy-only)
+                heading="Envoy only"
+                wait_for_ns_port "$ENVOY_ONLY_IP" "$ENVOY_ONLY_PORT" "Envoy-only baseline" || return 1
+                ;;
+            xsr)
+                if [ "$XSR_FORWARDING_ONLY" = "1" ]; then
+                    heading="XSR forwarding-only (fixed backend)"
+                else
+                    heading="XSR (SK_SKB/SOCKMAP)"
+                fi
+                start_routing_proxy sockmap "${RAW_DIR}/${system}/router.log" || return 1
+                validate_untimed_load "xsr" "$XDP_URL" || return 1
+                ;;
+            vsr)
+                heading="VSR (Envoy ExtProc)"
+                wait_for_ns_port "$VLLM_IP" "$VLLM_PORT" "vLLM-SR Envoy (${VLLM_HOST})" || return 1
+                validate_untimed_load "vsr" "$VLLM_URL" || return 1
+                ;;
+            llmrouter)
+                heading="LLMRouter (XSR reference)"
+                wait_for_ns_port "10.10.0.1" "$LLMROUTER_PORT" "LLMRouter baseline" || return 1
+                validate_untimed_load "llmrouter" "$LLMROUTER_URL" || return 1
+                ;;
+            *) echo "Error: unsupported benchmark system ${system}." >&2; return 1 ;;
+        esac
+        echo "## [${step}/${route_count}] ${heading}"
+        echo "\`\`\`"
+        case "$system" in
+            direct) run_wrk "$DIRECT_BACKEND_URL" "$heading" "$system" || return 1 ;;
+            envoy-only) run_wrk "$ENVOY_ONLY_URL" "$heading" "$system" || return 1 ;;
+            xsr) run_wrk "$XDP_URL" "$heading" "$system" || return 1 ;;
+            vsr) run_wrk "$VLLM_URL" "$heading" "$system" || return 1 ;;
+            llmrouter) run_wrk "$LLMROUTER_URL" "$heading" "$system" || return 1 ;;
+        esac
+        echo "\`\`\`"
+        echo ""
+        [ "$system" = "xsr" ] && stop_routing_proxy
+        step=$((step + 1))
+    done
+}
+
+# Invocation-invariant setup and full correctness checks. Components that can
+# fail later still receive cheap process/port readiness checks during trials.
+BACKEND_MARKERS=("${CODING_BACKEND_PORT}:coding")
+if [ "$XSR_FORWARDING_ONLY" != "1" ]; then
+    BACKEND_MARKERS+=("${MATH_BACKEND_PORT}:math" "${OTHERS_BACKEND_PORT}:others" \
+        "${QA_BACKEND_PORT}:QA" "${WRITING_BACKEND_PORT}:writing")
+fi
+for marker in "${BACKEND_MARKERS[@]}"; do
+    wait_for_ns_port "10.10.0.1" "${marker%%:*}" "${marker#*:} mock backend"
+done
+
+if system_selected vsr; then
+    setup_vllm_route
+    verify_vllm_backend_routing
+fi
+if system_selected envoy-only; then
+    start_envoy_only
+    setup_envoy_only_route
+    if [ "$XSR_FORWARDING_ONLY" = "1" ]; then
+        verify_envoy_only_fixed_backend
+    else
+        verify_envoy_only_backend_routing
+    fi
+fi
+if system_selected xsr; then
+    start_routing_proxy sockmap "${RUN_ROOT}/raw/xsr-invocation-preflight.log"
+    if [ "$XSR_FORWARDING_ONLY" = "1" ]; then
+        verify_forwarding_only_backend
+    else
+        verify_router_backend_routing "XSR"
+    fi
+    stop_routing_proxy
+fi
+if system_selected llmrouter; then
+    start_llmrouter
+    verify_llmrouter_backend_routing
+fi
+detach_xdp
+
+if [ "${CONCURRENCY+x}" = "x" ]; then
+    CONCURRENCIES=("$CONCURRENCY")
+else
+    CONCURRENCIES=("${DEFAULT_CONCURRENCIES[@]}")
+fi
+
+if [ "$BENCHMARK_MODE" = "fixed-rate" ]; then
+    RATE_VALUES=( $RATES )
+else
+    RATE_VALUES=( "$RATE" )
+fi
+
+FAILED_TRIALS=0
+for RATE in "${RATE_VALUES[@]}"; do
+for CONCURRENCY in "${CONCURRENCIES[@]}"; do
+    # Restore the configured thread count for every sweep entry: a low initial
+    # concurrency must not clamp the thread count of subsequent runs.
+    THREADS="$BASE_THREADS"
+    if [ "$THREADS" -gt "$CONCURRENCY" ]; then
+        THREADS="$CONCURRENCY"
+    fi
+
+    if [ "$BENCHMARK_MODE" = "fixed-rate" ]; then
+        CURRENT_CONFIGURATION="rate-${RATE}_concurrency-${CONCURRENCY}"
+    else
+        CURRENT_CONFIGURATION="concurrency-${CONCURRENCY}"
+    fi
+    for CURRENT_TRIAL in $(seq 1 "$TRIALS"); do
+        RAW_DIR="${RUN_ROOT}/raw/${BENCHMARK_MODE}/${CURRENT_CONFIGURATION}/trial-$(printf '%02d' "$CURRENT_TRIAL")"
+        mkdir -p "$RAW_DIR"
+        mapfile -t SYSTEM_ORDER < <("$PYTHON_BIN" -c 'import random, sys; items=sys.argv[1:]; random.Random(int(items.pop(0))).shuffle(items); print(*items, sep="\n")' "$((RANDOM_SEED + CURRENT_TRIAL + CONCURRENCY + RATE))" "${SELECTED_SYSTEMS[@]}")
+        "$PYTHON_BIN" "${SCRIPT_DIR}/manifest.py" --path "${RUN_ROOT}/manifest.json" --configuration "$CURRENT_CONFIGURATION" --trial "$CURRENT_TRIAL" --order "${SYSTEM_ORDER[@]}"
+        REPORT_FILE="${RAW_DIR}/report.md"
+        stop_routing_proxy
+        detach_xdp
+        check_marker_backend_processes
+        if ! run_benchmark > >(tee "$REPORT_FILE"); then
+            printf 'trial failed; see system raw output and invalid.txt files\n' > "${RAW_DIR}/FAILED"
+            FAILED_TRIALS=$((FAILED_TRIALS + 1))
+        fi
+        stop_routing_proxy
+        echo "Benchmark trial ${CURRENT_TRIAL}/${TRIALS}: ${REPORT_FILE}"
+    done
+done
+done
+
+"$PYTHON_BIN" "${SCRIPT_DIR}/aggregate_results.py" --run-dir "$RUN_ROOT" || echo "No completed trial results available for aggregation." >&2
+if [ "$FAILED_TRIALS" -ne 0 ]; then
+    echo "Error: ${FAILED_TRIALS} invalid benchmark trial(s) were excluded from aggregation." >&2
+    exit 1
+fi
+
+if [ -n "$SUDO_USER" ]; then
+    chown -R "$SUDO_USER:" "$REPORT_DIR" 2>/dev/null || true
+fi

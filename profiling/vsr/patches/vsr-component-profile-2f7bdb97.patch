@@ -1,0 +1,505 @@
+diff --git a/src/semantic-router/pkg/classification/keyword_classifier_dispatch.go b/src/semantic-router/pkg/classification/keyword_classifier_dispatch.go
+index d370a8e2..00bccf35 100644
+--- a/src/semantic-router/pkg/classification/keyword_classifier_dispatch.go
++++ b/src/semantic-router/pkg/classification/keyword_classifier_dispatch.go
+@@ -2,6 +2,7 @@ package classification
+ 
+ import (
+ 	nlp_binding "github.com/vllm-project/semantic-router/nlp-binding"
++	"github.com/vllm-project/semantic-router/src/semantic-router/pkg/componentprofile"
+ 	"github.com/vllm-project/semantic-router/src/semantic-router/pkg/observability/logging"
+ )
+ 
+@@ -85,7 +86,9 @@ func (c *KeywordClassifier) MatchAll(text string) ([]KeywordRuleMatch, error) {
+ 			match, err = c.classifyRegexRule(text, &regexIdx)
+ 		case "bm25":
+ 			if bm25Matches == nil {
++				profileStart := componentprofile.Start()
+ 				bm25Matches = indexNativeMatches(c.bm25Classifier.ClassifyAll(text))
++				componentprofile.ObserveSince(componentprofile.StageBM25Native, profileStart)
+ 			}
+ 			match = nativeRuleMatch(ref.name, bm25Matches)
+ 		case "ngram":
+@@ -138,7 +141,9 @@ func (c *KeywordClassifier) classifyRule(text string, ref ruleRef, state *classi
+ 	switch ref.method {
+ 	case "bm25":
+ 		if !state.bm25Cached {
++			profileStart := componentprofile.Start()
+ 			state.bm25Result = c.bm25Classifier.Classify(text)
++			componentprofile.ObserveSince(componentprofile.StageBM25Native, profileStart)
+ 			state.bm25Cached = true
+ 		}
+ 		result := state.bm25Result
+diff --git a/src/semantic-router/pkg/componentprofile/profile_disabled.go b/src/semantic-router/pkg/componentprofile/profile_disabled.go
+new file mode 100644
+index 00000000..7bbaf7db
+--- /dev/null
++++ b/src/semantic-router/pkg/componentprofile/profile_disabled.go
+@@ -0,0 +1,35 @@
++//go:build !vsr_profile_components
++
++/*
++Copyright 2026 vLLM Semantic Router.
++
++Licensed under the Apache License, Version 2.0 (the "License");
++you may not use this file except in compliance with the License.
++You may obtain a copy of the License at
++
++    http://www.apache.org/licenses/LICENSE-2.0
++
++Unless required by applicable law or agreed to in writing, software
++distributed under the License is distributed on an "AS IS" BASIS,
++WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++See the License for the specific language governing permissions and
++limitations under the License.
++*/
++
++package componentprofile
++
++import "time"
++
++// Start is an inlinable no-op when component profiling is not compiled in.
++func Start() time.Time {
++	return time.Time{}
++}
++
++// Observe is an inlinable no-op when component profiling is not compiled in.
++func Observe(_ Stage, _ time.Duration) {}
++
++// ObserveSince is an inlinable no-op when component profiling is not compiled in.
++func ObserveSince(_ Stage, _ time.Time) {}
++
++// ObserveExtProcSend is an inlinable no-op when component profiling is not compiled in.
++func ObserveExtProcSend(_ string, _ time.Time) {}
+diff --git a/src/semantic-router/pkg/componentprofile/profile_enabled.go b/src/semantic-router/pkg/componentprofile/profile_enabled.go
+new file mode 100644
+index 00000000..3ae6c030
+--- /dev/null
++++ b/src/semantic-router/pkg/componentprofile/profile_enabled.go
+@@ -0,0 +1,111 @@
++//go:build vsr_profile_components
++
++/*
++Copyright 2026 vLLM Semantic Router.
++
++Licensed under the Apache License, Version 2.0 (the "License");
++you may not use this file except in compliance with the License.
++You may obtain a copy of the License at
++
++    http://www.apache.org/licenses/LICENSE-2.0
++
++Unless required by applicable law or agreed to in writing, software
++distributed under the License is distributed on an "AS IS" BASIS,
++WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++See the License for the specific language governing permissions and
++limitations under the License.
++*/
++
++package componentprofile
++
++import (
++	"sync/atomic"
++	"time"
++
++	"github.com/prometheus/client_golang/prometheus"
++)
++
++type aggregate struct {
++	count   atomic.Uint64
++	totalNS atomic.Uint64
++}
++
++type collector struct {
++	eventsDesc   *prometheus.Desc
++	durationDesc *prometheus.Desc
++}
++
++var globalAggregates [stageCount]aggregate
++
++func newCollector() *collector {
++	return &collector{
++		eventsDesc: prometheus.NewDesc(
++			"vsr_component_profile_events_total",
++			"Number of completed directly timed VSR component events.",
++			[]string{"stage"},
++			nil,
++		),
++		durationDesc: prometheus.NewDesc(
++			"vsr_component_profile_duration_nanoseconds_total",
++			"Cumulative duration in nanoseconds for directly timed VSR component events.",
++			[]string{"stage"},
++			nil,
++		),
++	}
++}
++
++func (c *collector) Describe(ch chan<- *prometheus.Desc) {
++	ch <- c.eventsDesc
++	ch <- c.durationDesc
++}
++
++func (c *collector) Collect(ch chan<- prometheus.Metric) {
++	for stage := Stage(0); stage < stageCount; stage++ {
++		aggregate := &globalAggregates[stage]
++		name := stageNames[stage]
++		ch <- prometheus.MustNewConstMetric(
++			c.eventsDesc,
++			prometheus.CounterValue,
++			float64(aggregate.count.Load()),
++			name,
++		)
++		ch <- prometheus.MustNewConstMetric(
++			c.durationDesc,
++			prometheus.CounterValue,
++			float64(aggregate.totalNS.Load()),
++			name,
++		)
++	}
++}
++
++// Start records a monotonic timer start for a directly instrumented boundary.
++func Start() time.Time {
++	return time.Now()
++}
++
++// Observe adds one completed event with a duration already measured by the caller.
++func Observe(stage Stage, duration time.Duration) {
++	if stage >= stageCount || duration < 0 {
++		return
++	}
++	aggregate := &globalAggregates[stage]
++	aggregate.totalNS.Add(uint64(duration.Nanoseconds()))
++	aggregate.count.Add(1)
++}
++
++// ObserveSince adds one completed event ending at this call.
++func ObserveSince(stage Stage, start time.Time) {
++	Observe(stage, time.Since(start))
++}
++
++// ObserveExtProcSend records request-body response submission only. It does not
++// claim to measure delivery to Envoy or subsequent upstream forwarding.
++func ObserveExtProcSend(messageType string, start time.Time) {
++	if messageType == "request body" {
++		ObserveSince(StageExtProcSend, start)
++	}
++}
++
++func init() {
++	prometheus.MustRegister(newCollector())
++}
+diff --git a/src/semantic-router/pkg/componentprofile/profile_enabled_test.go b/src/semantic-router/pkg/componentprofile/profile_enabled_test.go
+new file mode 100644
+index 00000000..3b0457db
+--- /dev/null
++++ b/src/semantic-router/pkg/componentprofile/profile_enabled_test.go
+@@ -0,0 +1,81 @@
++//go:build vsr_profile_components
++
++/*
++Copyright 2026 vLLM Semantic Router.
++
++Licensed under the Apache License, Version 2.0 (the "License");
++you may not use this file except in compliance with the License.
++You may obtain a copy of the License at
++
++    http://www.apache.org/licenses/LICENSE-2.0
++
++Unless required by applicable law or agreed to in writing, software
++distributed under the License is distributed on an "AS IS" BASIS,
++WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++See the License for the specific language governing permissions and
++limitations under the License.
++*/
++
++package componentprofile
++
++import (
++	"testing"
++	"time"
++
++	"github.com/prometheus/client_golang/prometheus"
++)
++
++func TestObserveAccumulatesExactTotals(t *testing.T) {
++	stage := StageBM25Native
++	beforeCount := globalAggregates[stage].count.Load()
++	beforeTotal := globalAggregates[stage].totalNS.Load()
++
++	Observe(stage, 1500*time.Nanosecond)
++	Observe(stage, 2500*time.Nanosecond)
++
++	if got := globalAggregates[stage].count.Load() - beforeCount; got != 2 {
++		t.Fatalf("count delta = %d, want 2", got)
++	}
++	if got := globalAggregates[stage].totalNS.Load() - beforeTotal; got != 4000 {
++		t.Fatalf("duration delta = %d ns, want 4000 ns", got)
++	}
++}
++
++func TestObserveExtProcSendExcludesOtherMessageTypes(t *testing.T) {
++	stage := StageExtProcSend
++	beforeCount := globalAggregates[stage].count.Load()
++
++	ObserveExtProcSend("request header", time.Now())
++
++	if got := globalAggregates[stage].count.Load() - beforeCount; got != 0 {
++		t.Fatalf("count delta = %d, want 0", got)
++	}
++}
++
++func TestCollectorExportsEveryStageAsCounters(t *testing.T) {
++	registry := prometheus.NewPedanticRegistry()
++	registry.MustRegister(newCollector())
++	families, err := registry.Gather()
++	if err != nil {
++		t.Fatalf("gather: %v", err)
++	}
++
++	wantNames := map[string]bool{
++		"vsr_component_profile_events_total":               false,
++		"vsr_component_profile_duration_nanoseconds_total": false,
++	}
++	for _, family := range families {
++		if _, ok := wantNames[family.GetName()]; !ok {
++			continue
++		}
++		wantNames[family.GetName()] = true
++		if got := len(family.Metric); got != int(stageCount) {
++			t.Fatalf("metric count for %s = %d, want %d", family.GetName(), got, stageCount)
++		}
++	}
++	for name, seen := range wantNames {
++		if !seen {
++			t.Errorf("metric family %s was not exported", name)
++		}
++	}
++}
+diff --git a/src/semantic-router/pkg/componentprofile/stage.go b/src/semantic-router/pkg/componentprofile/stage.go
+new file mode 100644
+index 00000000..f77bf3f2
+--- /dev/null
++++ b/src/semantic-router/pkg/componentprofile/stage.go
+@@ -0,0 +1,43 @@
++/*
++Copyright 2026 vLLM Semantic Router.
++
++Licensed under the Apache License, Version 2.0 (the "License");
++you may not use this file except in compliance with the License.
++You may obtain a copy of the License at
++
++    http://www.apache.org/licenses/LICENSE-2.0
++
++Unless required by applicable law or agreed to in writing, software
++distributed under the License is distributed on an "AS IS" BASIS,
++WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++See the License for the specific language governing permissions and
++limitations under the License.
++*/
++
++// Package componentprofile provides experimental aggregate timers for
++// reproducible component-level VSR profiling.
++package componentprofile
++
++// Stage identifies a directly instrumented VSR request-processing boundary.
++type Stage uint8
++
++const (
++	StageRequestFastExtract Stage = iota
++	StageRequestFullParse
++	StageBM25Native
++	StageDecisionPolicy
++	StageRouteReplyBuild
++	StageExtProcSend
++	StageRequestBodyTotal
++	stageCount
++)
++
++var stageNames = [...]string{
++	"request_fast_extract",
++	"request_full_parse",
++	"bm25_native",
++	"decision_policy",
++	"route_reply_build",
++	"extproc_send",
++	"request_body_total",
++}
+diff --git a/src/semantic-router/pkg/decision/engine.go b/src/semantic-router/pkg/decision/engine.go
+index de00bc55..e187c677 100644
+--- a/src/semantic-router/pkg/decision/engine.go
++++ b/src/semantic-router/pkg/decision/engine.go
+@@ -24,6 +24,7 @@ import (
+ 	"strings"
+ 	"time"
+ 
++	"github.com/vllm-project/semantic-router/src/semantic-router/pkg/componentprofile"
+ 	"github.com/vllm-project/semantic-router/src/semantic-router/pkg/config"
+ 	"github.com/vllm-project/semantic-router/src/semantic-router/pkg/observability/logging"
+ 	"github.com/vllm-project/semantic-router/src/semantic-router/pkg/observability/metrics"
+@@ -129,8 +130,9 @@ func (e *DecisionEngine) EvaluateDecisionsWithSignals(signals *SignalMatches) (*
+ 	// Record decision evaluation start time
+ 	start := time.Now()
+ 	defer func() {
+-		latencySeconds := time.Since(start).Seconds()
+-		metrics.RecordDecisionEvaluation(latencySeconds)
++		latency := time.Since(start)
++		metrics.RecordDecisionEvaluation(latency.Seconds())
++		componentprofile.Observe(componentprofile.StageDecisionPolicy, latency)
+ 	}()
+ 
+ 	if len(e.decisions) == 0 {
+diff --git a/src/semantic-router/pkg/extproc/processor_core.go b/src/semantic-router/pkg/extproc/processor_core.go
+index b151a548..88b74d0c 100644
+--- a/src/semantic-router/pkg/extproc/processor_core.go
++++ b/src/semantic-router/pkg/extproc/processor_core.go
+@@ -11,6 +11,7 @@ import (
+ 	"google.golang.org/grpc/codes"
+ 	"google.golang.org/grpc/status"
+ 
++	"github.com/vllm-project/semantic-router/src/semantic-router/pkg/componentprofile"
+ 	"github.com/vllm-project/semantic-router/src/semantic-router/pkg/inflight"
+ 	"github.com/vllm-project/semantic-router/src/semantic-router/pkg/observability/logging"
+ 	"github.com/vllm-project/semantic-router/src/semantic-router/pkg/observability/metrics"
+@@ -203,6 +204,7 @@ func (r *OpenAIRouter) processRequestBody(
+ 	v *ext_proc.ProcessingRequest_RequestBody,
+ 	ctx *RequestContext,
+ ) error {
++	profileStart := componentprofile.Start()
+ 	response, err := r.handleRequestBodyDispatch(v, ctx)
+ 	if err != nil {
+ 		logging.Errorf("handleRequestBody failed: %v", err)
+@@ -218,6 +220,7 @@ func (r *OpenAIRouter) processRequestBody(
+ 		logging.Errorf("sendResponse for body failed: %v", err)
+ 		return err
+ 	}
++	componentprofile.ObserveSince(componentprofile.StageRequestBodyTotal, profileStart)
+ 	return nil
+ }
+ 
+diff --git a/src/semantic-router/pkg/extproc/processor_req_body.go b/src/semantic-router/pkg/extproc/processor_req_body.go
+index 93aaa759..8443f1e3 100644
+--- a/src/semantic-router/pkg/extproc/processor_req_body.go
++++ b/src/semantic-router/pkg/extproc/processor_req_body.go
+@@ -9,6 +9,7 @@ import (
+ 	ext_proc "github.com/envoyproxy/go-control-plane/envoy/service/ext_proc/v3"
+ 	"github.com/openai/openai-go"
+ 
++	"github.com/vllm-project/semantic-router/src/semantic-router/pkg/componentprofile"
+ 	"github.com/vllm-project/semantic-router/src/semantic-router/pkg/config"
+ 	"github.com/vllm-project/semantic-router/src/semantic-router/pkg/observability/logging"
+ 	"github.com/vllm-project/semantic-router/src/semantic-router/pkg/observability/metrics"
+@@ -88,7 +89,8 @@ func (r *OpenAIRouter) handleRequestBody(v *ext_proc.ProcessingRequest_RequestBo
+ 		return nil, err
+ 	}
+ 
+-	return r.handleModelRouting(
++	profileStart := componentprofile.Start()
++	response, err := r.handleModelRouting(
+ 		openAIRequest,
+ 		originalModel,
+ 		decisionState.decisionName,
+@@ -96,6 +98,8 @@ func (r *OpenAIRouter) handleRequestBody(v *ext_proc.ProcessingRequest_RequestBo
+ 		decisionState.selectedModel,
+ 		ctx,
+ 	)
++	componentprofile.ObserveSince(componentprofile.StageRouteReplyBuild, profileStart)
++	return response, err
+ }
+ 
+ // handleModelRouting handles model selection and routing logic
+diff --git a/src/semantic-router/pkg/extproc/processor_req_body_prepare.go b/src/semantic-router/pkg/extproc/processor_req_body_prepare.go
+index 57c75785..ac1ccfab 100644
+--- a/src/semantic-router/pkg/extproc/processor_req_body_prepare.go
++++ b/src/semantic-router/pkg/extproc/processor_req_body_prepare.go
+@@ -11,6 +11,7 @@ import (
+ 	"google.golang.org/grpc/status"
+ 
+ 	"github.com/vllm-project/semantic-router/src/semantic-router/pkg/anthropic"
++	"github.com/vllm-project/semantic-router/src/semantic-router/pkg/componentprofile"
+ 	"github.com/vllm-project/semantic-router/src/semantic-router/pkg/config"
+ 	"github.com/vllm-project/semantic-router/src/semantic-router/pkg/inflight"
+ 	"github.com/vllm-project/semantic-router/src/semantic-router/pkg/observability/logging"
+@@ -50,7 +51,9 @@ func (r *OpenAIRouter) extractFastRequestState(
+ 	requestBody []byte,
+ 	ctx *RequestContext,
+ ) (*FastExtractResult, error) {
++	profileStart := componentprofile.Start()
+ 	fast, err := extractRequestSignalsForProtocol(ctx.ClientProtocol, requestBody)
++	componentprofile.ObserveSince(componentprofile.StageRequestFastExtract, profileStart)
+ 	if err != nil {
+ 		logging.Errorf("Error extracting request fields: %v", err)
+ 		metrics.RecordRequestError(ctx.RequestModel, "parse_error")
+@@ -85,6 +88,9 @@ func extractRequestSignalsForProtocol(clientProtocol string, body []byte) (*Fast
+ // dedicated inbound parser, whose IRExtensions output is stashed on the
+ // request context for downstream emitters and plugins.
+ func parseRequestForProtocol(ctx *RequestContext, requestBody []byte) (*openai.ChatCompletionNewParams, error) {
++	profileStart := componentprofile.Start()
++	defer componentprofile.ObserveSince(componentprofile.StageRequestFullParse, profileStart)
++
+ 	if ctx.ClientProtocol != config.ClientProtocolAnthropic {
+ 		return parseOpenAIRequest(requestBody)
+ 	}
+diff --git a/src/semantic-router/pkg/extproc/utils.go b/src/semantic-router/pkg/extproc/utils.go
+index d63ee47c..e3bf5e0f 100644
+--- a/src/semantic-router/pkg/extproc/utils.go
++++ b/src/semantic-router/pkg/extproc/utils.go
+@@ -8,6 +8,7 @@ import (
+ 	typev3 "github.com/envoyproxy/go-control-plane/envoy/type/v3"
+ 	"github.com/openai/openai-go"
+ 
++	"github.com/vllm-project/semantic-router/src/semantic-router/pkg/componentprofile"
+ 	"github.com/vllm-project/semantic-router/src/semantic-router/pkg/observability/logging"
+ 	"github.com/vllm-project/semantic-router/src/semantic-router/pkg/utils/imageurl"
+ )
+@@ -37,10 +38,12 @@ func sendResponse(stream ext_proc.ExternalProcessor_ProcessServer, response *ext
+ 		logging.Debugf("Processing at stage [%s]: %+v", msgType, redactResponseForLog(response))
+ 	}
+ 
++	profileStart := componentprofile.Start()
+ 	if err := stream.Send(response); err != nil {
+ 		logging.Errorf("Error sending %s response: %v", msgType, err)
+ 		return err
+ 	}
++	componentprofile.ObserveExtProcSend(msgType, profileStart)
+ 	return nil
+ }
+ 
+diff --git a/src/vllm-sr/Dockerfile b/src/vllm-sr/Dockerfile
+index e0b61330..6c0b1987 100644
+--- a/src/vllm-sr/Dockerfile
++++ b/src/vllm-sr/Dockerfile
+@@ -201,6 +201,7 @@ RUN mkdir -p /build/out && \
+ # Stage 2: Build Go semantic router
+ FROM --platform=$BUILDPLATFORM ${IMAGE_REGISTRY}${GO_RUNTIME_COMPAT_IMAGE} AS go-builder
+ ARG TARGETARCH
++ARG VSR_PROFILE_COMPONENTS=0
+ WORKDIR /build
+ 
+ # Copy Rust libraries from all builders
+@@ -233,7 +234,13 @@ COPY src/semantic-router/ .
+ 
+ # Build router (cross-compile for arm64 when TARGETARCH=arm64)
+ # arm64: need libssl-dev:arm64 because libcandle_semantic_router.so dynamically links OpenSSL
+-RUN if [ "$TARGETARCH" = "arm64" ]; then \
++RUN profile_tags=""; \
++    if [ "$VSR_PROFILE_COMPONENTS" = "1" ]; then \
++      profile_tags="-tags=vsr_profile_components"; \
++    elif [ "$VSR_PROFILE_COMPONENTS" != "0" ]; then \
++      echo "VSR_PROFILE_COMPONENTS must be 0 or 1" >&2; exit 1; \
++    fi; \
++    if [ "$TARGETARCH" = "arm64" ]; then \
+       dpkg --add-architecture arm64 && \
+       apt-get update && apt-get install -y \
+         gcc-aarch64-linux-gnu \
+@@ -243,9 +250,9 @@ RUN if [ "$TARGETARCH" = "arm64" ]; then \
+       CC=aarch64-linux-gnu-gcc \
+       CGO_ENABLED=1 GOOS=linux GOARCH=arm64 \
+       CGO_LDFLAGS="-L/usr/lib/aarch64-linux-gnu -lssl -lcrypto" \
+-      go build -buildvcs=false -ldflags="-w -s" -o router ./cmd; \
++      go build $profile_tags -buildvcs=false -ldflags="-w -s" -o router ./cmd; \
+     else \
+-      CGO_ENABLED=1 go build -buildvcs=false -ldflags="-w -s" -o router ./cmd; \
++      CGO_ENABLED=1 go build $profile_tags -buildvcs=false -ldflags="-w -s" -o router ./cmd; \
+     fi
+ 
+ # Stage 3: Final router runtime image

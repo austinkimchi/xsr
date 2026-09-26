@@ -1,0 +1,31 @@
+routing:
+  signals:
+    keywords:
+      - name: code_ngram
+        operator: OR
+        method: ngram
+        keywords: ["code", "function"]
+        ngram_threshold: 0.8
+        ngram_arity: 3
+        case_sensitive: false
+      - name: math_bm25
+        operator: OR
+        method: bm25
+        keywords: ["solve", "equation"]
+        bm25_threshold: 0.1
+        case_sensitive: false
+  decisions:
+    - name: coding
+      priority: 100
+      rules:
+        operator: AND
+        conditions:
+          - type: keyword
+            name: code_ngram
+    - name: math
+      priority: 90
+      rules:
+        operator: AND
+        conditions:
+          - type: keyword
+            name: math_bm25
